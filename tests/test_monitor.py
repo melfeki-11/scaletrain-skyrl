@@ -155,3 +155,16 @@ class CanaryEnvironmentGate(unittest.TestCase):
 def types_ns(**kw):
     import types
     return types.SimpleNamespace(**kw)
+
+
+class StepWiseDiagnostics(unittest.TestCase):
+    def test_turn_rows_collapse_to_trajectories(self):
+        from strl.tracking import per_trajectory, rollout_diagnostics
+        # 2 groups x 2 trajectories; trajectory turns: [3, 1 | 2, 2]; one success (reward on its last turn) in group 1
+        last = [False, False, True, True, False, True, False, True]
+        rewards = [0, 0, 1.0, 0, 0, 0, 0, 0]
+        prompts, texts, r, stops = per_trajectory(last, list('abcdefgh'), list('ABCDEFGH'), rewards, ['stop'] * 8)
+        self.assertEqual((prompts, texts, r), (['c', 'd', 'f', 'h'], ['C', 'D', 'F', 'H'], [1.0, 0.0, 0.0, 0.0]))
+        self.assertEqual(rollout_diagnostics(texts, r, stops, 2)['train/learning_signal_fraction'], 0.5)
+        single = per_trajectory(None, ['p'], ['x'], [1.0], ['stop'])          # single-turn output passes through
+        self.assertEqual(single, (['p'], ['x'], [1.0], ['stop']))

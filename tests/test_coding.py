@@ -188,3 +188,17 @@ class HarborContext(unittest.TestCase):
         records = [harbor_env.eval_record({'env_extras': _relabel(dict(item, prompt=f'/x/harbor/test/humaneval-test-{i:04d}'))['env_extras'],
                                            'score': 1.0, 'output_response': 'ok'}, None, 0) for i in range(3)]
         self.assertEqual([r['sample_id'] for r in records], ['humaneval-test-0000', 'humaneval-test-0001', 'humaneval-test-0002'])
+
+    def test_step_wise_eval_dump_collapses_to_one_record_per_task(self):
+        """can-hb-c/d: the real step-0 dump has 107 rows (one per agent turn) for 16 tasks; validation needs 16 unique ids."""
+        import json
+        harbor_env = get_environment('coding_harbor')
+        rows = [json.loads(line) for line in (ROOT / 'tests/fixtures/harbor_eval_step0_can-hb-d.jsonl').read_text().splitlines()]
+        records = harbor_env.collapse_eval_records([harbor_env.eval_record(r, None, 0) for r in rows])
+        self.assertEqual(len(rows), 107)
+        self.assertEqual(len(records), 16)
+        self.assertEqual(len({r['sample_id'] for r in records}), 16)
+        self.assertEqual(sum(r['turns'] for r in records), 107)
+        total = sum(sum(r['score']) if isinstance(r['score'], list) else r['score'] for r in rows)
+        self.assertAlmostEqual(sum(r['reward'] for r in records), total)
+        self.assertEqual(get_environment('coding_exec').collapse_eval_records([{'sample_id': 'a'}]), [{'sample_id': 'a'}])

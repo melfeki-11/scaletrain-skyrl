@@ -56,6 +56,23 @@ def rollout_diagnostics(completions: list[str], rewards: list[float], stop_reaso
     return out
 
 
+def per_trajectory(is_last_step: list | None, prompts: list, completions: list[str], rewards: list[float],
+                   stop_reasons: list) -> tuple[list, list[str], list[float], list]:
+    """Step-wise generators (Harbor) emit one row per agent turn, contiguous per trajectory, with the reward on the last turn.
+    GRPO groups, the learning signal and the critic are about trajectories: sum each trajectory's turn rewards and keep its
+    last turn. Single-turn output (no is_last_step) passes through unchanged."""
+    if not is_last_step or len(is_last_step) != len(rewards):
+        return prompts, completions, rewards, stop_reasons
+    out_p, out_c, out_r, out_s, total = [], [], [], [], 0.0
+    for index, last in enumerate(is_last_step):
+        total += rewards[index]
+        if last:
+            out_p.append(prompts[index] if index < len(prompts) else None)
+            out_c.append(completions[index]); out_r.append(total); out_s.append(stop_reasons[index])
+            total = 0.0
+    return out_p, out_c, out_r, out_s
+
+
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open('rb') as handle:
@@ -160,14 +177,17 @@ def make_trajectory_logger_class():
             decoded = [tokenizer.decode(tokens, skip_special_tokens=True) for tokens in response_ids]
             step = 0 if global_step is None else int(global_step)
             if is_training:
-                metrics = rollout_diagnostics(decoded, scalar_rewards, list(stop_reasons), group_size)
+                prompts_t, decoded_t, rewards_t, stops_t = per_trajectory(generator_output.get('is_last_step'), list(prompts), decoded,
+                                                                         scalar_rewards, list(stop_reasons))
+                env_metrics_t = env_metrics if decoded_t is decoded else None   # step-wise: per-turn env metrics do not align
+                metrics = rollout_diagnostics(decoded_t, rewards_t, stops_t, group_size)
                 SIGNAL[step] = metrics['train/learning_signal_fraction']
                 if self.env is not None:
-                    metrics.update(self.env.train_diagnostics(decoded, scalar_rewards, list(stop_reasons), group_size, env_metrics))
+                    metrics.update(self.env.train_diagnostics(decoded_t, rewards_t, stops_t, group_size, env_metrics_t))
                 tracker.log(metrics, step=step, commit=False)
                 try:
                     from .monitor.critic import submit_failures
-                    submit_failures(step, prompts, decoded, scalar_rewards, env_metrics, self.env)
+                    submit_failures(step, prompts_t, decoded_t, rewards_t, env_metrics_t, self.env)
                 except Exception as error:  # the critic must never affect training
                     print(f'critic submit skipped: {type(error).__name__}: {error}', flush=True)
             self._finish_reasons = list(stop_reasons)
@@ -324,6 +344,7 @@ def make_callback_class():
                     continue
                 for line in path.read_text(encoding='utf-8').splitlines():
                     complete.append(self.env.eval_record(json.loads(line), trainer, step))
+            complete = self.env.collapse_eval_records(complete)   # step-wise Harbor dumps one row per agent turn
             expected = int(os.environ['GRPO_EXPECTED_VALIDATION_SIZE'])
             if len(complete) != expected or len({r['sample_id'] for r in complete}) != expected:
                 raise RuntimeError('Validation evidence is incomplete or sample identities are duplicated')

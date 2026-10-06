@@ -133,5 +133,10 @@ class EnvironmentSpec:
         """Build one validation record from a SkyRL ``dumped_evals`` row."""
         raise NotImplementedError
 
+    def collapse_eval_records(self, records: list[dict]) -> list[dict]:
+        """One record per evaluated sample. Single-turn environments dump exactly one row per sample; step-wise multi-turn
+        generators dump one row per turn and must merge them here (the validation check requires unique sample ids)."""
+        return records
+
     def display_prompt(self, prompt: Any) -> str:
         return str(prompt)

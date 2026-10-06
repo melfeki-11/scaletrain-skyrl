@@ -43,7 +43,14 @@ Full tables, examples and job IDs are in [RESULTS.md](RESULTS.md). Raw evidence 
 - **GSM8K, Qwen3.5-0.8B, one 8×H100 node, 36 GRPO updates:** official test accuracy went from 50.80% to **68.84%**
   (+18.04 points, paired 95% CI [+15.31, +20.77]), verified independently. The refactored code reproduces the original run's 76 SkyRL
   overrides, job command and scorer decisions exactly (golden tests). A 1-GPU canary on the new code also completed.
-<!-- AB-RESULTS -->
+- **Coding RL environment, reward-design A/B. Same model, two concurrent half-node jobs, identical except the reward.**
+  On 663 held-out MBPP-test + HumanEval tasks:
+  - Binary `pass_all_tests` went from 23.38% to **36.05%** (+12.67, CI [+9.20, +16.29]).
+  - `pass_all_tests + 0.5·partial_tests` went from 23.38% to **33.33%** (+9.95, CI [+6.33, +13.57]).
+  - Partial vs binary: −2.71 [−6.18, +0.75], not separable.
+  - Partial credit raised the learning signal (73% vs 53% of groups) and the training reward, but not the yardstick: the
+    "reward up, metric flat" effect that `strl plan` warns about, visible in W&B.
+  - 0 Modal infra errors. The LiteLLM critic cost about $0.012 per run.
 
 ## Quickstart
 

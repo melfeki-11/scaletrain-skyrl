@@ -298,5 +298,23 @@ class CodingHarborSpec(CodingExecSpec):
         reward = float(sum(reward)) if isinstance(reward, list) else float(reward)
         completion = item.get('output_response', '')
         task_dir = extras.get('task_dir') or extras.get('data_source') or ''   # data_source is the benchmark label (harbor._relabel)
+        # step-wise output: one dumped row per agent turn; the verifier reward sits on the last turn, zeros elsewhere
         return {'step': step, 'sample_id': Path(task_dir).name, 'prompt': task_dir, 'completion': completion[-4000:], 'ground_truth': Path(task_dir).name,
                 'parsed_answer': None, 'correct': reward >= 1.0, 'reward': reward, 'token_count': None, 'finish_reason': item.get('stop_reason')}
+
+    def train_diagnostics(self, completions, rewards, stop_reasons, group_size, env_metrics=None):
+        """Per trajectory (tracking.per_trajectory): the verifier reward is the pass flag; the completion is the agent's last
+        terminal turn, not a python block, so the single-turn no-code rate does not apply."""
+        return {'train/pass_at_1': sum(r >= 1.0 for r in rewards) / len(rewards) if rewards else 0.0}
+
+    def collapse_eval_records(self, records: list[dict]) -> list[dict]:
+        """Merge the per-turn rows of each trajectory (contiguous in SkyRL's dump): reward = sum over turns, last turn's text."""
+        merged: dict[str, dict] = {}
+        for record in records:
+            current = merged.get(record['sample_id'])
+            if current is None:
+                merged[record['sample_id']] = dict(record, turns=1)
+            else:
+                reward = current['reward'] + record['reward']
+                merged[record['sample_id']] = dict(record, reward=reward, correct=reward >= 1.0, turns=current['turns'] + 1)
+        return list(merged.values())

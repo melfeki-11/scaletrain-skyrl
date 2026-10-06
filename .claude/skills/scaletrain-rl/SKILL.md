@@ -59,8 +59,12 @@ always `dry` -> `canary` before a new model/environment/reward's first real run;
 - **coding_exec** (`base/coding_exec.yaml`): MBPP/HumanEval; the model writes one python block; tests run in the deployed Modal
   executor `strl-code-exec` (no network, limits, nonce-gated pass, candidate `__eq__` rejected); infra failures mask whole GRPO
   groups. 364 train / 96 validation / 663 held-out (499 MBPP-test + 164 HumanEval) after reference validation.
+  Verified: Qwen3.5-0.8B on 4 GPUs, ~66 updates in ~48 min. Binary reward 23.38% -> 36.05% (+12.67 [+9.20, +16.29]);
+  + 0.5 partial credit 33.33% (+9.95). The reward A/B and its W&B evidence are in RESULTS.md.
 - **coding_harbor** (`base/coding_harbor.yaml`): the same tasks as Harbor task dirs; Terminus-2 operates a Modal sandbox and writes
   `/app/solution.py`; the sandbox verifier runs the same harness. Rewards come from the verifier (`pass_all_tests` only).
+  One knob, `environment.harbor.max_seq_len` (default 8192), sizes the engine, the agent and the trainer: Terminus-2's first
+  turn alone is 0.8-2.5k tokens. Canary-level evidence only (see validation.md).
 
 ## References (read what the task needs)
 
@@ -91,3 +95,11 @@ always `dry` -> `canary` before a new model/environment/reward's first real run;
 - `ml-admin` cannot write `s3://scale-ml`; staging uses `production-developer`. LiteLLM on a laptop needs ambient creds to assume
   `ml-worker` (`eval "$(aws configure export-credentials --profile ml-admin --format env)"`).
 - A slice's wall-clock deadline costs `gpus/8` node-seconds; `stage` converts the ledger's node-seconds accordingly.
+- A canary that "completes" can still be hollow. `can-hb-b` ran 2 updates while every Harbor trial died on turn 1, because the
+  context was too small. The step-2 canary rule now fails when >= 50% of GRPO groups are masked by environment failures.
+  Still read the canary yourself: `environment/masked_group_fraction`, `generate/num_error_trajectories`, and for Harbor
+  `harbor-trials/*/exception.txt`.
+- Judge reward designs only on `eval/task_metric` and the held-out test. In the A/B, partial credit raised the learning
+  signal and the training reward, but not pass@1. Validation is 96 tasks (about ±5 points), so close arms need a larger
+  validation split or more seeds.
+- Custom `module:function` rewards must live in `user_rewards/` (or another top-level package of this repo) to ship to the pod.

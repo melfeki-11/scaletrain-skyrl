@@ -1,8 +1,134 @@
-# Results: q35v2-a1
+# Results
+
+Every number below comes from an independently verified attempt. The raw evidence is in `evidence/results/` and `evidence/verified-result.json`.
+
+| Run | Environment · reward | GPUs · updates | Held-out set | Base | Trained | Δ [95% paired CI] |
+| --- | --- | --- | --- | --- | --- | --- |
+| `q35v2-a1` | gsm8k · strict answer | 8 · 36 | GSM8K test (1,319) | 50.80% | **68.84%** | +18.04 [+15.31, +20.77] |
+| `ab-binary-a1` | coding_exec · `pass_all_tests` | 4 · 66 | MBPP-test + HumanEval (663) | 23.38% | **36.05%** | +12.67 [+9.20, +16.29] |
+| `ab-partial-a1` | coding_exec · `pass_all_tests + 0.5·partial_tests` | 4 · 69 | MBPP-test + HumanEval (663) | 23.38% | **33.33%** | +9.95 [+6.33, +13.57] |
+
+All three runs use Qwen/Qwen3.5-0.8B at revision `2fc0636`, full-parameter SkyRL GRPO, on ScaleTrain `p5.48xlarge` (H100).
+Common protocol for every run:
+- Checkpoint selection used only the train-derived validation split.
+- Held-out evaluation is greedy and paired by task ID.
+- Δ is a paired bootstrap CI.
+- `strl verify` re-scored every completion independently (in Modal for coding) and found 0 disagreements with the worker.
+
+## Coding RL environment: reward-design A/B (2026-10-06)
+
+The A/B is the "change one axis and see the effect" demonstration. The two experiments, `experiments/mbpp-qwen35-binary.yaml` and
+`experiments/mbpp-qwen35-partial.yaml`, differ **only** in `reward.components`; the resolved-config diff is printed by `strl plan --against`.
+
+Shared setup:
+- Both ran concurrently on `p5.48xlarge:4` slices.
+- Batch: 16 prompts × 16 samples = 256 rollouts per step. Generation was capped at 512 tokens, learning rate 2e-6, KL 0.01.
+- Training ran for 2,831–2,858 s, bounded by the budget ledger.
+- Jobs: `job_db2kshss49qg07jejfbg` (binary) and `job_db2ksicf8c4g08flbdh0` (partial).
+- W&B group `mbpp-reward-ab` in `mohamed-elfeki/scaletrain-rl-envs`.
+- Tests ran in the deployed Modal executor (`strl-code-exec`, harness `fab5f1b39071ab5c`) with **0 infra errors and 0 masked groups** across both runs.
+
+### Outcome on the yardstick (held-out pass@1, 663 paired tasks)
+
+| | binary (A) | partial credit (B) |
+| --- | --- | --- |
+| all 663 | 23.38% → **36.05%** (+12.67 [+9.20, +16.29]) | 23.38% → **33.33%** (+9.95 [+6.33, +13.57]) |
+| MBPP-test (499) | 20.44% → 37.47% (+17.03) | 20.44% → 34.47% (+14.03) |
+| HumanEval (164, never trained on) | 32.32% → 31.71% (−0.61) | 32.32% → 29.88% (−2.44) |
+| fixed / broken vs base | 117 / 33 | 110 / 44 |
+| selected step (validation only) | 55 of 66 | 50 of 69 |
+
+The paired comparison, B − A on the same 663 tasks, is **−2.71 points [−6.18, +0.75]**. The data do not separate the arms; they
+point toward the binary reward. Both arms beat the base model by a wide margin. Neither transfers to HumanEval: the gains are
+MBPP-style.
+
+### Training dynamics: the effect of the reward term (from `strl compare`)
+
+| | learning signal (mean) | train reward last (max) | `environment/reward_components` last | validation pass@1 last (max) | median step |
+| --- | --- | --- | --- | --- | --- |
+| binary | 0.53 | 0.58 (0.65) | pass_all_tests 0.58 | 0.417 (0.427) | 27.7 s |
+| partial | **0.73** | 0.80 (1.07) | partial_tests 0.58, pass_all_tests 0.51 | 0.302 (0.448) | 27.3 s |
+
+Learning signal is the share of GRPO groups that have reward variance. The partial-credit term did what the decision-points
+reference predicts: groups had reward variance 73% of the time instead of 53%. But the extra signal went into the shaping term.
+Training reward climbed to 0.80 while the yardstick, both validation and held-out pass@1, ended no better than binary.
+
+This is the "reward up, metric flat" pattern that `strl plan` warns about (`! REWARD: shaping terms ... are NOT the yardstick`).
+It is why every run is judged on `eval/task_metric` and the held-out test.
+
+Validation pass@1 every 5 steps (96 tasks; one task = 1.04 points):
+- binary: 0.198 → 0.292 → 0.302 → 0.385 → 0.406 → 0.406 → 0.354 → 0.375 → 0.333 → 0.375 → 0.385 → **0.427** → 0.406 → 0.406 → 0.417
+- partial: 0.198 → 0.344 → 0.323 → 0.333 → 0.354 → 0.385 → 0.396 → 0.354 → 0.365 → 0.375 → **0.448** → 0.406 → 0.344 → 0.365 → 0.302
+
+Caveat: 96 validation tasks have a standard error of about ±5 points. The partial arm's best validation step (0.448, the highest of
+either arm) produced the *lower* held-out score. That is selection noise. Use a larger validation set (`environment.sources.validation.size`)
+when arms are this close.
+
+### What changed in the model's behaviour (held-out, binary arm; the partial arm is similar)
+
+| failure class | base | trained |
+| --- | --- | --- |
+| ok (all tests pass) | 155 | 239 |
+| runtime_error | 208 | 83 |
+| truncated (hit the 512-token cap) | 97 | 28 |
+| wrong_answer (runs, fails a test) | 197 | 304 |
+| syntax_error / timeout | 6 | 9 |
+
+Mean response length fell from 237 to 141 tokens. The base model's failures were mostly mechanical: long docstring-heavy answers
+that got truncated, and calls to undefined helpers such as `product(...)`. RL removed most of those. What remains is mainly wrong
+algorithms. The LiteLLM critic (gpt-6-luna, 104 failed rollouts per run, about $0.012 per run) agrees: in both arms its top failure
+modes were syntax/runtime errors, wrong algorithm and misread task. It flagged **0% reward-hacking attempts**.
+
+Examples the base model failed and the trained model solved. W&B table `qualitative/fixed_by_training` holds 50 per run.
+1. `humaneval-test-0008` `sum_product`: the base model called an undefined `product(numbers)` (runtime_error). The trained model
+   writes the loop explicitly.
+2. `mbpp-test-0014` `find_Volume`: the base model wrote a long docstring and was truncated mid-expression. The trained model
+   answers in 5 lines: `(length * width) / 2 * height`.
+3. `mbpp-test-0011` `remove_Occ`: **a weak-test pass, reported honestly.** The trained model removes *every* occurrence
+   (`s.replace(c, "")`) rather than the first and last. MBPP's three hidden tests only use strings with exactly two occurrences,
+   so it passes. The execution reward is only as strong as the tests. The `no_suspicious_code` component and the critic catch
+   exploits, not under-specified tests.
+
+### Monitoring evidence (W&B readback, `evidence/results/wandb-readback-reward-ab.json`)
+
+Both runs finished in W&B with:
+- **Tables:**
+  - `trajectories/train`: 2,112 / 2,208 rows, two full GRPO groups per step.
+  - `trajectories/eval`: 240 rows.
+  - `qualitative/fixed_validation`: 16 fixed IDs at every eval.
+  - `qualitative/critic`: 104 rows, incremental.
+  - `qualitative/fixed_by_training`: 50 rows.
+- **Scalars:** per-component `environment/reward_components/*`, `environment/failure/*`, `train/learning_signal_fraction`,
+  `critic/*_frac`.
+- **Artifact:** the evidence artifact `<attempt>-evidence:v0`.
+
+### Efficiency
+
+| | binary | partial |
+| --- | --- | --- |
+| median step (generate / policy train) | 27.7 s (16.6 / 4.2) | 27.3 s (15.8 / 4.2) |
+| validation (96 tasks) | 15.7 s | 15.3 s |
+| final held-out eval (2 × 663, base + trained concurrently on 2 shards each) | 117 s | 117 s |
+| worker wall-clock | 3,043 s | 3,016 s |
+
+Each arm used half a node (4 of 8 GPUs) for about 51 minutes.
+- **Budget:** the whole verification program used 4,604 of the 7,200 authorized node-seconds. That covers the 7 canaries, both
+  A/B arms and every retry, charged conservatively from job creation to terminal observation. CPU dry runs are free. Details in
+  `evidence/ledgers/rl-envs.json`.
+- **Planning accuracy:** `strl plan` now calibrates coding estimates from these runs. It predicts 29.7 s/step against 27.7 s measured.
+
+### Limits
+
+- **Single seed per arm.** The −2.71-point difference between reward designs is within noise.
+- **One model size:** 0.8B. The model switch to Qwen3-1.7B is canary-verified only.
+- **Harbor (agentic) tier:** canary-level evidence only; see the skill's `references/validation.md`.
+- **Not GPU-verified:** multi-node and fully-async training.
+
+## GSM8K · Qwen3.5-0.8B · 8×H100 (attempt q35v2-a1, original code `2916fb9`)
 
 ScaleTrain job `job_db2hb8sf8c4g07jroc60` (COMPLETED), W&B `mohamed-elfeki/qwen35-grpo-gsm8k/q35v2261006153651`. Qwen3.5-0.8B, SkyRL GRPO, 36 updates on one 8×H100 node; checkpoint selected on validation only (step 36).
 
-## Official GSM8K test (1,319 paired examples, greedy, identical decoding and scorer)
+### Official GSM8K test (1,319 paired examples, greedy, identical decoding and scorer)
 
 | model | correct | accuracy | truncated | no `#### n` line |
 | --- | --- | --- | --- | --- |
@@ -11,7 +137,7 @@ ScaleTrain job `job_db2hb8sf8c4g07jroc60` (COMPLETED), W&B `mohamed-elfeki/qwen3
 
 Delta **+18.04 points**, paired 95% bootstrap CI [+15.31, +20.77]. Flips: 312 fixed (wrong→right), 74 broken (right→wrong), 596 both right, 337 both wrong.
 
-## Validation (256 train-derived examples, greedy)
+### Validation (256 train-derived examples, greedy)
 
 | step | correct | accuracy |
 | --- | --- | --- |
@@ -21,15 +147,15 @@ Delta **+18.04 points**, paired 95% bootstrap CI [+15.31, +20.77]. Flips: 312 fi
 | 30 | 190/256 | 74.22% |
 | 36 | 186/256 | 72.66% |
 
-## Training efficiency (measured)
+### Training efficiency (measured)
 
 - median step 51.2s (generate 35.1s, policy train 5.0s); 3736 tokens/s/GPU; 512 rollouts per step.
 - worker wall time 2756s (bootstrap ~35s, training+validation ~2561s, final test eval of 2×1,319 examples 132s); scheduler allocation <=~3,010s (ledger, conservative) of the 3,600s budget.
 - the checkpoint is chosen among exported steps only (exports at step 20 and at the deadline step); an unexported step with higher validation accuracy is not eligible.
 
-## Examples the base model failed and the trained model solved
+### Examples the base model failed and the trained model solved
 
-### 1. `gsm8k-test-00000` · base failure: no_final_answer_line · truth `18`
+#### 1. `gsm8k-test-00000` · base failure: no_final_answer_line · truth `18`
 
 **Question**
 
@@ -67,7 +193,7 @@ Let's break down Janet's daily earnings step by step:
 #### 18
 ```
 
-### 2. `gsm8k-test-00002` · base failure: no_final_answer_line · truth `70000`
+#### 2. `gsm8k-test-00002` · base failure: no_final_answer_line · truth `70000`
 
 **Question**
 
@@ -112,7 +238,7 @@ Let's break down the calculation step by step:
 #### 70000
 ```
 
-### 3. `gsm8k-test-00075` · base failure: truncated · truth `60`
+#### 3. `gsm8k-test-00075` · base failure: truncated · truth `60`
 
 **Question**
 
@@ -169,7 +295,7 @@ Average = $\frac{240}{4} = 60$
 #### 60
 ```
 
-### 4. `gsm8k-test-00108` · base failure: truncated · truth `50`
+#### 4. `gsm8k-test-00108` · base failure: truncated · truth `50`
 
 **Question**
 
@@ -234,7 +360,7 @@ So, Henry baked 50 cookies last year.
 #### 50
 ```
 
-### 5. `gsm8k-test-00009` · base failure: wrong_answer · truth `460`
+#### 5. `gsm8k-test-00009` · base failure: wrong_answer · truth `460`
 
 **Question**
 

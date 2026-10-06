@@ -92,6 +92,20 @@ def markdown(report: dict) -> str:
         lines.append(f"| {r['attempt']} | {r['model']} | {r['reward']} | {r.get('optimizer_steps')} | "
                      + (f"{pct(t['baseline_accuracy'])} | {pct(t['candidate_accuracy'])} | {100 * t['accuracy_delta']:+.2f} "
                         f"[{100 * t['ci_lower']:+.2f}, {100 * t['ci_upper']:+.2f}] |" if t else '- | - | - |'))
+    curves = [r for r in report['runs'] if r.get('curves')]
+    if curves:   # training dynamics: did the reward move the yardstick, or only itself?
+        lines += ['', '| attempt | learning signal first -> last | train reward last (max) | val task metric last (max) | '
+                  'reward components last | step s (last) | top critic modes |', '| --- | --- | --- | --- | --- | --- | --- |']
+        for r in curves:
+            c = r['curves']
+            get = lambda k, f='last': (c.get(k) or {}).get(f)  # noqa: E731
+            num = lambda x: '-' if x is None else f'{x:.3f}'  # noqa: E731
+            comps = ', '.join(f"{k} {v.get('last', 0):.2f}" for k, v in (c.get('reward_components') or {}).items())
+            modes = ', '.join(f'{k} {v:.0%}' for k, v in sorted((c.get('critic_modes') or {}).items(), key=lambda kv: -kv[1])[:3])
+            lines.append(f"| {r['attempt']} | {num(get('train/learning_signal_fraction', 'first'))} -> {num(get('train/learning_signal_fraction'))} | "
+                         f"{num(get('reward/avg_raw_reward'))} ({num(get('reward/avg_raw_reward', 'max'))}) | "
+                         f"{num(get('eval/task_metric'))} ({num(get('eval/task_metric', 'max'))}) | {comps or '-'} | "
+                         f"{num(get('timing/step'))} | {modes or '-'} |")
     for p in report['pairs']:
         d = p['b_minus_a']
         lines.append(f"\n**{p['b']} vs {p['a']}** (trained vs trained, {p['examples']} paired tasks): {100 * d['accuracy_delta']:+.2f} points "
