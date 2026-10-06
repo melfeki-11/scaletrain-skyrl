@@ -1,0 +1,9 @@
+# Reward A/B arm A. Both arms share everything except reward.components, run concurrently on 4-GPU slices, log to one W&B group,
+# and are compared on the identical held-out MBPP-test + HumanEval ids by `python -m strl compare`.
+name: mbpp-qwen35-binary
+description: coding_exec, Qwen3.5-0.8B, binary pass@1 reward
+extends: base/coding_exec.yaml
+compute: {gpus_per_node: 4}
+algorithm: {prompts_per_step: 32, minibatch_prompts: 32, n_samples: 8, micro_train_per_gpu: 8, micro_forward_per_gpu: 8}
+evaluation: {eval_shards_per_model: 2}
+tracking: {group: mbpp-reward-ab, tags: ['reward:binary']}

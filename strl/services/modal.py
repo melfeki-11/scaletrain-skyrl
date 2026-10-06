@@ -71,3 +71,36 @@ def check(environment: str = 'main', secret: str | None = None) -> dict:
             raise RuntimeError(f'Modal secret {secret!r} missing in {environment!r}')
         receipt['modal_secret'] = secret
     return receipt
+
+
+DEFAULT_ENV_FILE = Path(os.environ.get('STRL_MODAL_ENV_FILE', Path(__file__).resolve().parents[3] / '.env.modal'))
+
+
+class local_profile:
+    """Context manager for laptop use: materialize a temporary mode-600 profile from a mode-600 MODAL_TOKEN_ID/SECRET dotenv
+    (default: ScaleTrain/.env.modal, override with $STRL_MODAL_ENV_FILE). If MODAL_CONFIG_PATH is already set, it is used as is."""
+
+    def __init__(self, environment: str = 'main', env_file: str | Path | None = None):
+        self.environment, self.env_file, self.path = environment, Path(env_file or DEFAULT_ENV_FILE), None
+
+    def __enter__(self):
+        os.environ['MODAL_ENVIRONMENT'] = self.environment
+        if os.environ.get('MODAL_CONFIG_PATH'):
+            os.environ.setdefault('MODAL_PROFILE', 'scaleapi')
+            return Path(os.environ['MODAL_CONFIG_PATH'])
+        if self.env_file.stat().st_mode & 0o077:
+            raise RuntimeError(f'{self.env_file} must be mode 600')
+        import tempfile
+        fd, name = tempfile.mkstemp(prefix='modal-', suffix='.toml')
+        os.close(fd)
+        self.path = materialize_profile(self.env_file.read_text(), name)
+        os.environ.update(MODAL_CONFIG_PATH=str(self.path), MODAL_PROFILE='scaleapi')
+        os.environ.pop('MODAL_TOKEN_ID', None)
+        os.environ.pop('MODAL_TOKEN_SECRET', None)
+        return self.path
+
+    def __exit__(self, *exc):
+        if self.path is not None:
+            os.environ.pop('MODAL_CONFIG_PATH', None)
+            self.path.unlink(missing_ok=True)
+        return False

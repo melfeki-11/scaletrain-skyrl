@@ -1,0 +1,21 @@
+# Base experiment: the SAME coding tasks as agentic Harbor tasks (Tier B): Terminus-2 works in a Modal sandbox terminal,
+# writes /app/solution.py, and the sandbox verifier runs the same hardened harness as coding_exec.
+#   SkyRL trainer -> HarborGenerator -> Harbor Trial -> Modal sandbox -> verifier reward (+ tokenized chat history)
+name: coding-harbor-base
+description: MBPP/HumanEval as multi-turn Harbor tasks in Modal sandboxes (Terminus-2 agent)
+extends: base/coding_exec.yaml
+
+environment:
+  name: coding_harbor
+  harbor:
+    max_turns: 8                 # agent episodes per trial; context = prompt + max_turns x max_generate_length
+    agent_timeout_sec: 600
+    max_concurrency: 64          # concurrent Modal sandboxes (HarborGenerator rate limiter)
+    trajectories_per_second: 4
+
+reward:
+  components:
+    - {fn: pass_all_tests, weight: 1.0}   # from the sandbox verifier's reward.txt (other components: use coding_exec)
+
+tracking:
+  group: coding-harbor

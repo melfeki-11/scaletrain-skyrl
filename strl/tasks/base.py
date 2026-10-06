@@ -63,6 +63,10 @@ class EnvironmentSpec:
         """CPU dry-run: exercise this environment's external dependencies (executors, sandboxes) and return a receipt."""
         return {}
 
+    def expected_rows(self, cfg: dict, split: str) -> int | None:
+        """Rows SkyRL must keep for ``split`` ('train'|'validation') after prompt-length filtering; None = no check."""
+        return None
+
     def final_eval_ids(self, cfg: dict) -> list[str]:
         return [self.sample_id_format % i for i in range(cfg['environment']['test_size'])]
 
@@ -100,6 +104,11 @@ class EnvironmentSpec:
         """CPU preflight: exercise the REAL reward path on edge cases and return a receipt dict (raise on failure)."""
         return {}
 
+    def skyrl_config_class(self) -> Any:
+        """The SkyRL config dataclass that parses this environment's overrides (Harbor needs HarborSkyRLConfig)."""
+        from skyrl.train.config import SkyRLTrainConfig
+        return SkyRLTrainConfig
+
     def build_generator(self, experiment: dict, cfg: Any, tokenizer: Any, inference_engine_client: Any) -> Any:
         """Return a SkyRL generator instance, or None for SkyRL's default SkyRLGymGenerator. Runs in the Ray driver task."""
         return None
@@ -107,6 +116,10 @@ class EnvironmentSpec:
     # ------------------------------------------------------------------ monitoring hooks
     def train_diagnostics(self, completions: list[str], rewards: list[float], stop_reasons: list, group_size: int,
                           env_metrics: list | None = None) -> dict[str, float]:
+        return {}
+
+    def result_metrics(self, result: dict) -> dict[str, float]:
+        """Extra numeric per-rollout metrics from a scorer result (aggregated by SkyRL into environment/*)."""
         return {}
 
     def extra_values(self, index: int, env_metrics: list | None) -> tuple:

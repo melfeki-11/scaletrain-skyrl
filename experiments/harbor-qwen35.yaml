@@ -1,0 +1,7 @@
+# Environment switch: the same tasks as agentic Harbor tasks (Terminus-2 in Modal sandboxes).
+name: harbor-qwen35
+description: coding_harbor, Qwen3.5-0.8B
+extends: base/coding_harbor.yaml
+compute: {gpus_per_node: 4}
+algorithm: {prompts_per_step: 16, minibatch_prompts: 16, n_samples: 8, micro_train_per_gpu: 4, micro_forward_per_gpu: 4}
+evaluation: {eval_shards_per_model: 2}

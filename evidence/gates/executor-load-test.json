@@ -1,0 +1,19 @@
+{
+ "deploy": {
+  "deployed": false,
+  "version": "fab5f1b39071ab5c",
+  "environment": "main"
+ },
+ "prewarm_s": 0.77,
+ "calls": 512,
+ "seconds": 2.68,
+ "calls_per_second": 191.4,
+ "p50_s": 0.3126,
+ "p95_s": 0.3853,
+ "max_s": 0.7582,
+ "infra_errors": 0,
+ "classes": {
+  "ok": 256,
+  "syntax_error": 256
+ }
+}

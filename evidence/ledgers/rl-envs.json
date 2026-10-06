@@ -1,0 +1,6 @@
+{
+  "program": "rl-envs framework verification (user-authorized 2026-10-06: <= 2 node-hours on 1 x 8 H100)",
+  "total_seconds": 7200,
+  "nodes": 1,
+  "attempts": []
+}

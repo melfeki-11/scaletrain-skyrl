@@ -175,3 +175,40 @@ class Contracts(unittest.TestCase):
             self.assertEqual(verify_shards(temp,2,8)['nonempty_rank_files'],24)
 
 if __name__=='__main__':unittest.main()
+
+
+class AllExperiments(unittest.TestCase):
+    """Every shipped experiment must plan, and every SkyRL override it renders must exist in the pinned dataclasses."""
+
+    def test_every_experiment_overrides_exist_in_pinned_skyrl(self):
+        from strl.derive import plan
+        tree = ast.parse(Path('pinned/pinned-config.py').read_text())
+        classes = {c.name: {f.target.id: ast.unparse(f.annotation) for f in c.body if isinstance(f, ast.AnnAssign) and isinstance(f.target, ast.Name)}
+                   for c in tree.body if isinstance(c, ast.ClassDef)}
+        for path in sorted(Path('experiments').glob('*.yaml')) + sorted(Path('base').glob('[!_]*.yaml')):
+            if path.name in {'infra.yaml', 'canary_overlay.yaml'}:
+                continue
+            cfg = load(str(path))
+            plan(cfg)
+            for stage in ('train', 'canary'):
+                for option in overrides(cfg, stage=stage, run_name='t'):
+                    key = option.split('=', 1)[0]
+                    if key.startswith('generator.rate_limit.'):
+                        continue  # HarborGeneratorConfig (examples/train_integrations/harbor/entrypoints/main_harbor.py)
+                    current = 'SkyRLTrainConfig'
+                    for field in key.split('.'):
+                        if current not in classes:
+                            self.assertIn('dict', current.lower(), (path, key))
+                            break
+                        self.assertIn(field, classes[current], (path, key))
+                        current = classes[current][field].replace('Optional[', '').rstrip(']')
+
+    def test_canary_overlay_keeps_axes(self):
+        from strl.stage import apply_canary_overlay
+        for path in ('experiments/mbpp-qwen35-partial.yaml', 'experiments/mbpp-qwen3-1p7b.yaml', 'base/gsm8k.yaml'):
+            cfg = load(path)
+            canary = apply_canary_overlay(cfg)
+            for axis in ('model', 'environment', 'reward'):
+                self.assertEqual(canary[axis], cfg[axis], (path, axis))
+            self.assertEqual(canary['compute']['gpus_per_node'], 1)
+            self.assertFalse(canary['evaluation']['final_eval'])

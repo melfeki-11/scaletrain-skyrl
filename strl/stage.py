@@ -33,7 +33,7 @@ SKIP = {'__pycache__', 'packages', '.DS_Store'}
 def apply_canary_overlay(cfg: dict) -> dict:
     import yaml
     overlay = yaml.safe_load(CANARY_OVERLAY.read_text())
-    out = deep_merge(cfg, overlay)
+    out = deep_merge({k: v for k, v in cfg.items() if k not in {'derived', '_meta'}}, overlay)
     out['algorithm']['n_samples'] = min(cfg['algorithm']['n_samples'], overlay['algorithm'].get('n_samples', 4))
     out['name'] = cfg['name'] + '-canary'
     validate(out)
@@ -113,9 +113,11 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
     gpus = cfg['compute']['gpus_per_node']
     gpu_fraction = 0.0 if mode == 'dry' else gpus / 8.0
     if mode == 'train':
-        if remaining <= reserve + 900:
-            raise RuntimeError(f'Insufficient remaining budget ({remaining}s) for bootstrap, training and evaluation')
-        remaining = min(remaining, cfg['budget']['attempt_max_seconds'])
+        # the ledger counts node-seconds; a k-GPU slice may run (8/k) wall-seconds per node-second
+        affordable = int(remaining / gpu_fraction) if gpu_fraction else remaining
+        if affordable <= reserve + 900:
+            raise RuntimeError(f'Insufficient remaining budget ({remaining} node-s = {affordable}s at {gpus} GPU(s)) for bootstrap, training and evaluation')
+        remaining = min(affordable, cfg['budget']['attempt_max_seconds'])
         worker_seconds = remaining - cfg['budget']['bootstrap_margin_seconds']
     elif mode == 'canary':
         affordable = int(remaining / gpu_fraction) if gpu_fraction else remaining

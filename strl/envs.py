@@ -92,6 +92,7 @@ def make_env_class():
             if 'latency_s' in result:
                 metrics['exec_latency_s'] = float(result['latency_s'])
             metrics['infra_error'] = 1.0 if result.get('failure_class') == 'infra_error' else 0.0
+            metrics.update(rt['spec'].result_metrics(result))
             self.metrics = metrics
             return BaseTextEnvStepOutput(observations=[], reward=float(reward), done=True, metadata={})
 

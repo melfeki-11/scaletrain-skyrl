@@ -11,6 +11,28 @@ FORWARD_KEYS = {'PYTHONPATH', 'HF_HUB_OFFLINE', 'TRANSFORMERS_OFFLINE', 'MODAL_C
 NEVER_FORWARD = {'MODAL_TOKEN_ID', 'MODAL_TOKEN_SECRET', 'LITELLM_PROXY_API_KEY', 'DAYTONA_API_KEY'}
 
 
+IGNORE_ROW_ENV_CLASS = '__strl_ignore_row_env_class__'
+
+
+def prepare_dataset(dataset, env_spec, experiment, split):
+    """Make every row use the experiment's env class and refuse silently filtered prompts.
+
+    SkyRL lets a row's ``env_class`` column override ``environment.env_class`` (dataset.py:89, generators/utils.py:536). GSM8K rows
+    carry ``env_class: gsm8k``, so a custom reward design would silently run the built-in env; the generic path therefore ignores
+    the row column. SkyRL also drops prompts longer than max_prompt_length without failing; environments that declare their row
+    counts get a hard check instead.
+    """
+    if dataset is None:
+        return None
+    if env_spec.uses_generic_reward(experiment):
+        dataset.env_class_key = IGNORE_ROW_ENV_CLASS
+    expected = env_spec.expected_rows(experiment, split)
+    if expected is not None and len(dataset) != expected:
+        raise RuntimeError(f'{split} dataset has {len(dataset)} rows after SkyRL prompt-length filtering, expected {expected}: '
+                           'raise algorithm.max_prompt_tokens or re-prepare the data')
+    return dataset
+
+
 def forwarded_env(environ: dict[str, str]) -> dict[str, str]:
     return {key: value for key, value in environ.items()
             if (key.startswith(FORWARD_PREFIXES) or key in FORWARD_KEYS) and key not in NEVER_FORWARD}
@@ -19,7 +41,6 @@ def forwarded_env(environ: dict[str, str]) -> dict[str, str]:
 def main() -> None:
     import ray
     from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
-    from skyrl.train.config import SkyRLTrainConfig
     from skyrl.train.entrypoints.main_base import BasePPOExp
     from skyrl.train.utils import validate_cfg
     import skyrl.train.utils.utils as ray_utils
@@ -38,6 +59,12 @@ def main() -> None:
         def get_tracker(self):
             return AxisTracking(project_name=self.cfg.trainer.project_name, experiment_name=self.cfg.trainer.run_name,
                                 backend=self.cfg.trainer.logger, config=self.cfg, tags=self.cfg.trainer.tags)
+
+        def get_train_dataset(self):
+            return prepare_dataset(super().get_train_dataset(), env_spec, experiment, 'train')
+
+        def get_eval_dataset(self):
+            return prepare_dataset(super().get_eval_dataset(), env_spec, experiment, 'validation')
 
         def get_trajectory_logger(self):
             return GroupTrajectoryLogger()
@@ -58,7 +85,7 @@ def main() -> None:
         critic.configure(critic.settings_from_env())
         StrlExp(cfg).run()
 
-    cfg = SkyRLTrainConfig.from_cli_overrides(sys.argv[1:])
+    cfg = env_spec.skyrl_config_class().from_cli_overrides(sys.argv[1:])
     validate_cfg(cfg)
     original_prepare = ray_utils.prepare_runtime_environment
 

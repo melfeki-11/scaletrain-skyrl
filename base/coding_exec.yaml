@@ -1,0 +1,71 @@
+# Base experiment: coding RL with rewards executed in Modal (Tier A, single turn). Qwen3.5-0.8B, one 8xH100 node.
+# Train on MBPP train+validation, select on a train-derived validation set, report held-out pass@1 on MBPP-test + HumanEval.
+# Experiments `extends:` this file and change only the axes they study (model / environment / reward / algorithm knobs).
+name: coding-exec-base
+description: MBPP/HumanEval single-turn coding GRPO, tests executed in the Modal executor
+extends: base/infra.yaml          # infrastructure defaults (image, storage, team, budget envelope); sections below override
+
+model:
+  id: Qwen/Qwen3.5-0.8B
+  revision: 2fc06364715b967f1860aea9cf38778875588b17
+  local_path: assets/model
+
+environment:
+  name: coding_exec
+  sources:
+    train: [{dataset: mbpp, splits: [train, validation]}]
+    validation: {from: train, size: 96, seed: 17}
+    test: [{dataset: mbpp, splits: [test]}, {dataset: humaneval, splits: [test]}]
+
+reward:
+  components:
+    - {fn: pass_all_tests, weight: 1.0}
+
+algorithm:
+  prompts_per_step: 64
+  minibatch_prompts: 64
+  n_samples: 8
+  micro_train_per_gpu: 8
+  micro_forward_per_gpu: 8
+  lr: 2.0e-06
+  use_kl_loss: true
+  kl_coef: 0.01
+  max_prompt_tokens: 512           # longest train prompt is 275 tokens; prepare asserts none exceed this (SkyRL drops them silently)
+  max_generate_length: 512         # generation time is set by the longest sequence: the main step-time lever
+  temperature: 1.0
+
+inference:
+  max_env_workers: 64              # concurrent Modal executor calls from the env thread pool
+
+evaluation:
+  interval_steps: 5
+  checkpoint_interval_steps: 5     # == interval_steps: every validated step can be selected
+  eval_batch_size: 96              # == validation size
+  fixed_qualitative_samples: 16
+
+budget:
+  final_eval_reserve_seconds: 600
+  ledger: evidence/ledgers/rl-envs.json
+
+tracking:
+  project: scaletrain-rl-envs
+  group: coding-exec
+  tags: []
+  critic:
+    enabled: true
+    model: openai/gpt-6-luna
+    every_n_steps: 5
+    max_rows: 8
+    budget_usd: 5.0
+
+services:
+  modal:
+    credentials_uri: s3://scale-ml/tmp/mohamedelfeki/scaletrain/modal-harbor/private/mh-cpu-261006a-modal.env
+    environment: main
+    sandbox_secret: modal-proxy-user
+  litellm:
+    key_name: HIL_BENCH_EVAL_1
+    project_id: 696011502a26dc4a64b24f55
+
+run:
+  data_dir: assets/coding/mbpp-humaneval

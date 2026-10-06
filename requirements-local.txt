@@ -1,3 +1,6 @@
+# Local control environment (staging, planning, data prep, Modal executor, Harbor/LiteLLM evals, tests).
+# Create with:  uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements-local.txt
+# Pins match the SkyRL a9564572 uv.lock / training image where they touch the training path.
 pyyaml
 boto3
 numpy
@@ -6,4 +9,9 @@ datasets
 huggingface_hub
 safetensors
 torch
-wandb
+transformers==5.8.0
+wandb==0.28.1
+modal==1.5.3
+litellm==1.95.0
+dockerfile-parse==2.0.1
+harbor[modal] @ git+https://github.com/laude-institute/harbor@3de07a0e01f3368921766437fc7afece3ddec23d

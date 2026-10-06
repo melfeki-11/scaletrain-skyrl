@@ -1,0 +1,9 @@
+# Model switch: only model.* changes (profile auto-detected as qwen3 from config.json). Fetch first: python -m strl fetch <this>
+name: mbpp-qwen3-1p7b
+description: coding_exec with Qwen3-1.7B (dense Qwen3)
+extends: experiments/mbpp-qwen35-binary.yaml
+model:
+  id: Qwen/Qwen3-1.7B
+  revision: 70d244cc86ccca08cf5af4e1e306ecf908b1ad5e
+  local_path: assets/models/Qwen3-1.7B
+tracking: {tags: ['model:qwen3-1.7b']}

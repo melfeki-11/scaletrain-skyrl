@@ -10,12 +10,12 @@ from .overrides import overrides
 
 
 def build(stage: str, run_name: str):
-    from skyrl.train.config import SkyRLTrainConfig
     from skyrl.train.utils import validate_cfg
     from .runtime import validate_generator
+    from .tasks import get_environment
     experiment = current()
     values = overrides(experiment, stage=stage, run_name=run_name)
-    validated = SkyRLTrainConfig.from_cli_overrides(values)
+    validated = get_environment(experiment['environment']['name']).skyrl_config_class().from_cli_overrides(values)
     logger = validated.trainer.logger
     validated.trainer.logger = 'console'   # validation must not require W&B
     validate_cfg(validated)

@@ -4,12 +4,7 @@
 name: gsm8k-base
 description: GSM8K strict-answer GRPO, Qwen3.5-0.8B, 1 node x 8 H100
 
-model:
-  id: Qwen/Qwen3.5-0.8B
-  revision: 2fc06364715b967f1860aea9cf38778875588b17
-  local_path: assets/model        # staged from S3 by the worker; fetch_assets.py builds it locally
-  dtype: bfloat16
-  profile: auto                   # auto = detect from config.json architectures (strl/models/)
+extends: base/infra.yaml
 
 environment:
   name: gsm8k
@@ -26,86 +21,3 @@ reward:                           # weighted sum of named components (strl/tasks
   components:
     - {fn: strict_answer, weight: 1.0}
 
-algorithm:
-  estimator: grpo
-  prompts_per_step: 64            # x n_samples = rollouts per step (512 = 64 per GPU on 8 GPUs)
-  minibatch_prompts: 64           # == prompts_per_step -> one on-policy update per step
-  n_samples: 8                    # group size; GRPO needs >= 2 and learns only from groups with reward variance
-  micro_train_per_gpu: 8
-  micro_forward_per_gpu: 8
-  lr: 2.0e-06
-  update_epochs: 1
-  use_kl_loss: true
-  kl_coef: 0.01
-  zero_variance_filter: false
-  temperature: 1.0
-  top_p: 1.0
-  max_prompt_tokens: 512
-  max_generate_length: 1024       # the main step-time lever: generation time is set by the longest sequence
-  max_steps: 200                  # upper bound; the wall-clock deadline normally stops training first
-  bf16: true
-  seed: 17
-
-inference:
-  tensor_parallel_size: 1         # one colocated vLLM engine per GPU (engines are derived: gpus / tp)
-  gpu_memory_utilization: 0.6
-  max_num_seqs: 64
-  enforce_eager: true
-
-evaluation:
-  interval_steps: 10              # cheap greedy validation
-  checkpoint_interval_steps: 20   # HF export cadence: only exported steps can be selected as the final checkpoint
-  max_checkpoints: 2
-  eval_batch_size: 256            # == validation size
-  fixed_qualitative_samples: 16
-  training_groups_to_log: 2
-  bootstrap_samples: 10000
-  bootstrap_seed: 29
-  ci_level: 0.95
-  eval_shards_per_model: 4        # final test eval: base on GPUs 0-3, trained on GPUs 4-7, concurrently
-
-compute:
-  nodes: 1
-  gpus_per_node: 8
-  instance_type: p5.48xlarge
-  team: gen_ai.agent_training_foundation
-  product: agent_training_foundation
-  priority: high
-  allow_borrowing: false
-  image: 692474966980.dkr.ecr.us-west-2.amazonaws.com/scale_train/shared/training/tmp:20260922-210801.d5d13a4a-e962-40ea-abe4-4057c5c1c82b
-
-runtime:
-  skyrl_commit: a9564572eb8e91076be43c1bd5e4615e3de17265
-  python: /opt/skyrl-venv/bin/python
-
-budget:
-  total_seconds: 3600             # cumulative allocated seconds for the whole program (see evidence/budget-ledger.json)
-  attempt_max_seconds: 3600
-  bootstrap_margin_seconds: 180   # pod start / image pull before the worker clock starts
-  final_eval_reserve_seconds: 900
-  canary_max_seconds: 1200
-
-tracking:
-  base_url: https://scaleai.wandb.io
-  entity: mohamed-elfeki
-  project: qwen35-grpo-gsm8k
-  group: qwen35-single-node-8gpu
-  credentials_uri: s3://scale-ml/tmp/mohamedelfeki/scaletrain/qwen38-grpo-mini/private/q38-cpu-2609221807-4f3763-wandb.env
-  tags: []
-  critic: {enabled: false}
-
-storage:
-  bucket: scale-ml
-  prefix: tmp/mohamedelfeki/scaletrain/qwen35-grpo-v2
-  profile: production-developer
-  region: us-west-2
-
-limits:                           # authorization envelope: plan/stage refuse anything outside it
-  max_nodes: 1
-  gpus_per_node: [1, 2, 4, 8]
-  max_attempt_seconds: 3600
-  models: ["*"]                   # the model axis is free; unverified profiles only warn in `strl plan`
-
-run:
-  data_dir: assets/data
-  artifact_dir: artifacts

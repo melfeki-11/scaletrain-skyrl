@@ -21,3 +21,7 @@ tests/.tmp/
 assets/overlay/
 assets/models/
 assets/coding/
+!evidence/ledgers/
+!evidence/ledgers/*.json
+!evidence/gates/
+!evidence/gates/*.json

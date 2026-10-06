@@ -1,0 +1,10 @@
+{
+  "_doc": "Measured performance profiles that seed `strl plan` estimates. Append a row after every completed run (strl verify prints one).",
+  "runs": [
+    {"name": "gsm8k-qwen35-0.8b-8gpu-a1", "environment": "gsm8k", "model": "Qwen/Qwen3.5-0.8B", "params_b": 0.8, "gpus": 8,
+     "rollouts_per_step": 512, "max_generate_length": 1024, "mean_response_tokens": 308,
+     "median_step_seconds": 51.2, "median_generate_seconds": 35.1, "median_policy_train_seconds": 5.0, "tokens_per_second_per_gpu": 3736,
+     "startup_seconds": 455, "eval_seconds_per_256": 33, "final_eval_seconds": 132, "base_task_metric": 0.508,
+     "source": "job_db2hb8sf8c4g07jroc60 (evidence/verified-result.json)"}
+  ]
+}
