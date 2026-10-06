@@ -159,7 +159,7 @@ def main():
             put_json(prefix + '/dry-run.json', dry); print(json.dumps(dry), flush=True)
             return
         root = Path('artifacts') / runtime['run_name']
-        child([sys.executable, '-m', 'q35.train'], 'artifacts/training.log', begin['deadline'] - 600,
+        child([sys.executable, '-m', 'q35.train'], 'artifacts/training.log', begin['deadline'] - 480,
               root / 'canary.json', cfg['budget']['canary_max_seconds'])
         phases['training_end'] = time.time()
         subprocess.run([RAY, 'stop', '--force'], check=True)

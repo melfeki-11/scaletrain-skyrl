@@ -79,5 +79,5 @@ s3:
 budget:
   total_seconds: 3600            # cumulative allocated seconds across all GPU attempts
   bootstrap_margin_seconds: 180  # pod start/image pull before the worker clock starts
-  final_eval_reserve_seconds: 840
+  final_eval_reserve_seconds: 900
   canary_max_seconds: 1200
