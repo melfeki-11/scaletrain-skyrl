@@ -103,7 +103,7 @@ def budget(runtime, cfg):
     if not 0 < seconds <= min(total, int(cfg['budget']['attempt_max_seconds'])):
         raise ValueError('Invalid remaining allocation budget')
     payload = {'started_at': now, 'deadline': now + seconds, 'nodes': cfg['compute']['nodes'], 'seconds': seconds,
-               'consumed_previous_seconds': total - seconds, 'attempt': runtime['run_name'], 'ledger_uri': runtime['budget_ledger_uri']}
+               'gpu_fraction': float(runtime.get('gpu_fraction', 1.0)), 'attempt': runtime['run_name'], 'ledger_uri': runtime['budget_ledger_uri']}
     try:
         s3.put_object(Bucket=bucket, Key=key, Body=json.dumps(payload).encode(), ServerSideEncryption='AES256', IfNoneMatch='*')
     except ClientError as e:
@@ -205,7 +205,7 @@ def main():
         identity['budget'] = begin
         reserve = int(cfg['budget']['final_eval_reserve_seconds']) if mode == 'train' and cfg['evaluation']['final_eval'] else 120
         os.environ.update(
-            GRPO_WORKER_BEGAN_EPOCH=str(begin['started_at']), GRPO_PREVIOUS_SECONDS=str(begin['consumed_previous_seconds']),
+            GRPO_WORKER_BEGAN_EPOCH=str(begin['started_at']), STRL_GPU_FRACTION=str(begin['gpu_fraction']),
             GRPO_TRAIN_DEADLINE=str(begin['deadline'] - reserve), GRPO_FINAL_EVAL_RESERVE_SECONDS=str(reserve),
             GRPO_SAMPLES_PER_PROMPT=str(cfg['algorithm']['n_samples']), GRPO_NODES=str(cfg['compute']['nodes']),
             GRPO_EXPECTED_VALIDATION_SIZE=str(env_spec.validation_size(cfg) if mode != 'canary' else env_spec.canary_size(cfg)),
@@ -214,7 +214,8 @@ def main():
             GRPO_CANARY_REQUIRE_GRADIENT='1' if env_spec.canary_requires_gradient(cfg) else '0',
             STRL_RESOLVED=str(Path('resolved.json').resolve()), STRL_EXPERIMENT_NAME=cfg['name'], STRL_EXPERIMENT_SHA=cfg['_meta']['sha'],
             STRL_ENVIRONMENT=env_spec.name, STRL_STAGE='canary' if mode == 'canary' else 'train',
-            STRL_ALERTS='1' if cfg['tracking'].get('alerts', True) else '0', STRL_TOKENIZER=cfg['model']['local_path'])
+            STRL_ALERTS='1' if cfg['tracking'].get('alerts', True) else '0', STRL_TOKENIZER=cfg['model']['local_path'],
+            STRL_METRICS_JSONL=str((Path('artifacts') / runtime['run_name'] / 'metrics.jsonl').resolve()))
         interface = os.environ['NETWORK_INTERFACE_NAME']
         port = os.environ.get('LEADER_PORT', '6379')
         local_ip, address = head_network(interface, port)

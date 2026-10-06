@@ -268,6 +268,10 @@ class CodingHarborSpec(CodingExecSpec):
         from .harbor import install_compat
         install_compat()
 
+    def build_dataset(self, experiment: dict, cfg: Any, split: str) -> Any:
+        from .harbor import build_dataset
+        return build_dataset(cfg, split)
+
     def build_generator(self, experiment: dict, cfg: Any, tokenizer: Any, inference_engine_client: Any) -> Any:
         from .harbor import build_generator
         return build_generator(experiment, cfg, tokenizer, inference_engine_client)

@@ -1,8 +1,8 @@
 # Applied by `strl stage <experiment> --mode canary`: shrink compute, keep model / environment / reward identical.
 # Proves the exact training path (engines, generator, environment, reward, W&B tables, export) on one GPU in ~15 min.
 algorithm:
-  prompts_per_step: 4
-  minibatch_prompts: 4
+  prompts_per_step: 8         # 8 x 4 = 32 rollouts: all-equal (zero-signal) batches become rare
+  minibatch_prompts: 8
   n_samples: 4              # capped at the experiment's own n_samples
   micro_train_per_gpu: 4
   micro_forward_per_gpu: 4
@@ -13,3 +13,5 @@ compute:
   gpus_per_node: 1
 inference:
   gpu_memory_utilization: 0.5
+tracking:
+  critic: {every_n_steps: 1, max_rows: 4}   # exercise the critic table in the 2-step canary

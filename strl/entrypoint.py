@@ -33,6 +33,27 @@ def prepare_dataset(dataset, env_spec, experiment, split):
     return dataset
 
 
+def build_datasets(env_spec, experiment, cfg) -> dict:
+    """Build the REAL train/validation datasets exactly as the trainer will (used by the CPU dry run / --validate-only), so
+    dataset-class mistakes and SkyRL's silent prompt-length filtering surface before any GPU is allocated."""
+    out = {}
+    for split in ('train', 'validation'):
+        dataset = env_spec.build_dataset(experiment, cfg, split)
+        if dataset is None:
+            files = cfg.data.train_data if split == 'train' else cfg.data.val_data
+            if not files:
+                continue
+            from transformers import AutoTokenizer
+            from skyrl.train.dataset import PromptDataset
+            tokenizer = AutoTokenizer.from_pretrained(cfg.trainer.policy.model.path)
+            dataset = PromptDataset(datasets=files, tokenizer=tokenizer, max_prompt_length=cfg.trainer.max_prompt_length, num_workers=1)
+        dataset = prepare_dataset(dataset, env_spec, experiment, split)
+        out[split] = {'rows': len(dataset), 'class': type(dataset).__name__}
+        if split == 'train' and len(dataset) < cfg.trainer.train_batch_size:
+            raise RuntimeError(f'train set has {len(dataset)} rows < train_batch_size {cfg.trainer.train_batch_size}')
+    return out
+
+
 def forwarded_env(environ: dict[str, str]) -> dict[str, str]:
     return {key: value for key, value in environ.items()
             if (key.startswith(FORWARD_PREFIXES) or key in FORWARD_KEYS) and key not in NEVER_FORWARD}
@@ -61,10 +82,12 @@ def main() -> None:
                                 backend=self.cfg.trainer.logger, config=self.cfg, tags=self.cfg.trainer.tags)
 
         def get_train_dataset(self):
-            return prepare_dataset(super().get_train_dataset(), env_spec, experiment, 'train')
+            custom = env_spec.build_dataset(experiment, self.cfg, 'train')
+            return prepare_dataset(custom if custom is not None else super().get_train_dataset(), env_spec, experiment, 'train')
 
         def get_eval_dataset(self):
-            return prepare_dataset(super().get_eval_dataset(), env_spec, experiment, 'validation')
+            custom = env_spec.build_dataset(experiment, self.cfg, 'validation')
+            return prepare_dataset(custom if custom is not None else super().get_eval_dataset(), env_spec, experiment, 'validation')
 
         def get_trajectory_logger(self):
             return GroupTrajectoryLogger()

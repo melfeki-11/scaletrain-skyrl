@@ -96,8 +96,9 @@ def analyse(item: dict, call=None) -> dict:
 
 
 def _loop() -> None:
+    q = _S["q"]          # a thread serves only the queue it was started for
     while True:
-        item = _S['q'].get()
+        item = q.get()
         if item is None:
             return
         if _S.get('disabled'):
@@ -146,6 +147,14 @@ def shutdown(timeout: float = 60.0) -> None:
 
 
 def reset() -> None:  # tests
+    thread, q = _S.get('thread'), _S.get('q')
+    if thread is not None and q is not None:
+        _S['disabled'] = 'reset'
+        try:
+            q.put_nowait(None)
+        except queue.Full:
+            pass
+        thread.join(timeout=3)
     with _LOCK:
         _S.clear()
 

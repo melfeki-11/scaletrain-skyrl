@@ -4,6 +4,8 @@ name: mbpp-qwen35-binary
 description: coding_exec, Qwen3.5-0.8B, binary pass@1 reward
 extends: base/coding_exec.yaml
 compute: {gpus_per_node: 4}
-algorithm: {prompts_per_step: 32, minibatch_prompts: 32, n_samples: 8, micro_train_per_gpu: 8, micro_forward_per_gpu: 8}
+# canary can-cx-bin-a measured base pass@1 ~0.06 greedy / ~0.15 sampled -> 16 prompts x 16 samples (same 256 rollouts as 32x8,
+# ~4x fewer all-fail groups): the plan's SIGNAL rule
+algorithm: {prompts_per_step: 16, minibatch_prompts: 16, n_samples: 16, micro_train_per_gpu: 8, micro_forward_per_gpu: 8}
 evaluation: {eval_shards_per_model: 2}
 tracking: {group: mbpp-reward-ab, tags: ['reward:binary']}

@@ -21,6 +21,8 @@ def build(stage: str, run_name: str):
     validate_cfg(validated)
     validated.trainer.logger = logger
     receipt = validate_generator(validated, experiment)
+    from .entrypoint import build_datasets
+    receipt['datasets'] = build_datasets(get_environment(experiment['environment']['name']), experiment, validated)
     return values, validated, receipt
 
 

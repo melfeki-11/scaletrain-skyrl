@@ -140,6 +140,19 @@ def config_class():
     return HarborSkyRLConfig
 
 
+def build_dataset(cfg: Any, split: str) -> Any:
+    """SkyRL's HarborTaskDataset (one item per task directory), as examples/train_integrations/harbor/entrypoints/main_harbor.py."""
+    config_class()  # puts the SkyRL root on sys.path
+    from examples.train_integrations.harbor.dataset import HarborTaskDataset
+    files = cfg.data.train_data if split == 'train' else cfg.data.val_data
+    if split != 'train' and not (cfg.trainer.eval_interval > 0 and files):
+        return None
+    dataset = HarborTaskDataset(data_files=list(files))
+    if split == 'train' and len(dataset) < cfg.trainer.train_batch_size:
+        raise RuntimeError(f'Harbor train set has {len(dataset)} tasks < train_batch_size {cfg.trainer.train_batch_size}')
+    return dataset
+
+
 def build_generator(experiment: dict, cfg: Any, tokenizer: Any, inference_engine_client: Any) -> Any:
     install_compat()
     from examples.train_integrations.harbor.harbor_generator import HarborGenerator

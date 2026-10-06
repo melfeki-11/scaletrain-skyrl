@@ -22,7 +22,7 @@ def _profiles() -> list[dict]:
 
 
 def nearest_profile(cfg: dict) -> dict:
-    runs = _profiles()
+    runs = [r for r in _profiles() if r.get('tokens_per_second_per_gpu')]   # only full runs carry calibrated timing
     env = cfg['environment']['name']
     same = [r for r in runs if r['environment'] == env] or runs
     return min(same, key=lambda r: abs(math.log(r['params_b'] / max(1e-3, cfg.get('_params_b', r['params_b'])))))
@@ -46,8 +46,10 @@ def estimate_step_seconds(cfg: dict, params_b: float) -> dict[str, float]:
     if cfg['environment']['name'] == 'coding_harbor':
         hb = cfg['environment'].get('harbor') or {}
         gen = max(gen * int(hb.get('max_turns', 8)) * 0.5, 60.0)                  # multi-turn agent + sandbox startup
+    calibrated = p['environment'] == cfg['environment']['name'] and p['model'] == cfg['model']['id']
     return {'generate_s': round(gen, 1), 'train_s': round(train, 1), 'other_s': round(other, 1),
-            'step_s': round(gen + train + other, 1), 'profile': p['name']}
+            'step_s': round(gen + train + other, 1), 'profile': p['name'],
+            'calibrated': calibrated}   # False: extrapolated across environment/model; trust the canary's measured numbers instead
 
 
 def params_from_id(model_id: str) -> float | None:
@@ -73,7 +75,8 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
     if profile.verified != 'gpu':
         out.append(f'MODEL: profile {profile.name!r} is verified at level {profile.verified!r} only: stage --mode dry, then --mode canary, before a real run. '
                    f'{profile.notes}')
-    p0 = env.expected_base_reward
+    measured = [r for r in json.loads(PROFILES.read_text())['runs'] if r['environment'] == env.name and r['model'] == cfg['model']['id']]
+    p0 = measured[-1]['base_task_metric'] if measured else env.expected_base_reward
     if p0 is not None and 0 < p0 < 1:
         all_same = p0 ** a['n_samples'] + (1 - p0) ** a['n_samples']
         out.append(f'SIGNAL: at base reward ~{p0:.2f}, {100 * all_same:.0f}% of groups of {a["n_samples"]} are all-equal (zero advantage); '
@@ -96,7 +99,7 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
     nondefault = [c for c in cfg['reward']['components'] if c.get('weight', 1.0) and c['fn'] not in {d['fn'] for d in env.default_reward}]
     if nondefault:
         out.append(f'REWARD: shaping terms {[c["fn"] for c in nondefault]} are trained on but NOT the yardstick: judge the run by eval/task_metric '
-                   'and the held-out test, and watch reward_components/* for terms that rise while the task metric does not (reward hacking).')
+                   'and the held-out test, and watch environment/reward_components/* for terms that rise while the task metric does not (reward hacking).')
     seconds = b['attempt_max_seconds'] - b['bootstrap_margin_seconds'] - b['final_eval_reserve_seconds'] - 550
     steps = int(seconds / timing['step_s']) if timing['step_s'] > 0 else 0
     if steps < 20:
@@ -126,7 +129,9 @@ def plan(cfg: dict) -> dict:
                             '  [generic reward path: strl_env]' if env.uses_generic_reward(cfg) else '  [verified built-in reward path]')},
         'derived': {**cfg['derived'], 'rollouts_per_gpu': per_gpu, 'micro_batches_per_gpu': per_gpu // a['micro_train_per_gpu'],
                     'params_b': round(params_b, 3) if params_b else None,
-                    'max_model_len': a['max_prompt_tokens'] + a['max_generate_length'],
+                    # Harbor: the trajectory holds the whole multi-turn chat (prompt + max_turns x max_generate_length)
+                    'max_model_len': env.skyrl_overrides(cfg, 'train').get('trainer.algorithm.max_seq_len',
+                                                                            a['max_prompt_tokens'] + a['max_generate_length']),
                     'skyrl_env_class': env.skyrl_overrides(cfg, 'train').get('environment.env_class') or f'({env.generator_kind} generator)'},
         'estimates': {**timing, 'steps_in_attempt': int(usable / timing['step_s']) if timing['step_s'] else None,
                       'memory': memory_estimate_gb(params_b or 1.0, cfg),

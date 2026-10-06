@@ -56,16 +56,42 @@ def relative(path: str | Path) -> str:
 
 
 def tar_payload(entries: list[tuple[Path, str]]) -> bytes:
-    """entries: (source path, archive name). Deterministic member order; caches and wheels' extraction dirs skipped."""
-    archive = io.BytesIO()
-    with tarfile.open(fileobj=archive, mode='w:gz') as tar:
+    """entries: (source path, archive name). Deterministic: sorted members, zeroed mtimes/owners, gzip mtime 0 (same content =>
+    same digest => uploaded once)."""
+    import gzip
+
+    def clean(info):
+        if any(part in SKIP for part in Path(info.name).parts):
+            return None
+        info.mtime, info.uid, info.gid, info.uname, info.gname = 0, 0, 0, '', ''
+        return info
+
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode='w', format=tarfile.PAX_FORMAT) as tar:
         for source, arcname in entries:
-            tar.add(source, arcname=arcname, filter=lambda x: None if any(part in SKIP for part in Path(x.name).parts) else x)
-    return archive.getvalue()
+            paths = [source] if source.is_file() else [source, *sorted(p for p in source.rglob('*'))]
+            for path in paths:
+                name = arcname if path == source else f'{arcname}/{path.relative_to(source)}'
+                tar.add(path, arcname=name, recursive=False, filter=clean)
+    out = io.BytesIO()
+    with gzip.GzipFile(fileobj=out, mode='wb', mtime=0) as handle:
+        handle.write(raw.getvalue())
+    return out.getvalue()
+
+
+def upload_once(s3, bucket: str, key: str, raw: bytes) -> None:
+    try:
+        s3.head_object(Bucket=bucket, Key=key)
+    except Exception:
+        s3.put_object(Bucket=bucket, Key=key, Body=raw, ServerSideEncryption='AES256')
 
 
 def render_command(*, region: str, bucket: str, key: str, digest: str, model_prefix_: str, model_rel: str, mode: str,
-                   overlay: bool) -> str:
+                   overlay: tuple[str, str] | None) -> str:
+    overlay_fetch = '' if overlay is None else (
+        f"o=s3.get_object(Bucket={bucket!r},Key={overlay[0]!r})['Body'].read()\n"
+        f"assert hashlib.sha256(o).hexdigest()=={overlay[1]!r}\n"
+        "tarfile.open(fileobj=io.BytesIO(o),mode='r:gz').extractall('.',filter='data')\n")
     bootstrap = f'''import boto3,hashlib,io,tarfile,json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -73,7 +99,7 @@ s3=boto3.client('s3',region_name={region!r})
 b=s3.get_object(Bucket={bucket!r},Key={key!r})['Body'].read()
 assert hashlib.sha256(b).hexdigest()=={digest!r}
 tarfile.open(fileobj=io.BytesIO(b),mode='r:gz').extractall('.',filter='data')
-Path({model_rel!r}).mkdir(parents=True,exist_ok=True)
+{overlay_fetch}Path({model_rel!r}).mkdir(parents=True,exist_ok=True)
 def fetch(record):
  p=Path({model_rel!r})/record['name']
  s3.download_file({bucket!r},{model_prefix_ + '/'!r}+record['name'],str(p))
@@ -84,7 +110,7 @@ def fetch(record):
 with ThreadPoolExecutor(4) as pool:list(pool.map(fetch,json.loads(Path('assets/model-manifest.json').read_text())))
 print('Verified pinned payload, model and data staging',flush=True)
 '''
-    pythonpath = (f'{POD_ROOT}/assets/overlay:' if overlay else '') + f'{POD_ROOT}:/workspace/src:/workspace/vendor/SkyRL:/workspace/vendor/SkyRL/skyrl-gym'
+    pythonpath = (f'{POD_ROOT}/assets/overlay:' if overlay is not None else '') + f'{POD_ROOT}:/workspace/src:/workspace/vendor/SkyRL:/workspace/vendor/SkyRL/skyrl-gym'
     return ('set -euo pipefail\nexport PATH=/opt/skyrl-venv/bin:$PATH\n'
             f'mkdir -p {POD_ROOT}\ncd {POD_ROOT}\n'
             f'export PYTHONPATH={pythonpath}\n'
@@ -138,7 +164,14 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
         import boto3
         s3 = boto3.Session(profile_name=st['profile']).client('s3', region_name=st['region'])
     ledger_key = f'{attempt_prefix}/budget-ledger.json'
-    s3.put_object(Bucket=bucket, Key=ledger_key, Body=json.dumps(ledger_data).encode(), ServerSideEncryption='AES256', IfNoneMatch='*')
+    ledger_bytes = json.dumps(ledger_data).encode()
+    try:  # write-once per attempt; re-staging an unsubmitted attempt with the SAME ledger is allowed, a different one is not
+        s3.put_object(Bucket=bucket, Key=ledger_key, Body=ledger_bytes, ServerSideEncryption='AES256', IfNoneMatch='*')
+    except Exception as error:
+        if 'PreconditionFailed' not in str(error) and '412' not in str(error):
+            raise
+        if s3.get_object(Bucket=bucket, Key=ledger_key)['Body'].read() != ledger_bytes:
+            raise RuntimeError(f'attempt {attempt} was already staged against a different budget ledger; use a new attempt name') from None
 
     model_dir = Path(cfg['model']['local_path'])
     if not model_dir.is_dir():
@@ -171,25 +204,28 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
     overlay = (REPO_ROOT / 'assets/overlay')
     needs_overlay = env.needs_modal
     if needs_overlay and not (overlay / 'modal' / '__init__.py').is_file():
-        raise RuntimeError('this environment needs the Modal/Harbor overlay: run python tools/build_overlay.py')
+        raise RuntimeError('this environment needs the Modal/Harbor overlay: run python -m strl overlay')
     entries = [(REPO_ROOT / 'strl', 'strl'), (staging / 'resolved.json', 'resolved.json'), (staging / 'runtime.json', 'runtime.json'),
                (Path(cfg['run']['data_dir']), relative(cfg['run']['data_dir'])), (REPO_ROOT / 'assets/runtime', 'assets/runtime'),
                (staging / 'model-manifest.json', 'assets/model-manifest.json')]
-    if needs_overlay:
-        entries.append((overlay, 'assets/overlay'))
+    from .rewards import custom_payload_paths
+    entries += [(REPO_ROOT / top, top) for top in custom_payload_paths(cfg['reward']['components'])]   # user 'module:function' code
+    overlay_ref = None
+    if needs_overlay:  # content-addressed separately: ~125 MB uploaded once, reused by every attempt
+        overlay_raw = tar_payload([(overlay, 'assets/overlay')])
+        overlay_ref = (f"{base_prefix}/overlays/overlay-{hashlib.sha256(overlay_raw).hexdigest()}.tar.gz", hashlib.sha256(overlay_raw).hexdigest())
+        upload_once(s3, bucket, overlay_ref[0], overlay_raw)
     raw = tar_payload(entries)
     digest = hashlib.sha256(raw).hexdigest()
     key = f'{base_prefix}/payloads/payload-{digest}.tar.gz'
-    try:
-        s3.head_object(Bucket=bucket, Key=key)
-    except Exception:
-        s3.put_object(Bucket=bucket, Key=key, Body=raw, ServerSideEncryption='AES256')
+    upload_once(s3, bucket, key, raw)
     command = render_command(region=st['region'], bucket=bucket, key=key, digest=digest, model_prefix_=mprefix,
-                             model_rel=relative(cfg['model']['local_path']), mode=mode, overlay=needs_overlay)
+                             model_rel=relative(cfg['model']['local_path']), mode=mode, overlay=overlay_ref)
     job = {'job_type': 'k8s-preset', 'job_name': attempt, 'image': cfg['compute']['image'], 'team': team or cfg['compute']['team'],
            'product': cfg['compute']['product'], 'num_instances': 1, 'preset_instance_type': 'm5.2xlarge' if mode == 'dry' else preset(cfg),
            'active_deadline_seconds': remaining, 'priority': cfg['compute']['priority'],
            'allow_borrowing': allow_borrowing or cfg['compute']['allow_borrowing'], 'command': ['bash', '-c', command]}
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
     Path(output).write_text(json.dumps(job, indent=2))
     receipt = {'staged': True, 'name': attempt, 'mode': mode, 'experiment': cfg['name'], 'experiment_sha': cfg['_meta']['sha'],
                'payload_sha256': digest, 'payload_megabytes': round(len(raw) / 1e6, 1), 'remaining_seconds': remaining,

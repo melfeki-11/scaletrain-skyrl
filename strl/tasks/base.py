@@ -109,6 +109,10 @@ class EnvironmentSpec:
         from skyrl.train.config import SkyRLTrainConfig
         return SkyRLTrainConfig
 
+    def build_dataset(self, experiment: dict, cfg: Any, split: str) -> Any:
+        """Return a custom SkyRL dataset for 'train'|'validation', or None for SkyRL's PromptDataset (parquet rows)."""
+        return None
+
     def build_generator(self, experiment: dict, cfg: Any, tokenizer: Any, inference_engine_client: Any) -> Any:
         """Return a SkyRL generator instance, or None for SkyRL's default SkyRLGymGenerator. Runs in the Ray driver task."""
         return None

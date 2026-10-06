@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 AXIS = 'optimizer_step'
+SIGNAL: dict[int, float] = {}   # optimizer step -> learning-signal fraction (written by the trajectory logger, read by the canary)
 AXIS_PATTERNS = (
     'train/*', 'eval/*', 'timing/*', 'budget/*', 'checkpoint/*', 'policy/*', 'reward/*', 'trainer/*', 'generate/*', 'gpu/*',
     'vllm/*', 'environment/*', 'reward_components/*', 'critic/*', 'qualitative*', 'trajectories/*', 'test/*', 'loss/*', 'ray/*',
@@ -100,6 +101,13 @@ def make_tracking_class():
         def log(self, data: dict[str, Any], step: int, commit: bool = False):
             payload = dict(data)
             payload.setdefault(AXIS, int(step))
+            mirror = os.environ.get('STRL_METRICS_JSONL')
+            if mirror:  # complete local record of every scalar sent to W&B (S3 is the source of truth; compare/verify read it)
+                scalars = {k: (float(v) if not isinstance(v, (bool, int)) else v) for k, v in payload.items() if isinstance(v, (bool, Real))}
+                if len(scalars) > 1:
+                    Path(mirror).parent.mkdir(parents=True, exist_ok=True)
+                    with open(mirror, 'a', encoding='utf-8') as handle:
+                        handle.write(json.dumps(scalars, sort_keys=True) + '\n')
             if self.backend == 'wandb':
                 self.logger.log(data=payload, commit=commit)
             else:
@@ -153,6 +161,7 @@ def make_trajectory_logger_class():
             step = 0 if global_step is None else int(global_step)
             if is_training:
                 metrics = rollout_diagnostics(decoded, scalar_rewards, list(stop_reasons), group_size)
+                SIGNAL[step] = metrics['train/learning_signal_fraction']
                 if self.env is not None:
                     metrics.update(self.env.train_diagnostics(decoded, scalar_rewards, list(stop_reasons), group_size, env_metrics))
                 tracker.log(metrics, step=step, commit=False)
@@ -202,6 +211,7 @@ def make_callback_class():
             self.last_checkpoint_at = time.monotonic()
             self.started_at = self.last_checkpoint_at
             self.baseline_accuracy = None
+            self.max_grad = 0.0
             self.env = _env()
 
         def on_step_end(self, trainer, callback_input, control) -> None:
@@ -211,17 +221,21 @@ def make_callback_class():
                 if isinstance(value, Real) and not math.isfinite(float(value)):
                     alert('Non-finite metric', f'{key}={value} at step {step} ({os.environ.get("GRPO_RUN_NAME")})')
                     raise RuntimeError(f'Nonfinite optimizer metric: {key}')
+            gradients = [float(v) for k, v in metrics.items() if 'grad_norm' in k]
+            self.max_grad = max([self.max_grad, *gradients]) if gradients else self.max_grad
             if step == 2:
-                # Canary: two real finite updates (a nonzero gradient unless the env legitimately yields all-equal rewards,
-                # e.g. a tiny model on agentic tasks: GRPO_CANARY_REQUIRE_GRADIENT=0).
-                gradients = [float(v) for k, v in metrics.items() if 'grad_norm' in k]
-                if os.environ.get('GRPO_CANARY_REQUIRE_GRADIENT', '1') == '1' and (not gradients or max(gradients) <= 0):
-                    alert('Canary failed', 'no nonzero policy gradient after 2 updates')
-                    raise RuntimeError('Canary requires a real nonzero finite policy gradient')
+                # Canary: two real finite updates. A zero gradient is a bug only if some GRPO group had reward variance;
+                # all-equal groups (every sample passed or every sample failed) legitimately give exactly zero advantage.
+                signal = max([SIGNAL.get(s, 0.0) for s in (1, 2)] or [0.0])
+                if self.max_grad <= 0 and signal > 0 and os.environ.get('GRPO_CANARY_REQUIRE_GRADIENT', '1') == '1':
+                    alert('Canary failed', f'learning signal {signal:.2f} but zero policy gradient after 2 updates')
+                    raise RuntimeError('Canary: groups had reward variance but the policy gradient is zero (update path broken)')
+                if self.max_grad <= 0:
+                    alert('Canary: no learning signal', 'all GRPO groups had equal rewards in steps 1-2 (no gradient to test)', 'WARN')
                 target = Path(trainer.cfg.trainer.export_path).parent / 'canary.json'
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(json.dumps({'optimizer_steps': 2, 'finite_gradients': True,
-                                              'max_grad_norm': max(gradients) if gradients else None}, indent=2))
+                target.write_text(json.dumps({'optimizer_steps': 2, 'finite_gradients': True, 'max_grad_norm': self.max_grad,
+                                              'learning_signal_steps_1_2': signal, 'gradient_path_exercised': self.max_grad > 0}, indent=2))
             if time.monotonic() - self.last_checkpoint_at >= self.checkpoint_seconds:
                 control.should_save = True
             deadline = float(os.environ['GRPO_TRAIN_DEADLINE'])
@@ -233,8 +247,9 @@ def make_callback_class():
         def on_log(self, trainer, callback_input, control) -> None:
             logs = callback_input.logs or {}
             logs['optimizer_step'] = int(callback_input.global_step)
-            logs['budget/consumed_node_hours'] = float(os.environ.get('GRPO_NODES', '1')) * (
-                float(os.environ.get('GRPO_PREVIOUS_SECONDS', '0')) + time.time() - float(os.environ['GRPO_WORKER_BEGAN_EPOCH'])) / 3600.0
+            # this attempt only (the program ledger lives in S3): nodes x GPU fraction of a node x worker wall-clock
+            logs['budget/consumed_node_hours'] = float(os.environ.get('GRPO_NODES', '1')) * float(os.environ.get('STRL_GPU_FRACTION', '1')) * (
+                time.time() - float(os.environ['GRPO_WORKER_BEGAN_EPOCH'])) / 3600.0
             logs['budget/final_eval_reserve_seconds'] = float(os.environ.get('GRPO_FINAL_EVAL_RESERVE_SECONDS', '0'))
             logs['checkpoint/age_seconds'] = time.monotonic() - self.last_checkpoint_at
             rewards = logs.get('reward/avg_raw_reward')
@@ -259,10 +274,11 @@ def make_callback_class():
                 print(f'critic drain skipped: {type(error).__name__}: {error}', flush=True)
             metrics_path = Path(trainer.cfg.trainer.export_path).parent / 'metrics.jsonl'
             metrics_path.parent.mkdir(parents=True, exist_ok=True)
-            scalar_logs = {key: value for key, value in logs.items() if isinstance(value, (bool, Real))}
-            with metrics_path.open('a', encoding='utf-8') as handle:
-                handle.write(json.dumps({key: float(value) if isinstance(value, Real) and not isinstance(value, (bool, int)) else value
-                                         for key, value in scalar_logs.items()}, sort_keys=True) + '\n')
+            if not os.environ.get('STRL_METRICS_JSONL'):   # otherwise AxisTracking.log mirrors every row (incl. these)
+                scalar_logs = {key: value for key, value in logs.items() if isinstance(value, (bool, Real))}
+                with metrics_path.open('a', encoding='utf-8') as handle:
+                    handle.write(json.dumps({key: float(value) if isinstance(value, Real) and not isinstance(value, (bool, int)) else value
+                                             for key, value in scalar_logs.items()}, sort_keys=True) + '\n')
             progress_path = metrics_path.parent / 'progress.json'
             progress_path.write_text(json.dumps({
                 'status': 'running', 'optimizer_step': int(callback_input.global_step),

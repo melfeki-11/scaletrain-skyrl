@@ -52,3 +52,22 @@ def smoke(cfg: dict, run_id: str) -> dict:
                     'url': remote.url, 'sdk': wandb.__version__}
         time.sleep(3)
     raise RuntimeError('W&B dry-run readback did not confirm the finished run')
+
+
+def local_key(env_file: str | None = None) -> None:
+    """Laptop W&B reads (monitor/compare/verify): WANDB_API_KEY from $WANDB_API_KEY, else a mode-600 dotenv
+    ($STRL_WANDB_ENV_FILE, default ScaleTrain/.env.wandb). Never printed."""
+    from pathlib import Path
+    if os.environ.get('WANDB_API_KEY'):
+        return
+    path = Path(env_file or os.environ.get('STRL_WANDB_ENV_FILE') or Path(__file__).resolve().parents[3] / '.env.wandb')
+    if not path.is_file():
+        raise RuntimeError(f'no W&B key: export WANDB_API_KEY or create mode-600 {path}')
+    if path.stat().st_mode & 0o077:
+        raise RuntimeError(f'{path} must be mode 600')
+    for line in path.read_text().splitlines():
+        name, sep, value = line.strip().removeprefix('export ').partition('=')
+        if sep and name.strip() == 'WANDB_API_KEY':
+            os.environ['WANDB_API_KEY'] = value.strip().strip('"\'')
+            return
+    raise RuntimeError(f'{path} has no WANDB_API_KEY')

@@ -10,3 +10,11 @@ before anything else: it validates, derives the infrastructure, estimates time/c
 | `mbpp-qwen35-partial.yaml` | reward | reward A/B, arm B: pass_all_tests + 0.5 partial_tests |
 | `mbpp-qwen3-1p7b.yaml` | model | model switch to Qwen3-1.7B (dense Qwen3 profile) |
 | `harbor-qwen35.yaml` | environment | same tasks as multi-turn Harbor/Terminus-2 tasks in Modal sandboxes |
+| `mbpp-qwen35-custom-reward.yaml` | reward (your own code) | arm A + `user_rewards.examples:docstring_bonus`, the `module:function` pattern |
+
+Merge rules for `extends:`:
+- Mappings merge key by key.
+- **Lists and scalars replace** the parent's value. `reward.components` and `tracking.tags` are always the complete list.
+- Everything you do not set is inherited, **including `tracking.group`**. Children of `mbpp-qwen35-binary.yaml` land in the
+  `mbpp-reward-ab` W&B group. Set your own `tracking.group` unless you want your run plotted alongside that A/B.
+- `strl plan <exp> --against <other>` prints the exact resolved diff. Check it before staging.

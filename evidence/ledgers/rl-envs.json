@@ -2,5 +2,51 @@
   "program": "rl-envs framework verification (user-authorized 2026-10-06: <= 2 node-hours on 1 x 8 H100)",
   "total_seconds": 7200,
   "nodes": 1,
-  "attempts": []
+  "attempts": [
+    {
+      "job_id": "job_db2kle4f8c4g08flbdgg",
+      "attempt": "can-hb-a",
+      "status": "FAILED",
+      "allocated_at": "2026-10-06T19:23:36Z",
+      "terminal_at": "2026-10-06T19:34:06Z",
+      "gpu_fraction": 0.125,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db2kkjkf8c4g07jrocqg",
+      "attempt": "can-cx-q3-a",
+      "status": "FAILED",
+      "allocated_at": "2026-10-06T19:21:50Z",
+      "terminal_at": "2026-10-06T19:34:06Z",
+      "gpu_fraction": 0.125,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db2kkiss49qg080seceg",
+      "attempt": "can-gsm8k-a",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-06T19:21:47Z",
+      "terminal_at": "2026-10-06T19:39:02Z",
+      "gpu_fraction": 0.125,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db2kkjcf8c4g07jrocq0",
+      "attempt": "can-cx-bin-a",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-06T19:21:49Z",
+      "terminal_at": "2026-10-06T19:39:03Z",
+      "gpu_fraction": 0.125,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db2kqlcs49qg080secfg",
+      "attempt": "can-cx-q3-b",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-06T19:34:45Z",
+      "terminal_at": "2026-10-06T19:56:02Z",
+      "gpu_fraction": 0.125,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    }
+  ]
 }

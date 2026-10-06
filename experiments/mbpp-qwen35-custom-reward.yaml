@@ -1,0 +1,10 @@
+# Reward axis with your own code: arm A of the reward A/B plus a small bonus from a user-defined component.
+# The component lives in user_rewards/examples.py; `strl stage` ships user_rewards/ in the payload.
+name: mbpp-qwen35-custom-reward
+description: coding_exec, Qwen3.5-0.8B, pass@1 + user-defined docstring bonus
+extends: experiments/mbpp-qwen35-binary.yaml
+reward:
+  components:
+    - {fn: pass_all_tests, weight: 1.0}
+    - {fn: 'user_rewards.examples:docstring_bonus', weight: 1.0, bonus: 0.1}
+tracking: {tags: ['reward:custom-docstring']}

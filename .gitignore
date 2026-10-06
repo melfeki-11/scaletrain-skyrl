@@ -25,3 +25,6 @@ assets/coding/
 !evidence/ledgers/*.json
 !evidence/gates/
 !evidence/gates/*.json
+!evidence/results/
+!evidence/results/*.json
+!evidence/results/*.md

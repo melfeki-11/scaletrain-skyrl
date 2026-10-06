@@ -5,20 +5,26 @@
         - {fn: pass_all_tests, weight: 1.0}
         - {fn: partial_tests,  weight: 0.5}
         - {fn: length_penalty, weight: 1.0, max_tokens: 400}
-        - {fn: my_package.my_module:my_reward, weight: 0.2, some_param: 3}   # your own code
+        - {fn: user_rewards.my_module:my_reward, weight: 0.2, some_param: 3}   # your own code
 
 A component is ``fn(result: dict, ctx: RewardContext, **params) -> float`` where ``result`` is the environment's scorer
 output (coding: tests passed/total, failure class, nonce check...; gsm8k: parsed answer, correct). Every component value is
-logged as ``reward_components/<fn>`` so you can see which term moves. The *task metric* (accuracy / pass@1) is computed
+logged as ``environment/reward_components/<fn>`` (SkyRL prefixes env metrics) so you can see which term moves. The *task metric* (accuracy / pass@1) is computed
 separately by the environment spec and is what held-out evaluation reports, so different reward designs stay comparable
 and reward hacking (reward up, metric flat) is visible.
+
+Custom ``module:function`` code must live inside this repo (convention: ``user_rewards/``). ``strl stage`` ships the top-level
+package of every such module in the payload; ``strl plan`` rejects modules outside the repo, which could not run in the pod.
 """
 from __future__ import annotations
 
 import importlib
 import inspect
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @dataclass
@@ -76,7 +82,36 @@ def validate_components(env: Any, components: list[dict]) -> list[str]:
         unknown = params - allowed
         if unknown and not accepts_var:
             problems.append(f'reward component {name!r} does not accept parameter(s) {sorted(unknown)} (accepts {sorted(allowed)})')
+        if ':' in name:
+            try:
+                custom_payload_paths([entry])
+            except ValueError as error:
+                problems.append(str(error))
     return problems
+
+
+def custom_payload_paths(components: list[dict]) -> list[str]:
+    """Repo-relative top-level packages (or single-file modules) that 'module:function' components need in the pod payload.
+    Raises ValueError for a module that lives outside the repo (e.g. installed in the local venv) and so cannot ship."""
+    out: list[str] = []
+    for entry in components:
+        name = entry['fn']
+        if ':' not in name:
+            continue
+        module_name = name.partition(':')[0]
+        source = getattr(importlib.import_module(module_name), '__file__', None)
+        path = Path(source).resolve() if source else None
+        try:
+            rel = path.relative_to(REPO_ROOT) if path else None
+        except ValueError:
+            rel = None
+        if rel is None or rel.parts[0] in {'.venv', 'assets', 'evidence', 'tests'}:
+            raise ValueError(f'reward component {name!r}: module file {path} is outside the shippable repo tree; put it under '
+                             'user_rewards/ (or another top-level package of this repo) so `strl stage` packages it')
+        top = rel.parts[0]
+        if top != 'strl' and top not in out:
+            out.append(top)
+    return out
 
 
 class Reward:

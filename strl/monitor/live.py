@@ -42,6 +42,9 @@ def job_state(job_id: str | None) -> str | None:
 def wandb_rows(cfg: dict, run_id: str, last: int = 400) -> list[dict]:
     try:
         import wandb
+        from ..services.wandb import local_key
+        local_key()
+        os.environ['WANDB_BASE_URL'] = cfg['tracking']['base_url']
         api = wandb.Api(overrides={'base_url': cfg['tracking']['base_url']}, timeout=30)
         run = api.run(f"{cfg['tracking']['entity']}/{cfg['tracking']['project']}/{run_id}")
         return [dict(r) for r in run.scan_history(keys=None, page_size=1000)][-last:]
@@ -75,7 +78,8 @@ def snapshot(cfg: dict, attempt: str, job_id: str | None) -> dict:
     st = cfg['storage']
     session = boto3.Session(profile_name=st['profile'])
     base = f"s3://{st['bucket']}/{st['prefix']}/attempts/{attempt}/artifacts"
-    runtime = s3_json(session, f'{base}/runtime.json') or {}
+    local = Path(ROOT / 'evidence' / attempt / 'stage.json')
+    runtime = json.loads(local.read_text()) if local.is_file() else {}
     progress = s3_json(session, f'{base}/{attempt}/progress.json')
     heartbeat = s3_json(session, f'{base}/heartbeat.json')
     completion = s3_json(session, f'{base}/completion.json')

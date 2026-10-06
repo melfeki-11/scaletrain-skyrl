@@ -57,7 +57,8 @@ def cmd_plan(a):
           f"({d['rollouts_per_gpu']}/GPU, {d['micro_batches_per_gpu']} micro-batches), max_model_len {d['max_model_len']}, env_class {d['skyrl_env_class']}")
     print(f"  estimates    step ~{e['step_s']}s (generate {e['generate_s']} + train {e['train_s']} + other {e['other_s']}), ~{e['steps_in_attempt']} steps/attempt, "
           f"{e['node_hours']:.2f} node-h; memory train {e['memory']['training_phase_gb']} GB / rollout {e['memory']['rollout_phase_gb']} GB "
-          f"(fits={e['memory']['fits']}); from profile {e['profile']}")
+          f"(fits={e['memory']['fits']}); from profile {e['profile']}"
+          + ("" if e.get('calibrated') else " (UNCALIBRATED: different environment/model; the canary measures the real step time)"))
     print(f"  monitoring   {report['monitoring']['wandb']}  critic={report['monitoring']['critic']}")
     for w in report['warnings']:
         print(f'  ! {w}')
@@ -128,7 +129,7 @@ def cmd_capacity(a):
 
 def cmd_stage(a):
     from .stage import stage
-    receipt = stage(a.experiment, attempt=a.attempt, mode=a.mode, team=a.team, allow_borrowing=a.allow_borrowing,
+    receipt = stage(a.experiment, attempt=a.attempt, mode=a.mode, team=a.team, allow_borrowing=a.allow_borrowing, ledger=a.ledger,
                     output=a.output or f'evidence/{a.attempt}/job.json')
     Path(f'evidence/{a.attempt}').mkdir(parents=True, exist_ok=True)
     Path(f'evidence/{a.attempt}/stage.json').write_text(json.dumps(receipt, indent=2))
@@ -167,7 +168,7 @@ def cmd_monitor(a):
 
 def cmd_ledger(a):
     cfg = _load(a.experiment)
-    ledger_path = ROOT / cfg['budget']['ledger']
+    ledger_path = Path(a.ledger) if a.ledger else ROOT / cfg['budget']['ledger']
     ledger = json.loads(ledger_path.read_text())
     if any(x['job_id'] == a.job_id for x in ledger['attempts']):
         raise SystemExit(f'{a.job_id} already recorded')
@@ -237,13 +238,14 @@ def main(argv=None):
     s.add_argument('--output', default='evidence/capacity.json')
     s = sub.add_parser('stage'); s.add_argument('experiment'); s.add_argument('--attempt', required=True)
     s.add_argument('--mode', choices=['dry', 'canary', 'train'], required=True); s.add_argument('--team'); s.add_argument('--allow-borrowing', action='store_true')
-    s.add_argument('--output')
+    s.add_argument('--output'); s.add_argument('--ledger', help='program budget ledger (default: budget.ledger of the experiment)')
     s = sub.add_parser('submit'); s.add_argument('job'); s.add_argument('--user-id', default=USER); s.add_argument('--receipt')
     s = sub.add_parser('status'); s.add_argument('job_id', nargs='?'); s.add_argument('--list', action='store_true'); s.add_argument('--user-id', default=USER)
     s = sub.add_parser('monitor'); s.add_argument('experiment'); s.add_argument('--attempt', required=True); s.add_argument('--job-id')
     s.add_argument('--interval', type=float, default=60); s.add_argument('--once', action='store_true')
     s = sub.add_parser('ledger'); s.add_argument('experiment'); s.add_argument('--attempt', required=True); s.add_argument('--job-id', required=True)
     s.add_argument('--terminal-at', help='ISO time of the terminal observation (default: now)')
+    s.add_argument('--ledger', help='program budget ledger (default: budget.ledger of the experiment)')
     s = sub.add_parser('verify'); s.add_argument('experiment'); s.add_argument('--attempt', required=True)
     s = sub.add_parser('compare'); s.add_argument('runs', nargs='+', help='experiment.yaml:attempt')
     s = sub.add_parser('eval-llm'); s.add_argument('experiment'); s.add_argument('--model', default='openai/gpt-6-luna')

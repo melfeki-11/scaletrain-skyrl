@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from strl.rewards import Reward, RewardContext, validate_components  # noqa: E402
+from strl.rewards import Reward, RewardContext, custom_payload_paths, validate_components  # noqa: E402
 from strl.tasks import get_environment  # noqa: E402
 from strl.tasks.coding import data as coding_data  # noqa: E402
 from strl.tasks.coding.extract import extract_code  # noqa: E402
@@ -94,11 +94,21 @@ class Rewards(unittest.TestCase):
     def test_validation_catches_typos(self):
         self.assertTrue(validate_components(self.env, [{'fn': 'pass_all_test'}]))           # unknown name
         self.assertTrue(validate_components(self.env, [{'fn': 'length_penalty', 'max_token': 5}]))  # unknown parameter
-        self.assertFalse(validate_components(self.env, [{'fn': 'length_penalty', 'max_tokens': 5}, {'fn': 'tests.test_coding:custom_reward'}]))
+        self.assertFalse(validate_components(self.env, [{'fn': 'length_penalty', 'max_tokens': 5},
+                                                        {'fn': 'user_rewards.examples:docstring_bonus', 'bonus': 0.2}]))
+        self.assertTrue(validate_components(self.env, [{'fn': 'user_rewards.examples:docstring_bonu'}]))  # misspelled function
 
     def test_user_module_component(self):
-        reward = Reward(self.env, [{'fn': 'tests.test_coding:custom_reward', 'weight': 2.0, 'bonus': 0.25}])
-        self.assertEqual(reward(self.ok, RewardContext())[0], 2.5)
+        reward = Reward(self.env, [{'fn': 'pass_all_tests'}, {'fn': 'user_rewards.examples:docstring_bonus', 'weight': 2.0, 'bonus': 0.25}])
+        documented = dict(self.ok, parsed='def add(a, b):\n    \"\"\"Sum.\"\"\"\n    return a + b\n')
+        self.assertEqual(reward(documented, RewardContext())[0], 1.5)
+        self.assertEqual(reward(dict(self.ok, parsed='def add(a, b):\n    return a + b\n'), RewardContext())[0], 1.0)
+
+    def test_user_module_must_ship_in_the_payload(self):
+        self.assertEqual(custom_payload_paths([{'fn': 'pass_all_tests'}, {'fn': 'user_rewards.examples:docstring_bonus'}]), ['user_rewards'])
+        self.assertEqual(custom_payload_paths([{'fn': 'strl.rewards:format_ok'}]), [])         # strl/ always ships
+        for outside in ('json:loads', 'tests.test_coding:custom_reward'):                     # stdlib / venv / unshipped dirs
+            self.assertTrue(validate_components(self.env, [{'fn': outside}]), outside)
 
 
 def custom_reward(result, ctx, bonus: float = 0.0):
