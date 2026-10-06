@@ -18,15 +18,18 @@ parser.add_argument('--ledger', default='evidence/budget-ledger.json')
 parser.add_argument('--team', help='override team (capacity routing result)')
 parser.add_argument('--allow-borrowing', action='store_true')
 parser.add_argument('--output', default='job.json')
+parser.add_argument('--dry-run', action='store_true', help='CPU rehearsal (m5.2xlarge): bootstrap, budget, services, Ray; no training')
 args = parser.parse_args()
 cfg = load()
 root = Path(__file__).resolve().parent
 ledger = json.loads(Path(args.ledger).read_text())
 remaining = remaining_seconds(ledger['attempts'], ledger['total_seconds'])
 reserve = cfg['budget']['final_eval_reserve_seconds']
-if remaining <= reserve + 900:
+if not args.dry_run and remaining <= reserve + 900:
     raise RuntimeError(f'Insufficient remaining budget ({remaining}s) for bootstrap, training and evaluation')
 worker_seconds = remaining - cfg['budget']['bootstrap_margin_seconds']
+if args.dry_run:
+    remaining, worker_seconds = 900, 800
 
 s3cfg = cfg['s3']
 bucket, base_prefix = s3cfg['bucket'], s3cfg['prefix']
@@ -87,11 +90,11 @@ command = ('set -euo pipefail\nexport PATH=/opt/skyrl-venv/bin:$PATH\nmkdir -p /
            'export PYTHONPATH=/workspace/qwen35-grpo:/workspace/src:/workspace/vendor/SkyRL:/workspace/vendor/SkyRL/skyrl-gym\n'
            'export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 SKYRL_PYTHONPATH_EXPORT=1\n'
            'export SKYRL_WORKER_NCCL_TIMEOUT_IN_S=300 SKYRL_WAIT_UNTIL_INFERENCE_SERVER_HEALTHY_TIMEOUT_S=600\n'
-           'export VLLM_DISABLE_PYNCCL=1 VLLM_ALLREDUCE_USE_SYMM_MEM=0\n'
+           'export VLLM_DISABLE_PYNCCL=1 VLLM_ALLREDUCE_USE_SYMM_MEM=0\n' + ('export GRPO_DRY_RUN=1\n' if args.dry_run else '') +
            '/opt/skyrl-venv/bin/python -c ' + shlex.quote(bootstrap) + '\nexec /opt/skyrl-venv/bin/python -m q35.worker\n')
 job = {'job_type': 'k8s-preset', 'job_name': args.attempt, 'image': cfg['runtime']['image'],
        'team': args.team or cfg['scale_train']['team'], 'product': cfg['scale_train']['product'], 'num_instances': 1,
-       'preset_instance_type': cfg['scale_train']['instance_type'], 'active_deadline_seconds': remaining,
+       'preset_instance_type': 'm5.2xlarge' if args.dry_run else cfg['scale_train']['instance_type'], 'active_deadline_seconds': remaining,
        'priority': cfg['scale_train']['priority'], 'allow_borrowing': args.allow_borrowing, 'command': ['bash', '-c', command]}
 Path(args.output).write_text(json.dumps(job, indent=2))
 print(json.dumps({'staged': True, 'name': args.attempt, 'payload_sha256': digest, 'remaining_seconds': remaining,

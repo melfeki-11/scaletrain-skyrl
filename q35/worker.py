@@ -153,6 +153,11 @@ def main():
         else: raise RuntimeError('Ray did not expose the configured GPU count')
         ray.shutdown()
         phases['ray_ready'] = time.time()
+        if os.environ.get('GRPO_DRY_RUN'):  # CPU rehearsal of bootstrap/budget/services/ray; never starts training
+            dry = dict(identity, status='dry_run_passed', phases=phases, train_deadline=float(os.environ['GRPO_TRAIN_DEADLINE']),
+                       skyrl_commit=cfg['runtime']['skyrl_commit'])
+            put_json(prefix + '/dry-run.json', dry); print(json.dumps(dry), flush=True)
+            return
         root = Path('artifacts') / runtime['run_name']
         child([sys.executable, '-m', 'q35.train'], 'artifacts/training.log', begin['deadline'] - 600,
               root / 'canary.json', cfg['budget']['canary_max_seconds'])
