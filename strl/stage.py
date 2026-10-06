@@ -147,7 +147,8 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
         worker_seconds = remaining - cfg['budget']['bootstrap_margin_seconds']
     elif mode == 'canary':
         affordable = int(remaining / gpu_fraction) if gpu_fraction else remaining
-        remaining = min(affordable, 1800)
+        # the canary must write canary.json within budget.canary_max_seconds of the child start; the job adds pod start + Ray
+        remaining = min(affordable, min(3600, int(cfg['budget']['canary_max_seconds']) + 600))
         if remaining < 900:
             raise RuntimeError(f'Insufficient remaining budget for a canary ({affordable}s at {gpus} GPU(s))')
         worker_seconds = remaining - cfg['budget']['bootstrap_margin_seconds']

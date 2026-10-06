@@ -172,6 +172,10 @@ class HarborContext(unittest.TestCase):
         self.assertEqual(sorted(rendered), ['generator.inference_engine.engine_init_kwargs.max_model_len=8192',
                                             'trainer.algorithm.max_seq_len=8192'])
         self.assertEqual(trial_template(cfg)['agent']['kwargs']['model_info']['max_input_tokens'], 8192)
+        self.assertFalse(get_environment('coding_harbor').validate_experiment(cfg))
+        cfg['budget']['stall_seconds'] = 600                      # the can-hb-e failure: a healthy agentic step outlasts it
+        self.assertTrue(any('stall_seconds' in p for p in get_environment('coding_harbor').validate_experiment(cfg)))
+        cfg['budget']['stall_seconds'] = 1800
         cfg['environment']['harbor']['max_seq_len'] = 1024        # the can-hb-b failure: Terminus-2 turn 1 does not fit
         problems = get_environment('coding_harbor').validate_experiment(cfg)
         self.assertTrue(any('ContextLengthExceededError' in p for p in problems), problems)

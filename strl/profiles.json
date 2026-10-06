@@ -91,6 +91,23 @@
    "final_eval_seconds": 117,
    "base_task_metric": 0.14,
    "source": "job_db2ksicf8c4g08flbdh0 ab-partial-a1 (reward partial; base = sampled train pass rate at step 1, held-out greedy base 0.234)"
+  },
+  {
+   "name": "coding_harbor-qwen35-0.8b-1gpu-canary",
+   "environment": "coding_harbor",
+   "model": "Qwen/Qwen3.5-0.8B",
+   "params_b": 0.8,
+   "gpus": 1,
+   "rollouts_per_step": 32,
+   "max_generate_length": 512,
+   "mean_response_tokens": 237,
+   "median_step_seconds": 477.4,
+   "median_generate_seconds": 229.0,
+   "median_policy_train_seconds": 137.4,
+   "tokens_per_second_per_gpu": 251,
+   "startup_seconds": 600,
+   "base_task_metric": 0.125,
+   "source": "job_db2lrukf8c4g07jrocug can-hb-e step 1 (8 prompts x 4 samples, 8 turns median, 243 step-wise sequences padded to 8019 tokens; trials 90-230 s each; tokens/s counts every turn)"
   }
  ]
 }

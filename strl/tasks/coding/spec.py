@@ -244,6 +244,11 @@ class CodingHarborSpec(CodingExecSpec):
         if names != ['pass_all_tests']:
             problems.append('coding_harbor rewards come from the sandbox verifier (reward.txt); only [pass_all_tests] is supported here. '
                             'Explore reward designs with coding_exec, which applies arbitrary components.')
+        hb = cfg['environment'].get('harbor') or {}
+        floor = 2 * int(hb.get('agent_timeout_sec', 600)) + 300
+        if int(cfg['budget'].get('stall_seconds', 600)) < floor:
+            problems.append(f"budget.stall_seconds={cfg['budget'].get('stall_seconds', 600)} is below {floor}: one Harbor step can "
+                            'legitimately run past it (slowest trajectory + training), and the watchdog would kill a healthy run')
         from .harbor import FIRST_TURN_MAX_TOKENS, max_seq_len
         need = FIRST_TURN_MAX_TOKENS + 2 * cfg['algorithm']['max_generate_length']
         if max_seq_len(cfg) < need:

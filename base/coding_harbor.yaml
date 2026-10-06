@@ -14,6 +14,13 @@ environment:
     max_concurrency: 64          # concurrent Modal sandboxes (HarborGenerator rate limiter)
     trajectories_per_second: 4
 
+budget:
+  # a Harbor step waits for its slowest trajectory (up to agent_timeout_sec + verifier), then trains on ~8 step-wise
+  # sequences per trajectory; the canary also evaluates after every step. Measured (can-hb-e, 1 GPU): eval 16 tasks ~230 s,
+  # step 1 477 s (generate 229, logprobs 71, policy 137). 600 s defaults killed a healthy canary.
+  stall_seconds: 1800
+  canary_max_seconds: 2400
+
 reward:
   components:
     - {fn: pass_all_tests, weight: 1.0}   # from the sandbox verifier's reward.txt (other components: use coding_exec)

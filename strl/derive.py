@@ -43,9 +43,9 @@ def estimate_step_seconds(cfg: dict, params_b: float) -> dict[str, float]:
     other = (p['median_step_seconds'] - p['median_generate_seconds'] - p['median_policy_train_seconds']) * tokens_ratio * size * (p['gpus'] / gpus)
     if cfg['environment']['name'] == 'coding_exec':
         other += 2.0                                                              # Modal scoring tail not hidden by generation
-    if cfg['environment']['name'] == 'coding_harbor':
+    if cfg['environment']['name'] == 'coding_harbor' and p['environment'] != 'coding_harbor':
         hb = cfg['environment'].get('harbor') or {}
-        gen = max(gen * int(hb.get('max_turns', 8)) * 0.5, 60.0)                  # multi-turn agent + sandbox startup
+        gen = max(gen * int(hb.get('max_turns', 8)) * 0.5, 60.0)                  # multi-turn agent + sandbox startup (uncalibrated)
     calibrated = p['environment'] == cfg['environment']['name'] and p['model'] == cfg['model']['id']
     return {'generate_s': round(gen, 1), 'train_s': round(train, 1), 'other_s': round(other, 1),
             'step_s': round(gen + train + other, 1), 'profile': p['name'],

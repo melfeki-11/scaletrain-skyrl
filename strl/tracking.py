@@ -282,6 +282,14 @@ def make_callback_class():
                 target.write_text(json.dumps({'optimizer_steps': 2, 'finite_gradients': True, 'max_grad_norm': self.max_grad,
                                               'learning_signal_steps_1_2': signal, 'gradient_path_exercised': self.max_grad > 0,
                                               'env_failure_fraction_steps_1_2': worst}, indent=2))
+            try:   # watchdog heartbeat: on_log fires only after this step's eval, which can take minutes for agentic envs
+                progress_path = Path(trainer.cfg.trainer.export_path).parent / 'progress.json'
+                previous = json.loads(progress_path.read_text()) if progress_path.is_file() else {}
+                progress_path.parent.mkdir(parents=True, exist_ok=True)
+                progress_path.write_text(json.dumps(dict(previous, status='running', optimizer_step=step, updated_at=time.time(),
+                                                         phase='step_end'), sort_keys=True, indent=2) + '\n', encoding='utf-8')
+            except Exception as error:
+                print(f'progress write skipped: {type(error).__name__}: {error}', flush=True)
             if time.monotonic() - self.last_checkpoint_at >= self.checkpoint_seconds:
                 control.should_save = True
             deadline = float(os.environ['GRPO_TRAIN_DEADLINE'])
