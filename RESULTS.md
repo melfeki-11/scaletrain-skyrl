@@ -112,16 +112,18 @@ Both runs finished in W&B with:
 | worker wall-clock | 3,043 s | 3,016 s |
 
 Each arm used half a node (4 of 8 GPUs) for about 51 minutes.
-- **Budget:** the whole verification program used 4,604 of the 7,200 authorized node-seconds. That covers the 7 canaries, both
-  A/B arms and every retry, charged conservatively from job creation to terminal observation. CPU dry runs are free. Details in
-  `evidence/ledgers/rl-envs.json`.
+- **Budget:** the whole verification program used 5,151 of the 7,200 authorized node-seconds (1.43 node-hours). That covers
+  10 canaries (6 of them Harbor), both A/B arms and every retry, charged conservatively from job creation to terminal
+  observation. CPU dry runs are free. Details in `evidence/ledgers/rl-envs.json`.
 - **Planning accuracy:** `strl plan` now calibrates coding estimates from these runs. It predicts 29.7 s/step against 27.7 s measured.
 
 ### Limits
 
 - **Single seed per arm.** The −2.71-point difference between reward designs is within noise.
 - **One model size:** 0.8B. The model switch to Qwen3-1.7B is canary-verified only.
-- **Harbor (agentic) tier:** canary-level evidence only; see the skill's `references/validation.md`.
+- **Harbor (agentic) tier:** canary-level evidence only. `can-hb-f` completed 2 real updates through Terminus-2 in Modal
+  sandboxes, with 0 environment failures and a 6% base pass rate on 16 tasks. At about 480 s per step for 32 trajectories per
+  GPU, a meaningful Harbor training run needs more than this program's budget. See the skill's `references/validation.md`.
 - **Not GPU-verified:** multi-node and fully-async training.
 
 ## GSM8K · Qwen3.5-0.8B · 8×H100 (attempt q35v2-a1, original code `2916fb9`)

@@ -101,6 +101,15 @@
       "terminal_at": "2026-10-06T21:10:58Z",
       "gpu_fraction": 0.125,
       "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db2m7s4f8c4g07jrod00",
+      "attempt": "can-hb-f",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-06T21:11:12Z",
+      "terminal_at": "2026-10-06T21:45:28Z",
+      "gpu_fraction": 0.125,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
     }
   ]
 }

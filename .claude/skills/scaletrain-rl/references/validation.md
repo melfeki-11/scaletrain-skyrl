@@ -12,7 +12,7 @@ What has actually been run, with job IDs, so you know which paths are proven and
 | gsm8k · Qwen3.5-0.8B · 8 GPUs, full train + final eval | **GPU-verified** (2026-10-06, old code `2916fb9`; the new code is proven equivalent by golden tests, a dry run and a canary) |
 | coding_exec · Qwen3.5-0.8B · 4-GPU slices, train + final eval | **GPU-verified**, reward A/B (see below) |
 | coding_exec · Qwen3-1.7B (model switch) | canary |
-| coding_harbor · Qwen3.5-0.8B (Terminus-2 in Modal sandboxes) | canary |
+| coding_harbor · Qwen3.5-0.8B (Terminus-2 in Modal sandboxes) | canary (`can-hb-f`, after 5 failed attempts whose fixes are listed below); no full training run yet |
 | llama / generic model profiles | CPU preflight only (`verified: unverified`; `strl plan` warns) |
 | multi-node, fully-async Harbor, Megatron | designed and documented in [scaling.md](scaling.md); **not GPU-verified in this repo** |
 
@@ -51,7 +51,7 @@ What the dry runs checked:
 | `can-hb-c` | job_db2lfcks49qg07jejfd0 | FAILED at the step-0 validation check: the agent loop now works (13/16 trials ran without exception, median 8 turns, 1 solved; 3 hit 8,192 tokens late and train with reward 0, as SkyRL intends). The benchmark relabel had collapsed eval `sample_id`s to `mbpp`. Fix: the task path travels as `env_extras.task_dir`; a test runs relabel and `eval_record` together |
 | `can-hb-d` | job_db2llics49qg07jejfdg | FAILED at the same check. The real cause (also behind `can-hb-c`): step-wise Harbor eval dumps one row per agent **turn**, 107 rows for 16 tasks, and the reward sits on the last turn. `can-hb-b` never hit this because every trial died on turn 1. Fix: an `EnvironmentSpec.collapse_eval_records` hook (Harbor merges turns per trajectory), with a regression test on the real dump (`tests/fixtures/harbor_eval_step0_can-hb-d.jsonl`) |
 | `can-hb-e` | job_db2lrukf8c4g07jrocug | Step-0 validation **passed** (16/16 trials ran without exception, 1 solved). Step 1 **completed** in 477 s: 32 trajectories, 6 solved, 243 step-wise sequences, generate 229 s, logprobs 71 s, policy 137 s. Then our watchdog killed the run during step 1's eval: the 600 s stall limit was below a healthy agentic step plus eval, and `progress.json` was only written after eval. Fixes: progress is written at every optimizer step; Harbor sets `budget.stall_seconds: 1800` and `canary_max_seconds: 2400`, and plan rejects a stall limit below 2 × agent_timeout + 300; the stage canary cap follows `canary_max_seconds`; plan is calibrated on this step (477 s, ~4 steps/hour at 32 trajectories/GPU) |
-| `can-hb-f` | job_db2m7s4f8c4g07jrod00 | <!-- CAN-HB-F --> |
+| `can-hb-f` | job_db2m7s4f8c4g07jrod00 | **COMPLETED: genuine Harbor pass** (1,958 s, 1 GPU). 2 updates with grad norm 1.00 / 0.85, learning signal 0.25 per trajectory, `gradient_path_exercised: true`, environment-failure fraction 0.0 (0 error trajectories, 0 masked groups). Avg 7.1 / 7.5 agent turns; 2–3 trajectories per step hit 8,192 tokens and trained with reward 0. Sampled pass 0.125 / 0.062; validation `eval/mbpp/pass_at_1` 0.062 on 16 tasks. Steps 487 / 371 s. Critic: 8 analyses, $0.002. 112 Modal sandbox trials, 101 without exception |
 
 ### Reward A/B (Gate 6/7)
 
