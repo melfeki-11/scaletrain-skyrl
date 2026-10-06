@@ -8,7 +8,8 @@ extends: base/coding_exec.yaml
 environment:
   name: coding_harbor
   harbor:
-    max_turns: 8                 # agent episodes per trial; context = prompt + max_turns x max_generate_length
+    max_turns: 8                 # agent episodes per trial
+    max_seq_len: 8192            # ONE context size for the vLLM engine, the agent and the trainer; Terminus-2's first turn is 0.8-2.5k tokens
     agent_timeout_sec: 600
     max_concurrency: 64          # concurrent Modal sandboxes (HarborGenerator rate limiter)
     trajectories_per_second: 4

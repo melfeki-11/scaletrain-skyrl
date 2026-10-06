@@ -159,3 +159,32 @@ class Data(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class HarborContext(unittest.TestCase):
+    def test_one_context_size_everywhere_and_floor(self):
+        from strl import experiment
+        from strl.overrides import overrides
+        from strl.tasks.coding.harbor import trial_template
+        cfg = experiment.load('experiments/harbor-qwen35.yaml')
+        rendered = [x for x in overrides(cfg, stage='train', run_name='t', learning_rate=1e-6, max_steps=2)
+                    if 'max_model_len' in x or 'max_seq_len' in x]
+        self.assertEqual(sorted(rendered), ['generator.inference_engine.engine_init_kwargs.max_model_len=8192',
+                                            'trainer.algorithm.max_seq_len=8192'])
+        self.assertEqual(trial_template(cfg)['agent']['kwargs']['model_info']['max_input_tokens'], 8192)
+        cfg['environment']['harbor']['max_seq_len'] = 1024        # the can-hb-b failure: Terminus-2 turn 1 does not fit
+        problems = get_environment('coding_harbor').validate_experiment(cfg)
+        self.assertTrue(any('ContextLengthExceededError' in p for p in problems), problems)
+
+    def test_eval_metrics_grouped_by_benchmark_not_task_path(self):
+        from strl.tasks.coding.harbor import _relabel
+        item = {'prompt': '/workspace/strl-run/assets/coding/mbpp-humaneval/harbor/test/humaneval-test-0042', 'env_class': None,
+                'env_extras': {'data_source': '/workspace/strl-run/assets/coding/mbpp-humaneval/harbor/test/humaneval-test-0042'}, 'uid': '3'}
+        out = _relabel(item)
+        self.assertEqual(out['env_extras']['data_source'], 'humaneval')
+        self.assertEqual(out['prompt'], item['prompt'])      # the generator still finds the task directory
+        # can-hb-c: relabelling must not collapse eval identities (validation evidence requires unique sample ids)
+        harbor_env = get_environment('coding_harbor')
+        records = [harbor_env.eval_record({'env_extras': _relabel(dict(item, prompt=f'/x/harbor/test/humaneval-test-{i:04d}'))['env_extras'],
+                                           'score': 1.0, 'output_response': 'ok'}, None, 0) for i in range(3)]
+        self.assertEqual([r['sample_id'] for r in records], ['humaneval-test-0000', 'humaneval-test-0001', 'humaneval-test-0002'])

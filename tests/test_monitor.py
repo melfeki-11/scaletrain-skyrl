@@ -105,3 +105,53 @@ class CompareAndPlan(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CanaryEnvironmentGate(unittest.TestCase):
+    """can-hb-b: every Harbor trial failed on turn 1 (context too small) and the canary still 'passed'. Never again."""
+
+    def setUp(self):
+        import os
+        import tempfile
+        import types
+        callbacks = types.ModuleType('skyrl.train.utils.callbacks')
+        callbacks.TrainingCallback = object
+        for name in ('skyrl', 'skyrl.train', 'skyrl.train.utils'):
+            sys.modules.setdefault(name, types.ModuleType(name))
+        sys.modules['skyrl.train.utils.callbacks'] = callbacks
+        self.tmp = tempfile.mkdtemp()
+        os.environ.update(GRPO_TRAIN_DEADLINE=str(time.time() + 3600), STRL_ALERTS='0', GRPO_CANARY_REQUIRE_GRADIENT='0')
+        from strl import tracking
+        self.tracking = tracking
+        self.callback = tracking.make_callback_class()()
+
+    def trainer(self, all_metrics):
+        cfg = types_ns(trainer=types_ns(train_batch_size=8, export_path=f'{self.tmp}/exports', max_training_steps=100))
+        return types_ns(cfg=cfg, all_metrics=all_metrics)
+
+    def step(self, step, all_metrics, grad=1.0):
+        control = types_ns(should_save=False, should_evaluate=False)
+        self.callback.on_step_end(self.trainer(all_metrics), types_ns(global_step=step, metrics={'policy/grad_norm': grad}), control)
+
+    def test_failure_fraction_sources(self):
+        f = self.tracking.env_failure_fraction
+        self.assertEqual(f({'environment/masked_group_fraction': 0.25}, 8), 0.25)        # coding_exec generator
+        self.assertEqual(f({'generate/num_masked_instances': 8}, 8), 1.0)                # Harbor generator (can-hb-b)
+        self.assertIsNone(f({'reward/avg_raw_reward': 0.0}, 8))                           # gsm8k: no environment failures
+
+    def test_mostly_masked_canary_fails(self):
+        self.step(1, {'generate/num_masked_instances': 8})
+        with self.assertRaisesRegex(RuntimeError, 'masked by environment failures'):
+            self.step(2, {'generate/num_masked_instances': 8})
+
+    def test_healthy_canary_passes_and_records_fraction(self):
+        import json
+        self.step(1, {'environment/masked_group_fraction': 0.0})
+        self.step(2, {'environment/masked_group_fraction': 0.125})
+        canary = json.loads((Path(self.tmp) / 'canary.json').read_text())
+        self.assertEqual(canary['env_failure_fraction_steps_1_2'], 0.125)
+
+
+def types_ns(**kw):
+    import types
+    return types.SimpleNamespace(**kw)

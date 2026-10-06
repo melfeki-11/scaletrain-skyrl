@@ -47,6 +47,24 @@
       "terminal_at": "2026-10-06T19:56:02Z",
       "gpu_fraction": 0.125,
       "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db2kqhsf8c4g07jrocr0",
+      "attempt": "can-hb-b",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-06T19:34:31Z",
+      "terminal_at": "2026-10-06T20:19:15Z",
+      "gpu_fraction": 0.125,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db2lfcks49qg07jejfd0",
+      "attempt": "can-hb-c",
+      "status": "FAILED",
+      "allocated_at": "2026-10-06T20:18:58Z",
+      "terminal_at": "2026-10-06T20:31:57Z",
+      "gpu_fraction": 0.125,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
     }
   ]
 }

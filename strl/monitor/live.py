@@ -99,7 +99,7 @@ def line(snap: dict) -> str:
     return (f"{snap['at']} job={snap['job']} step={fmt('optimizer_step', '{:.0f}')} reward={fmt('reward/avg_raw_reward')} "
             f"task_metric={fmt('eval/task_metric')} signal={fmt('train/learning_signal_fraction')} step_s={fmt('timing/step', '{:.0f}')} "
             f"gen_s={fmt('timing/generate', '{:.0f}')} infra={fmt('environment/infra_error')} masked={fmt('environment/masked_group_fraction')} "
-            f"node_h={fmt('budget/consumed_node_hours', '{:.2f}')} critic$={fmt('critic/cost_usd', '{:.2f}')} hb={snap['heartbeat_age_s']}s "
+            f"node_h={fmt('budget/consumed_node_hours', '{:.2f}')} critic$={fmt('critic/cost_usd', '{:.4f}')} hb={snap['heartbeat_age_s']}s "
             f"{' '.join(snap['flags'])} {('[' + snap['completion'] + ']') if snap['completion'] else ''}")
 
 

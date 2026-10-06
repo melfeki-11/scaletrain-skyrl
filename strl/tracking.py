@@ -199,6 +199,19 @@ def make_trajectory_logger_class():
     return GroupTrajectoryLogger
 
 
+def env_failure_fraction(metrics: dict, prompts_per_step: int) -> float | None:
+    """Share of GRPO groups masked because the environment failed (not the model): coding_exec logs it directly; Harbor's
+    generator reports masked instances (any failed trial masks its whole group)."""
+    if isinstance(metrics.get('environment/masked_group_fraction'), Real):
+        return float(metrics['environment/masked_group_fraction'])
+    if isinstance(metrics.get('generate/num_masked_instances'), Real):
+        return float(metrics['generate/num_masked_instances']) / max(1, int(prompts_per_step))
+    return None
+
+
+CANARY_MAX_ENV_FAILURE = 0.5   # a canary whose groups are mostly masked never exercised the environment: fail it
+
+
 def make_callback_class():
     from skyrl.train.utils.callbacks import TrainingCallback
 
@@ -212,6 +225,7 @@ def make_callback_class():
             self.started_at = self.last_checkpoint_at
             self.baseline_accuracy = None
             self.max_grad = 0.0
+            self.env_failures: dict[int, float] = {}
             self.env = _env()
 
         def on_step_end(self, trainer, callback_input, control) -> None:
@@ -223,7 +237,18 @@ def make_callback_class():
                     raise RuntimeError(f'Nonfinite optimizer metric: {key}')
             gradients = [float(v) for k, v in metrics.items() if 'grad_norm' in k]
             self.max_grad = max([self.max_grad, *gradients]) if gradients else self.max_grad
+            failure = env_failure_fraction(getattr(trainer, 'all_metrics', None) or {}, trainer.cfg.trainer.train_batch_size)
+            if failure is not None:
+                self.env_failures[step] = failure
+                if failure > 0.05 and not any(v > 0.05 for s, v in self.env_failures.items() if s < step):
+                    alert('Environment failures', f'{failure:.0%} of GRPO groups masked by environment errors at step {step} '
+                          f'({os.environ.get("GRPO_RUN_NAME")}); see environment/* and generate/num_error_trajectories', 'WARN')
             if step == 2:
+                worst = max([self.env_failures.get(s, 0.0) for s in (1, 2)])
+                if worst >= CANARY_MAX_ENV_FAILURE:
+                    alert('Canary failed', f'{worst:.0%} of GRPO groups were masked by environment failures in steps 1-2')
+                    raise RuntimeError(f'Canary: {worst:.0%} of GRPO groups were masked by environment failures (the environment, not '
+                                       'the model, failed: inspect harbor-trials/*/exception.txt or environment/failure/infra_error)')
                 # Canary: two real finite updates. A zero gradient is a bug only if some GRPO group had reward variance;
                 # all-equal groups (every sample passed or every sample failed) legitimately give exactly zero advantage.
                 signal = max([SIGNAL.get(s, 0.0) for s in (1, 2)] or [0.0])
@@ -235,7 +260,8 @@ def make_callback_class():
                 target = Path(trainer.cfg.trainer.export_path).parent / 'canary.json'
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(json.dumps({'optimizer_steps': 2, 'finite_gradients': True, 'max_grad_norm': self.max_grad,
-                                              'learning_signal_steps_1_2': signal, 'gradient_path_exercised': self.max_grad > 0}, indent=2))
+                                              'learning_signal_steps_1_2': signal, 'gradient_path_exercised': self.max_grad > 0,
+                                              'env_failure_fraction_steps_1_2': worst}, indent=2))
             if time.monotonic() - self.last_checkpoint_at >= self.checkpoint_seconds:
                 control.should_save = True
             deadline = float(os.environ['GRPO_TRAIN_DEADLINE'])
@@ -255,6 +281,9 @@ def make_callback_class():
             rewards = logs.get('reward/avg_raw_reward')
             if rewards is not None:
                 logs.setdefault('train/reward', rewards)
+            failure = env_failure_fraction(logs, trainer.cfg.trainer.train_batch_size)
+            if failure is not None:   # one key for every environment (Harbor reports masked instances instead)
+                logs.setdefault('environment/masked_group_fraction', failure)
             aliases = {
                 'policy/policy_loss': 'train/policy_loss', 'policy/policy_entropy': 'train/entropy',
                 'policy/grad_norm': 'train/gradient_norm', 'policy/loss_metrics/clip_ratio': 'train/clipping_fraction',

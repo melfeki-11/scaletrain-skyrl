@@ -96,6 +96,18 @@ def export_tasks(splits: dict[str, list], root: Path) -> dict:
     return {'root': str(root.name), 'counts': counts, 'dockerfile_sha256': hashlib.sha256(DOCKERFILE.encode()).hexdigest()}
 
 
+# Terminus-2's first turn alone (system template + task + terminal) measured 801-2,511 tokens (median 826) on these tasks; the
+# chat then grows by one completion + one terminal observation per turn. One number sizes the vLLM engine, the agent's
+# context check and the trainer's sequence limit, so they can never disagree (can-hb-b: a 1,024 engine context failed every
+# trial on turn 1 with ContextLengthExceededError).
+DEFAULT_MAX_SEQ_LEN = 8192
+FIRST_TURN_MAX_TOKENS = 2600
+
+
+def max_seq_len(cfg: dict) -> int:
+    return int((cfg['environment'].get('harbor') or {}).get('max_seq_len', DEFAULT_MAX_SEQ_LEN))
+
+
 def trial_template(cfg: dict) -> dict:
     """The shared trial template for training AND evaluation (one source => the trained agent is the evaluated agent)."""
     from ... import models
@@ -106,7 +118,7 @@ def trial_template(cfg: dict) -> dict:
     t['agent']['override_timeout_sec'] = int(hb.get('agent_timeout_sec', t['agent']['override_timeout_sec']))
     a = cfg['algorithm']
     kw['llm_kwargs']['max_tokens'] = a['max_generate_length']
-    kw['model_info'].update(max_input_tokens=a['max_prompt_tokens'] + a['max_generate_length'], max_output_tokens=a['max_generate_length'])
+    kw['model_info'].update(max_input_tokens=max_seq_len(cfg), max_output_tokens=a['max_generate_length'])
     kw['temperature'] = a['temperature']
     chat = models.detect(cfg['model'])[0].chat_kwargs(cfg)
     if chat:  # e.g. Qwen thinking off: otherwise thinking burns the per-turn budget and Terminus re-prompts past max_turns
@@ -121,7 +133,8 @@ def skyrl_overrides(cfg: dict) -> dict[str, Any]:
     hb = cfg['environment'].get('harbor') or {}
     a = cfg['algorithm']
     return {
-        'trainer.algorithm.max_seq_len': a['max_prompt_tokens'] + a['max_generate_length'] * int(hb.get('max_turns', 8)),
+        'trainer.algorithm.max_seq_len': max_seq_len(cfg),
+        'generator.inference_engine.engine_init_kwargs.max_model_len': max_seq_len(cfg),
         'generator.step_wise_trajectories': True,
         'generator.merge_stepwise_output': True,
         'generator.apply_overlong_filtering': True,
@@ -147,10 +160,29 @@ def build_dataset(cfg: Any, split: str) -> Any:
     files = cfg.data.train_data if split == 'train' else cfg.data.val_data
     if split != 'train' and not (cfg.trainer.eval_interval > 0 and files):
         return None
-    dataset = HarborTaskDataset(data_files=list(files))
+
+    class SourceLabelledHarborDataset(HarborTaskDataset):
+        """SkyRL groups eval metrics by env_extras.data_source, which upstream sets to each task's absolute path (one W&B key
+        set per task). Label by benchmark instead (mbpp / humaneval): eval/<source>/pass_at_1 like coding_exec."""
+
+        def __getitem__(self, index):
+            return _relabel(super().__getitem__(index))
+
+        def __iter__(self):
+            return (_relabel(item) for item in super().__iter__())
+
+    dataset = SourceLabelledHarborDataset(data_files=list(files))
     if split == 'train' and len(dataset) < cfg.trainer.train_batch_size:
         raise RuntimeError(f'Harbor train set has {len(dataset)} tasks < train_batch_size {cfg.trainer.train_batch_size}')
     return dataset
+
+
+def _relabel(item: dict) -> dict:
+    """Task dirs are named <source>-<split>-<id> (export_tasks); the prompt (the task path) is untouched."""
+    name = Path(str(item['prompt'])).name
+    extras = dict(item.get('env_extras') or {}, task_dir=str(item['prompt']),   # identity for eval records (spec.eval_record)
+                  data_source=name.split('-', 1)[0] if '-' in name else 'harbor')
+    return dict(item, env_extras=extras)
 
 
 def build_generator(experiment: dict, cfg: Any, tokenizer: Any, inference_engine_client: Any) -> Any:

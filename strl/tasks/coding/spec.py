@@ -244,6 +244,11 @@ class CodingHarborSpec(CodingExecSpec):
         if names != ['pass_all_tests']:
             problems.append('coding_harbor rewards come from the sandbox verifier (reward.txt); only [pass_all_tests] is supported here. '
                             'Explore reward designs with coding_exec, which applies arbitrary components.')
+        from .harbor import FIRST_TURN_MAX_TOKENS, max_seq_len
+        need = FIRST_TURN_MAX_TOKENS + 2 * cfg['algorithm']['max_generate_length']
+        if max_seq_len(cfg) < need:
+            problems.append(f'environment.harbor.max_seq_len={max_seq_len(cfg)} is below {need}: Terminus-2\'s first turn alone is up to '
+                            f'{FIRST_TURN_MAX_TOKENS} tokens, so every trial would fail with ContextLengthExceededError (default 8192)')
         return problems
 
     def skyrl_config_class(self):
@@ -292,6 +297,6 @@ class CodingHarborSpec(CodingExecSpec):
         reward = item.get('score', 0.0)
         reward = float(sum(reward)) if isinstance(reward, list) else float(reward)
         completion = item.get('output_response', '')
-        task_dir = extras.get('data_source') or ''
+        task_dir = extras.get('task_dir') or extras.get('data_source') or ''   # data_source is the benchmark label (harbor._relabel)
         return {'step': step, 'sample_id': Path(task_dir).name, 'prompt': task_dir, 'completion': completion[-4000:], 'ground_truth': Path(task_dir).name,
                 'parsed_answer': None, 'correct': reward >= 1.0, 'reward': reward, 'token_count': None, 'finish_reason': item.get('stop_reason')}
