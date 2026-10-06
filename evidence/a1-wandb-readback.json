@@ -1,0 +1,34 @@
+{
+ "state": "finished",
+ "name": "q35v2-a1",
+ "url": "https://scaleai.wandb.io/mohamed-elfeki/qwen35-grpo-gsm8k/runs/q35v2261006153651",
+ "steps_logged": 36,
+ "test/candidate_accuracy": 0.6884003032600455,
+ "artifacts": [
+  "run-q35v2261006153651-trajectorieseval-QlEhWg:v0",
+  "run-q35v2261006153651-qualitativefixed_validation-Ipp8Jg:v0",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v0",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v1",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v2",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v3",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v4",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v5",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v6",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v7",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v8",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v9",
+  "run-q35v2261006153651-trajectorieseval-QlEhWg:v1",
+  "run-q35v2261006153651-qualitativefixed_validation-Ipp8Jg:v1",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v10",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v11",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v12",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v13",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v14",
+  "run-q35v2261006153651-trajectoriestrain-XGGXOQ:v15"
+ ],
+ "tables": [
+  "qualitative/fixed_by_training",
+  "qualitative/fixed_validation",
+  "qualitative_rows"
+ ]
+}

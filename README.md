@@ -8,6 +8,16 @@ paired examples) and logs examples the base model got wrong and the trained mode
 This repo is the code only. Launching, capacity checks and submission use the (not included) `scaletrain-services` Claude
 Code skill's helpers (`scripts/run.py capacity|scaletrain|lifecycle`); any equivalent `scale-train` CLI flow works.
 
+## Result (job `job_db2hb8sf8c4g07jroc60`, COMPLETED; details and examples in [RESULTS.md](RESULTS.md))
+
+| Official GSM8K test, 1,319 paired examples | base | trained (36 GRPO updates) |
+| --- | --- | --- |
+| accuracy | 50.80% (670) | **68.84% (908)** |
+
++18.04 points, paired 95% bootstrap CI [+15.31, +20.77]; 312 problems fixed, 74 broken. Validation (train-derived) rose 51.6% → 72.7%.
+One run, 8×H100, ~46 min of worker time (≤ ~3,010 s of the 3,600 s allocation), median 51 s/step, ~3.7k tokens/s/GPU.
+Efficiency is provisional: only this configuration was measured. Rollout generation (35 s of a 51 s step, eager vLLM) is the bottleneck.
+
 ## Design (what makes it efficient)
 
 | Choice | Why |
@@ -44,12 +54,18 @@ python $SKILL/scripts/run.py scaletrain validate runtime-check-job.json
 python $SKILL/scripts/run.py scaletrain submit runtime-check-job.json --user-id <you> --receipt evidence/preflight-submission.json
 # 2) capacity (foundation→research without borrowing, then with borrowing)
 python $SKILL/scripts/run.py capacity --nodes 1 --gpus-per-node 8 --output evidence/capacity.json
+# 2b) optional CPU rehearsal of bootstrap/budget/services/Ray (no training)
+python stage.py --attempt q35v2-dry-1 --dry-run --output dry-job.json   # then validate + submit dry-job.json as above
 # 3) stage + submit the training job; budget comes from evidence/budget-ledger.json
 python stage.py --attempt q35v2-a1 [--team gen_ai.agents_research] [--allow-borrowing]
 python $SKILL/scripts/run.py scaletrain validate job.json
 python $SKILL/scripts/run.py scaletrain submit job.json --user-id <you> --receipt evidence/submission-a1.json
 python $SKILL/scripts/run.py scaletrain get <job_id>
 ```
+
+After the job completes: `python scripts/verify_results.py --attempt q35v2-a1 --job-id <id> --wandb-run <entity/project/run_id>`
+re-downloads the outputs, re-scores them against the local test parquet, recomputes the paired bootstrap and writes `RESULTS.md`.
+Note: `scale-train submit` via the helper may raise a `TypeError` after the job was created; reconcile with `scaletrain list` by exact job name and never resubmit blindly.
 
 After a terminal attempt, append its allocated/terminal timestamps to `evidence/budget-ledger.json` before staging another one.
 

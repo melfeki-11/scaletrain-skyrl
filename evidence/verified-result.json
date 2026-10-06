@@ -1,0 +1,63 @@
+{
+  "attempt": "q35v2-a1",
+  "job_id": "job_db2hb8sf8c4g07jroc60",
+  "wandb_run": "mohamed-elfeki/qwen35-grpo-gsm8k/q35v2261006153651",
+  "test": {
+    "examples": 1319,
+    "baseline_accuracy": 0.5079605761940864,
+    "candidate_accuracy": 0.6884003032600455,
+    "accuracy_delta": 0.18043972706595907,
+    "ci_level": 0.95,
+    "ci_lower": 0.15314632297194844,
+    "ci_upper": 0.20773313115996966,
+    "quality_passed": true
+  },
+  "flips": {
+    "fixed": 312,
+    "broken": 74,
+    "both_correct": 596,
+    "both_wrong": 337
+  },
+  "validation_correct_of": {
+    "0": [
+      132,
+      256
+    ],
+    "10": [
+      167,
+      256
+    ],
+    "20": [
+      181,
+      256
+    ],
+    "30": [
+      190,
+      256
+    ],
+    "36": [
+      186,
+      256
+    ]
+  },
+  "selected_step": 36,
+  "optimizer_steps": 36,
+  "base_truncation_rate": 0.0310841546626232,
+  "trained_truncation_rate": 0.0356330553449583,
+  "base_no_final_answer_rate": 0.08112206216830932,
+  "trained_no_final_answer_rate": 0.03866565579984837,
+  "median_step_seconds": 51.22487282752991,
+  "median_generate_seconds": 35.080538511276245,
+  "median_policy_train_seconds": 5.015187740325928,
+  "median_tokens_per_second_per_gpu": 3735.5537736020933,
+  "final_train_reward": 0.67578125,
+  "elapsed_seconds": 2755.8416488170624,
+  "phases": {
+    "worker_start": 1791301232.5804112,
+    "ray_ready": 1791301266.971362,
+    "training_end": 1791303828.07643,
+    "eval_start": 1791303856.3788118,
+    "eval_end": 1791303988.4313707,
+    "finished": 1791303988.527435
+  }
+}

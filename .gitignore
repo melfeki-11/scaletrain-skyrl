@@ -9,6 +9,9 @@ artifacts/
 evidence/*
 !evidence/budget-ledger.json
 !evidence/README.md
+!evidence/verified-result.json
+!evidence/a1-wandb-readback.json
+!evidence/a1-submission.json
 assets/model/
 assets/data/
 assets/runtime/*.whl
