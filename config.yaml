@@ -1,0 +1,83 @@
+run:
+  name: qwen35-grpo-gsm8k-1node
+  seed: 17
+  data_dir: assets/data
+  artifact_dir: artifacts
+runtime:
+  skyrl_commit: a9564572eb8e91076be43c1bd5e4615e3de17265
+  python: /opt/skyrl-venv/bin/python
+  image: 692474966980.dkr.ecr.us-west-2.amazonaws.com/scale_train/shared/training/tmp:20260922-210801.d5d13a4a-e962-40ea-abe4-4057c5c1c82b
+model:
+  id: Qwen/Qwen3.5-0.8B
+  revision: 2fc06364715b967f1860aea9cf38778875588b17
+  local_path: assets/model
+  dtype: bfloat16
+dataset:
+  id: openai/gsm8k
+  config: main
+  revision: 740312add88f781978c0658806c59bc2815b9866
+  validation_size: 256
+  split_seed: 17
+  prompt_suffix: Show your work briefly. End with exactly "#### <number>".
+training:
+  max_steps: 200            # upper bound; the wall-clock deadline normally stops training first
+  train_batch_size: 64      # prompts per step; x8 samples = 512 rollouts, 64 per GPU
+  policy_mini_batch_size: 64
+  micro_train_batch_size_per_gpu: 8
+  micro_forward_batch_size_per_gpu: 8
+  learning_rate: 2.0e-06
+  update_epochs_per_batch: 1
+  max_prompt_tokens: 512
+  max_response_tokens: 1024
+  bf16: true
+  grpo:
+    samples_per_prompt: 8
+    use_kl_loss: true
+    kl_coefficient: 0.01
+    zero_variance_filter: false
+  generation:
+    temperature: 1.0
+    top_p: 1.0
+inference:
+  num_engines: 8            # one colocated TP1 vLLM engine per GPU
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.6
+  max_num_seqs: 64
+  enforce_eager: true
+  gdn_prefill_backend: triton
+evaluation:
+  interval_steps: 10            # cheap greedy validation (256 examples)
+  checkpoint_interval_steps: 20 # full FSDP checkpoint + HF export; the deadline step is always saved
+  max_checkpoints: 2
+  fixed_qualitative_samples: 16
+  training_groups_to_log: 2
+  bootstrap_samples: 10000
+  bootstrap_seed: 29
+  quality_ci_level: 0.95
+  test_size: 1319
+  eval_shards_per_model: 4      # final test evaluation: base on GPUs 0-3, trained on GPUs 4-7, concurrently
+wandb:
+  base_url: https://scaleai.wandb.io
+  entity: mohamed-elfeki
+  project: qwen35-grpo-gsm8k
+  group: qwen35-single-node-8gpu
+  credentials_uri: s3://scale-ml/tmp/mohamedelfeki/scaletrain/qwen38-grpo-mini/private/q38-cpu-2609221807-4f3763-wandb.env
+scale_train:
+  num_instances: 1
+  gpu_count: 8
+  gpus_per_node: 8
+  team: gen_ai.agent_training_foundation
+  product: agent_training_foundation
+  instance_type: p5.48xlarge
+  allow_borrowing: false
+  priority: high
+s3:
+  bucket: scale-ml
+  prefix: tmp/mohamedelfeki/scaletrain/qwen35-grpo-v2
+  profile: production-developer
+  region: us-west-2
+budget:
+  total_seconds: 3600            # cumulative allocated seconds across all GPU attempts
+  bootstrap_margin_seconds: 180  # pod start/image pull before the worker clock starts
+  final_eval_reserve_seconds: 840
+  canary_max_seconds: 1200

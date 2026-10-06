@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+.env*
+runtime.json
+job.json
+runtime-check-job.json
+artifacts/
+evidence/*
+!evidence/budget-ledger.json
+!evidence/README.md
+assets/model/
+assets/data/
+assets/runtime/*.whl
+assets/runtime/packages/
+assets/model-manifest.json

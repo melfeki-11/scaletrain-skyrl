@@ -1,0 +1,9 @@
+pyyaml
+boto3
+numpy
+pyarrow
+datasets
+huggingface_hub
+safetensors
+torch
+wandb
