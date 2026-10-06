@@ -17,3 +17,7 @@ assets/data/
 assets/runtime/*.whl
 assets/runtime/packages/
 assets/model-manifest.json
+tests/.tmp/
+assets/overlay/
+assets/models/
+assets/coding/
