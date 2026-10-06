@@ -9,7 +9,7 @@ Everything is driven by ONE experiment YAML and ONE CLI, run from the repo root 
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements-local.txt   # once (~2 min)
-.venv/bin/python -m unittest discover -s tests -t .                                                # 47 contract tests
+.venv/bin/python -m unittest discover -s tests -t .                                                # unit, contract and golden tests (55)
 .venv/bin/python -m strl plan experiments/mbpp-qwen35-partial.yaml --against experiments/mbpp-qwen35-binary.yaml
 ```
 
@@ -29,9 +29,10 @@ every knob, its expected effect and the W&B key that shows it.
 ## Agent path: one experiment, end to end
 
 ```bash
-cp experiments/mbpp-qwen35-binary.yaml experiments/my-exp.yaml      # edit name + the axis you study
+cp experiments/mbpp-qwen35-binary.yaml experiments/my-exp.yaml      # edit name, tracking.group and the axis you study
 .venv/bin/python -m strl plan experiments/my-exp.yaml                # free: errors, derived infra, estimates, warnings
 .venv/bin/python -m strl fetch experiments/my-exp.yaml               # pinned model snapshot + data (coding: refs validated in Modal)
+.venv/bin/python -m strl executor deploy                              # coding envs only: deploy + version-check the Modal executor
 .venv/bin/python -m strl overlay                                     # once: Modal/Harbor packages for the training image
 .venv/bin/python -m strl capacity --nodes 1 --gpus-per-node 8,4,1
 .venv/bin/python -m strl stage experiments/my-exp.yaml --attempt my-exp-dry1 --mode dry && .venv/bin/python -m strl submit evidence/my-exp-dry1/job.json
@@ -49,7 +50,7 @@ always `dry` -> `canary` before a new model/environment/reward's first real run;
 | Mode | Preset | What it proves | Cost |
 | --- | --- | --- | --- |
 | `dry` | m5.2xlarge | in the real image: payload, credentials (W&B, Modal, LiteLLM), real SkyRL parser + `validate_cfg` at the target GPU count, reward contract on good/bad inputs, executor/sandbox calls from the pod, W&B write+readback, a critic call | CPU only |
-| `canary` | p5.48xlarge:1 | the experiment with `base/canary_overlay.yaml` (same model/env/reward, 1 GPU, 8 prompts x 4 samples, 2 updates, no final eval): engines, generator, rewards, every W&B table | <= 1,800 s x 1/8 node |
+| `canary` | p5.48xlarge:1 | the experiment with `base/canary_overlay.yaml` (same model/env/reward, 1 GPU, 8 prompts x 4 samples, 2 updates, no final eval): engines, generator, rewards, every W&B table | `canary_max_seconds` + 600 s (1,800 s; Harbor 3,000 s) x 1/8 node |
 | `train` | the experiment's preset | time-bounded GRPO, validation-only checkpoint selection, base vs trained held-out eval, paired bootstrap | per ledger |
 
 ## GSM8K vs RL environments

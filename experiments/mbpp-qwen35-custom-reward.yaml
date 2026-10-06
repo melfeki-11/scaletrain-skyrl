@@ -7,4 +7,4 @@ reward:
   components:
     - {fn: pass_all_tests, weight: 1.0}
     - {fn: 'user_rewards.examples:docstring_bonus', weight: 1.0, bonus: 0.1}
-tracking: {tags: ['reward:custom-docstring']}
+tracking: {group: mbpp-custom-reward, tags: ['reward:custom-docstring']}

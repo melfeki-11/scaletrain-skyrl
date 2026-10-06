@@ -6,4 +6,4 @@ model:
   id: Qwen/Qwen3-1.7B
   revision: 70d244cc86ccca08cf5af4e1e306ecf908b1ad5e
   local_path: assets/models/Qwen3-1.7B
-tracking: {tags: ['model:qwen3-1.7b']}
+tracking: {group: mbpp-model-switch, tags: ['model:qwen3-1.7b']}

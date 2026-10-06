@@ -20,7 +20,7 @@ What has actually been run, with job IDs, so you know which paths are proven and
 
 | # | Gate | Result |
 | --- | --- | --- |
-| 1 | Local tests: `.venv/bin/python -m unittest discover -s tests -t .` | 47 pass. Includes the GSM8K golden equivalence: 76 overrides, the job command, scorer decisions on 2×1,319 a1 completions, and the env-var contract |
+| 1 | Local tests: `.venv/bin/python -m unittest discover -s tests -t .` | 47 pass at the time of the gate (55 at merge). Includes the GSM8K golden equivalence: 76 overrides, the job command, scorer decisions on 2×1,319 a1 completions, and the env-var contract |
 | 2 | Coding data + executor | 364 train / 96 validation / 16 canary / 663 test. Every reference passes 3× in Modal and every stub fails; 5 tasks dropped (3 duplicates, 2 broken references). Load test: 512 concurrent calls in 2.68 s, p50 0.31 s, p95 0.39 s, 0 infra errors (`evidence/gates/executor-load-test.json`) |
 | 3 | Harbor + LiteLLM | oracle 10/10, nop 0/10, about 52 s per trial (`evidence/gates/harbor-oracle-nop.json`). gpt-6-luna reference eval: single-turn 18/20 ($0.0037); Harbor Terminus-2 7/10. Critic: 5 calls, $0.0004 |
 | 4 | CPU dry runs in the real image (m5.2xlarge) | all 6 passed. `dry-cx-custom-a` job_db2l47cf8c4g08flbdhg is the user-code reward: `user_rewards/` was shipped in the payload, then imported and scored on all 4 contract cases in the pod. The others: `dry-gsm8k-a` job_db2kiics49qg07jejfag, `dry-cx-bin-a` job_db2kiikf8c4g07jrocog, `dry-cx-part-a` job_db2kij4s49qg07jejfb0, `dry-cx-q3-a` job_db2kijcf8c4g07jrocp0, `dry-hb-a` job_db2kijsf8c4g07jrocpg |

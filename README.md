@@ -81,7 +81,7 @@ E=experiments/mbpp-qwen35-binary.yaml
 The modes:
 - `dry` (CPU, `m5.2xlarge`) proves everything except the GPUs in the real image: credentials, the SkyRL parser and
   `validate_cfg` at the target GPU count, reward contracts, executor calls from the pod, W&B readback, and a critic call.
-- `canary` (`p5.48xlarge:1`, at most 30 min) trains 2 real updates with the same model, environment and reward, then checks
+- `canary` (`p5.48xlarge:1`, capped at `canary_max_seconds` + 600 s: 30 min by default, 50 min for Harbor) trains 2 real updates with the same model, environment and reward, then checks
   every W&B table.
 - `train` is time-bounded by the budget ledger.
 

@@ -5,7 +5,8 @@ from datetime import datetime
 
 def remaining_seconds(attempts, total=3600):
     """Node-seconds left in a program ledger. A GPU-slice attempt is charged ``gpu_fraction`` of its allocated interval
-    (a 1-GPU canary on an 8-GPU preset is 1/8); CPU-only attempts carry gpu_fraction 0. Queue time is never charged."""
+    (a 1-GPU canary on an 8-GPU preset is 1/8); CPU-only attempts carry gpu_fraction 0. When ScaleTrain reports no allocation time, the job's creation time is recorded
+    instead (conservative: queue and pod start are then charged)."""
     seen = set()
     consumed = 0
     for attempt in attempts:

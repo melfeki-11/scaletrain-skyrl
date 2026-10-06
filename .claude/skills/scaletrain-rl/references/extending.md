@@ -59,6 +59,6 @@ reward:
    - `metric`: the yardstick name; `failure_classes`: logged as `environment/failure/<class>`.
 2. Register it in `strl/tasks/__init__.py` (`_REGISTRY`), add `base/<name>.yaml` (extends `base/infra.yaml`) and an experiment.
 3. If scoring executes untrusted output, do it remotely (pattern: `strl/tasks/coding/executor.py` + `harness.py`): never in the
-   trainer pod, nonce-gated passes, resource limits, group masking for infrastructure failures (`tasks/coding/generator.py`).
+   trainer pod, nonce-gated passes, resource limits, group masking for infrastructure failures (`strl/tasks/coding/generator.py`).
 4. Planned next domains reuse the same pieces: reasoning (gsm8k-style scorer), deep research / browser (Harbor tasks or a judge via
    `strl/services/litellm.py`), CUA (Harbor + a GUI sandbox image).

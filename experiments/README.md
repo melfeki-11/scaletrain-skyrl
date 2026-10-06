@@ -18,3 +18,5 @@ Merge rules for `extends:`:
 - Everything you do not set is inherited, **including `tracking.group`**. Children of `mbpp-qwen35-binary.yaml` land in the
   `mbpp-reward-ab` W&B group. Set your own `tracking.group` unless you want your run plotted alongside that A/B.
 - `strl plan <exp> --against <other>` prints the exact resolved diff. Check it before staging.
+- An experiment file can live anywhere. `extends:` takes an absolute path, a path relative to the file's own folder, or a
+  repo-relative path (for example `experiments/mbpp-qwen35-binary.yaml`). Always run the CLI from the repo root.

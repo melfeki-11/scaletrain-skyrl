@@ -60,6 +60,16 @@ def cmd_plan(a):
           f"(fits={e['memory']['fits']}); from profile {e['profile']}"
           + ("" if e.get('calibrated') else " (UNCALIBRATED: different environment/model; the canary measures the real step time)"))
     print(f"  monitoring   {report['monitoring']['wandb']}  critic={report['monitoring']['critic']}")
+    ledger_path = Path(cfg['budget'].get('ledger') or '')
+    if ledger_path.is_file():   # the program budget the next stage would draw from (node-seconds)
+        from .budget import remaining_seconds
+        ledger = json.loads(ledger_path.read_text())
+        left = remaining_seconds(ledger['attempts'], ledger['total_seconds'])
+        frac = cfg['compute']['nodes'] * cfg['compute']['gpus_per_node'] / 8
+        train = int(frac * cfg['budget']['attempt_max_seconds'])
+        canary = int(min(3600, cfg['budget']['canary_max_seconds'] + 600) / 8)
+        print(f"  budget       {ledger_path}: {left} of {ledger['total_seconds']} node-s left; a train attempt reserves up to "
+              f"{train} node-s, a 1-GPU canary up to {canary} ({len(ledger['attempts'])} attempts recorded)")
     for w in report['warnings']:
         print(f'  ! {w}')
     for k, rows in report.get('diff_vs', {}).items():
