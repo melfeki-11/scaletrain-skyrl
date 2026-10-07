@@ -308,7 +308,7 @@ class Staging(unittest.TestCase):
     def test_two_node_jobs(self):
         receipt, job = self.stage('train')
         self.assertEqual((job['num_instances'], job['preset_instance_type'], receipt['nodes'], receipt['gpu_fraction']), (2, 'p5.48xlarge', 2, 1.0))
-        self.assertEqual(job['active_deadline_seconds'], 2100)
+        self.assertEqual(job['active_deadline_seconds'], load(SMOKE)['budget']['attempt_max_seconds'])   # follows the smoke experiment's cap
         self.assertIn('SKYRL_WORKER_NCCL_TIMEOUT_IN_S=900 SKYRL_WAIT_UNTIL_INFERENCE_SERVER_HEALTHY_TIMEOUT_S=900', job['command'][2])
         runtime = json.loads((Path(receipt['staging_dir']) / 'runtime.json').read_text())
         self.assertEqual((runtime['nodes'], runtime['gpu_fraction']), (2, 1.0))
