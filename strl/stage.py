@@ -303,23 +303,35 @@ def env_dry_seconds(env) -> int:
 
 
 def render_stage_model_command(*, region: str, bucket: str, mprefix: str, model_id: str, revision: str, threads: int = 16) -> str:
-    """CPU pod: snapshot_download (16 workers) -> streamed sha256 -> multipart upload (16 threads) -> manifest written last."""
-    script = f'''import boto3,hashlib,json
+    """CPU pod, one file at a time (peak disk ~ the largest shard, not the whole model): download with retries/backoff (HF 429s
+    killed an earlier 27B attempt) -> streamed sha256 -> multipart upload -> delete -> manifest written last."""
+    script = f'''import boto3,hashlib,json,os,time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from boto3.s3.transfer import TransferConfig
-from huggingface_hub import snapshot_download
-root=Path(snapshot_download({model_id!r},revision={revision!r},local_dir='/workspace/strl-model',max_workers={threads}))
+from huggingface_hub import HfApi, hf_hub_download
+api=HfApi()
+info=api.model_info({model_id!r},revision={revision!r},files_metadata=True)
+names=sorted(x.rfilename for x in info.siblings if '/' not in x.rfilename and x.rfilename not in {{'README.md','LICENSE','.gitattributes'}})
 s3=boto3.client('s3',region_name={region!r})
 cfg=TransferConfig(multipart_threshold=64<<20,multipart_chunksize=64<<20,max_concurrency={threads})
-files=sorted(p for p in root.iterdir() if p.is_file() and not p.name.startswith('.') and p.name not in {{'README.md','LICENSE'}})
-def put(p):
+root=Path('/workspace/strl-model');root.mkdir(parents=True,exist_ok=True)
+def put(name):
+ for attempt in range(8):
+  try:
+   path=Path(hf_hub_download({model_id!r},name,revision={revision!r},local_dir=str(root)))
+   break
+  except Exception as error:
+   print('download retry',name,attempt,type(error).__name__,str(error)[:120],flush=True);time.sleep(min(300,15*2**attempt))
+ else:raise RuntimeError('download failed: '+name)
  h=hashlib.sha256()
- with p.open('rb') as f:
+ with path.open('rb') as f:
   for block in iter(lambda:f.read(8<<20),b''):h.update(block)
- s3.upload_file(str(p),{bucket!r},{mprefix + '/'!r}+p.name,ExtraArgs={{'ServerSideEncryption':'AES256','Metadata':{{'sha256':h.hexdigest()}}}},Config=cfg)
- return {{'name':p.name,'bytes':p.stat().st_size,'sha256':h.hexdigest()}}
-with ThreadPoolExecutor(4) as pool:manifest=list(pool.map(put,files))
+ s3.upload_file(str(path),{bucket!r},{mprefix + '/'!r}+name,ExtraArgs={{'ServerSideEncryption':'AES256','Metadata':{{'sha256':h.hexdigest()}}}},Config=cfg)
+ size=path.stat().st_size;path.unlink()
+ print('staged',name,size,flush=True)
+ return {{'name':name,'bytes':size,'sha256':h.hexdigest()}}
+with ThreadPoolExecutor(3) as pool:manifest=list(pool.map(put,names))
 s3.put_object(Bucket={bucket!r},Key={mprefix + '/' + MODEL_MANIFEST!r},Body=json.dumps(manifest,indent=2).encode(),ServerSideEncryption='AES256')
 print(json.dumps({{'staged':len(manifest),'bytes':sum(r['bytes'] for r in manifest),'prefix':{mprefix!r}}}),flush=True)
 '''

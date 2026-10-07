@@ -341,7 +341,9 @@ class Staging(unittest.TestCase):
         out = stage_model(str(TMP / 'exp.yaml'), attempt='fetch-q', output=str(TMP / 'fetch.json'))
         job = json.loads((TMP / 'fetch.json').read_text())
         self.assertEqual((job['preset_instance_type'], job['num_instances'], out['gpu_fraction']), ('m5.2xlarge', 1, 0.0))
-        self.assertIn('snapshot_download', job['command'][2])
+        for needle in ('hf_hub_download', 'download retry', 'path.unlink()', 'ThreadPoolExecutor(3)'):   # per-file, retried, bounded disk
+            self.assertIn(needle, job['command'][2])
+        self.assertNotIn('snapshot_download', job['command'][2])
         self.assertIn(MODEL_MANIFEST, job['command'][2])
         compile(job['command'][2].split("python -c ", 1)[1].strip().strip("'").replace("'\"'\"'", "'"), 'stage-model', 'exec')
 
