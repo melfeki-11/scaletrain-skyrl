@@ -58,6 +58,19 @@ def number(path):
 
 
 reward = number(V + "/reward.txt")
+if os.environ.get("MIMO_TB") and not os.path.isfile(V + "/details.json"):
+    # terminal_bench ships its own tests, which write reward.txt only. They ran if pytest left its CTRF report (the agent cannot have
+    # planted it: the verifier dir was wiped first) or if their anti-hack guard rejected the workspace (reward 0, a real failure).
+    try:
+        output = open(V + "/tb-output.txt", errors="replace").read()
+    except Exception:
+        output = ""
+    guard = "anti_hack_guard: REJECT" in output
+    if guard or os.path.isfile(V + "/ctrf.json"):
+        body = {"metric": 0.0 if guard else (reward or 0.0), "components": {"tests": reward or 0.0}, "guard_rejected": guard}
+    else:
+        body = {"infra_error": True, "error": "terminal_bench tests did not run (no ctrf.json and no guard verdict): " + output[-300:]}
+    json.dump(body, open(V + "/details.json", "w"))
 try:
     details = json.load(open(V + "/details.json"))
 except FileNotFoundError:
@@ -85,7 +98,7 @@ json.dump(details, open(V + "/details.json", "w"))
 '''
 
 DEFAULT_ENTRY = '"$PY" /tests/run_grade.py'
-TERMINAL_BENCH_ENTRY = "bash /tests/tb_test.sh"
+TERMINAL_BENCH_ENTRY = 'export MIMO_TB=1\nbash /tests/tb_test.sh 2>&1 | tail -c 30000 > "$V/tb-output.txt"'
 
 
 def test_sh(entry: str = DEFAULT_ENTRY) -> str:

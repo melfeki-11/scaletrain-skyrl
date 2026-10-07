@@ -217,7 +217,11 @@ ENTRYPOINT ["/bin/sh", "-c", "su mcpsvc -s /bin/sh -c 'python3 /opt/mimo_general
 _MUSIC_ABCMIDI_LINE = "RUN apt-get update && apt-get install -y --no-install-recommends abcmidi && rm -rf /var/lib/apt/lists/*\n"
 
 
-def build_dockerfile(domain: str, image: str) -> str:
+def build_dockerfile(domain: str, image: str, *, terminal_bench: bool = False) -> str:
+    if domain == "general" and terminal_bench:
+        # terminal_bench rows ship their own tests and no MCP servers: there is no general_env/ to COPY (the sidecar tail made
+        # every such image fail to build), and the image may define no command (the code-image lesson): keep the sandbox alive.
+        return _dockerfile(image, extra_lines='ENTRYPOINT []\nCMD ["sleep", "infinity"]\n')
     if domain == "music":
         return _dockerfile(image, extra_lines=_MUSIC_ABCMIDI_LINE)
     if domain == "webdev":
@@ -523,12 +527,12 @@ def export_task(row: dict, dest: Path, *, split: str, general_env_dir_fn=None) -
             mcp_server_names = [s["name"] for s in manifest.get("mcp_servers", [])]
             _write_general_env_assets(task_dir, env_dir, mcp_server_names)
 
-    (task_dir / "environment" / "Dockerfile").write_text(build_dockerfile(domain, image))
+    is_terminal_bench = domain == "general" and general_grader.dataset_sub_kind(row) == "terminal_bench"
+    (task_dir / "environment" / "Dockerfile").write_text(build_dockerfile(domain, image, terminal_bench=is_terminal_bench))
     (task_dir / "task.toml").write_text(build_task_toml(domain))
     (task_dir / "instruction.md").write_text(build_instruction(domain, row, mcp_server_names=mcp_server_names))
     strl_json = build_strl_json(domain, row, image, judge_kind=judge_kind)
     (task_dir / "strl.json").write_text(json.dumps(strl_json, sort_keys=True))
-    is_terminal_bench = domain == "general" and general_grader.dataset_sub_kind(row) == "terminal_bench"
     graders_common.finalize_tests(task_dir, strl_json["artifacts"], terminal_bench=is_terminal_bench)   # the shared hardened test.sh
 
     return {

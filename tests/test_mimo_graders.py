@@ -483,6 +483,19 @@ class CodeImageStaysAlive(unittest.TestCase):
             self.assertNotIn('CMD ["sleep"', export.build_dockerfile(domain, "x"))
 
 
+class TerminalBenchImage(unittest.TestCase):
+    def test_terminal_bench_dockerfile_has_no_sidecar_lines(self):
+        """The 27B data prepare found 4 of 5 non-env-0 general images unbuildable: terminal_bench rows ship no general_env/, but
+        got the MCP-sidecar tail (`COPY general_env/...`). prebuild in Modal found it; no unit test had looked at that Dockerfile."""
+        image = "docker.io/xiaomimimo/mimo-v2.6-rl-oss:general-agent-env-8"
+        text = export.build_dockerfile("general", image, terminal_bench=True)
+        self.assertNotIn("general_env", text)
+        self.assertNotIn("mcpsvc", text)
+        self.assertTrue(text.rstrip().endswith('CMD ["sleep", "infinity"]'))
+        self.assertIn(f"FROM {image}", text)
+        self.assertIn("general_env/sidecar.py", export.build_dockerfile("general", image))   # the MCP rows keep their sidecar
+
+
 class SharedVerifierEntrypoint(unittest.TestCase):
     """Executes the rendered test.sh with /tests and /logs/verifier redirected to temp dirs. The first version of this entrypoint called
     /usr/bin/python3, which python:3.12-slim and general-agent-env-0 do not have: the verifier never ran, no-op still scored 0, and
@@ -499,11 +512,11 @@ class SharedVerifierEntrypoint(unittest.TestCase):
         import shutil
         shutil.rmtree(self.root, ignore_errors=True)
 
-    def install(self, grade_body: str, artifacts=(), terminal_bench=False):
+    def install(self, grade_body: str, artifacts=(), terminal_bench=False, tb_script="printf '1\\n' > /logs/verifier/reward.txt\nprintf '{}' > /logs/verifier/ctrf.json\n"):
         from strl.tasks.mimo.graders import common
         (self.tests / "run_grade.py").write_text(grade_body)
         if terminal_bench:
-            (self.tests / "test.sh").write_text("#!/bin/sh\nprintf '1\\n' > /logs/verifier/reward.txt\n")
+            (self.tests / "test.sh").write_text("#!/bin/sh\n" + tb_script)
         common.finalize_tests(self.root, [str(a) for a in artifacts], terminal_bench=terminal_bench)
         for f in self.tests.iterdir():   # redirect the sandbox paths
             if f.is_file():
@@ -583,3 +596,17 @@ class SharedVerifierEntrypoint(unittest.TestCase):
         self.assertFalse((self.verifier / "reward.json").exists())
         self.assertEqual((self.verifier / "reward.txt").read_text().strip(), "1")   # their script's own reward, now with a details.json
         self.assertEqual(self.details()["metric"], 1.0)
+        self.assertFalse(self.details()["infra_error"])
+
+    def test_terminal_bench_verifier_that_did_not_run_is_an_infra_error_and_a_guard_rejection_is_a_real_zero(self):
+        """The strict nop gate on the 27B data found every terminal_bench trial would have been masked: their tests write reward.txt
+        and no details.json. They count as having run only with pytest's CTRF report or their guard's REJECT verdict."""
+        self.install("pass\n", terminal_bench=True, tb_script="printf '1\\n' > /logs/verifier/reward.txt\n")   # no ctrf: pytest never ran
+        self.run_sh()
+        self.assertTrue(self.details()["infra_error"])
+        self.assertIn("did not run", self.details()["error"])
+        self.setUp()
+        self.install("pass\n", terminal_bench=True, tb_script="echo 'anti_hack_guard: REJECT planted conftest.py' >&2\nprintf '0\\n' > /logs/verifier/reward.txt\n")
+        self.run_sh()
+        d = self.details()
+        self.assertEqual((d["infra_error"], d["metric"], d["guard_rejected"]), (False, 0.0, True))

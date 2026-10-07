@@ -1,0 +1,35 @@
+{
+  "distinct_images": 4,
+  "reason": null,
+  "results": [
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:general-agent-env-8",
+      "ok": true,
+      "seconds": 50.1,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:general-agent-env-14",
+      "ok": true,
+      "seconds": 50.0,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:general-agent-env-22",
+      "ok": true,
+      "seconds": 51.2,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:general-agent-env-17",
+      "ok": true,
+      "seconds": 56.5,
+      "tmux_version": "tmux 3.4"
+    }
+  ],
+  "stopped_early": false
+}
