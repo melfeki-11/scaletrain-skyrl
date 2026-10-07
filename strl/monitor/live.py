@@ -3,7 +3,8 @@
     python -m strl monitor experiments/<name>.yaml --attempt <attempt> [--job-id <id>] [--interval 60]
 
 Flags (also sent as W&B alerts by the worker itself): STALL (no optimizer step for max(10 min, 3 x median step)), NAN, ENV_FAILURES
-(masked groups / infra errors above 5%), BUDGET (node-hours above the attempt allowance), DONE / FAILED (completion.json).
+(masked groups / infra errors above 5%), BUDGET (node-hours above the attempt allowance), DONE / FAILED (completion.json);
+multi-node: NETWORK (probe found no EFA / NCCL on sockets), PEER_STALE (a peer heartbeat older than 5 min).
 """
 from __future__ import annotations
 
@@ -88,9 +89,27 @@ def snapshot(cfg: dict, attempt: str, job_id: str | None) -> dict:
     for r in rows:
         latest.update({k: v for k, v in r.items() if k in KEYS and v is not None})
     allowance = cfg['compute']['nodes'] * cfg['budget']['attempt_max_seconds'] / 3600 * (cfg['compute']['gpus_per_node'] / 8)
+    found = flags(rows, progress, heartbeat, allowance)
+    if cfg['compute']['nodes'] > 1:
+        found += cluster_flags(s3_json(session, f'{base}/network.json'),
+                               [s3_json(session, f'{base}/peer-{r}-heartbeat.json') for r in range(1, cfg['compute']['nodes'])])
     return {'at': time.strftime('%H:%M:%S'), 'job': job_state(job_id), 'completion': (completion or {}).get('status'),
             'heartbeat_age_s': round(time.time() - heartbeat['at']) if heartbeat else None, 'latest': latest,
-            'flags': flags(rows, progress, heartbeat, allowance), 'wandb_run_id': runtime.get('wandb_run_id')}
+            'flags': found, 'wandb_run_id': runtime.get('wandb_run_id')}
+
+
+def cluster_flags(network: dict | None, peers: list[dict | None], now: float | None = None) -> list[str]:
+    """Multi-node: NETWORK when the probe found no EFA (or NCCL on sockets), PEER_STALE when a peer heartbeat is > 5 min old."""
+    now = time.time() if now is None else now
+    out = []
+    if network and (not network.get('efa_available') or network.get('transport') == 'socket'):
+        cross = (network.get('bandwidth_gbps') or {}).get('cross_node')
+        out.append(f"NETWORK(transport={network.get('transport')}, efa={network.get('efa_available')}"
+                   + (f', cross_node={cross}GB/s' if cross is not None else '') + ')')
+    for rank, beat in enumerate(peers, start=1):
+        if beat and now - float(beat['at']) > 300:
+            out.append(f'PEER_STALE(rank {rank}, {now - float(beat["at"]):.0f}s)')
+    return out
 
 
 def line(snap: dict) -> str:

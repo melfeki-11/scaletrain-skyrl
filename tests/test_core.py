@@ -186,7 +186,7 @@ class AllExperiments(unittest.TestCase):
         classes = {c.name: {f.target.id: ast.unparse(f.annotation) for f in c.body if isinstance(f, ast.AnnAssign) and isinstance(f.target, ast.Name)}
                    for c in tree.body if isinstance(c, ast.ClassDef)}
         for path in sorted(Path('experiments').glob('*.yaml')) + sorted(Path('base').glob('[!_]*.yaml')):
-            if path.name in {'infra.yaml', 'canary_overlay.yaml'}:
+            if path.name in {'infra.yaml', 'canary_overlay.yaml', 'canary_overlay_large.yaml'}:
                 continue
             cfg = load(str(path))
             plan(cfg)

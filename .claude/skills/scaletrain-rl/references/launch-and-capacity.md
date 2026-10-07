@@ -33,7 +33,7 @@ slices. A queued job is not a failure; never cancel/resubmit to chase small fluc
 ## Budget
 
 - A program ledger (`budget.ledger`, e.g. `evidence/ledgers/rl-envs.json`) holds total node-seconds and every terminal attempt.
-- An attempt is charged `(terminal - created) x gpus/8` (conservative: includes queue + pod start). CPU dry runs are free.
+- An attempt is charged `(terminal - created) x nodes x gpus/8` (conservative: includes queue + pod start). CPU dry runs are free.
 - `stage` refuses when the remaining budget cannot cover bootstrap + training + final-eval reserve; a canary job is capped at `budget.canary_max_seconds` + 600 s (1,800 s by default; 3,000 s for Harbor, whose base sets 2,400), and must write `canary.json` within `canary_max_seconds` of the child start.
 - After every terminal attempt: `strl ledger <exp> --attempt A --job-id J` (it refuses non-terminal jobs and duplicates).
 - `strl plan <exp>` prints the remaining node-seconds of the experiment's ledger and what one train attempt or canary would reserve.
@@ -42,7 +42,7 @@ slices. A queued job is not a failure; never cancel/resubmit to chase small fluc
   ```json
   {"program": "<what and who authorized it, with the date>", "total_seconds": 7200, "nodes": 1, "attempts": []}
   ```
-  `strl ledger` appends attempts of the form `{job_id, attempt, status, allocated_at, terminal_at, gpu_fraction, evidence}`.
+  `strl ledger` appends attempts of the form `{job_id, attempt, status, allocated_at, terminal_at, gpu_fraction, nodes, evidence}` (entries without `nodes` count as 1).
   Never edit or delete recorded attempts.
 
 ## Inside one attempt (worker phases)

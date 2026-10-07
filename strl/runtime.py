@@ -44,6 +44,56 @@ def ensure_router():
         raise RuntimeError('Router runtime version mismatch')
 
 
+# Multi-node LoRA: pinned SkyRL writes the adapter to trainer.policy.model.lora.lora_sync_path (a node-local /tmp dir) from global
+# rank 0 only, then asks EVERY vLLM server to load it from that path; servers on other hosts cannot read it. collect_lora_params
+# already all-gathers the full adapter on every rank, so the first rank on each host writes that host's copy, all ranks
+# barrier, and only then rank 0 sends the load request.
+LORA_SYNC_PER_HOST = {
+    'skyrl/backends/skyrl_train/workers/fsdp/fsdp_worker.py': [
+        ('        if torch.distributed.get_rank() == 0:\n'
+         '            os.makedirs(lora_sync_path, exist_ok=True)\n',
+         '        import socket as _strl_socket\n'
+         '        _strl_hosts = [None] * torch.distributed.get_world_size()\n'
+         '        torch.distributed.all_gather_object(_strl_hosts, _strl_socket.gethostname())\n'
+         '        _strl_rank = torch.distributed.get_rank()\n'
+         '        if _strl_hosts.index(_strl_hosts[_strl_rank]) == _strl_rank:  # strl: first rank on each host writes its copy\n'
+         '            os.makedirs(lora_sync_path, exist_ok=True)\n'),
+        ('\n            # Send LoRA disk loading request to inference engine.\n',
+         '\n        torch.distributed.barrier()  # strl: every host holds the new adapter before any engine reloads it\n'
+         '        if _strl_rank == 0:\n'
+         '            # Send LoRA disk loading request to inference engine.\n'),
+    ],
+}
+# budget.save_optimizer_state=false renders trainer.ckpt_interval=-1; the strl deadline callback still forces a save at the stop
+# step, and every FSDP checkpoint carries optimizer shards, so a forced save is honoured only when checkpoints are enabled.
+NO_OPTIMIZER_CHECKPOINT = {
+    'skyrl/train/trainer.py': [
+        ('                        will_save_ckpts = force_save or ckpt_interval_save\n',
+         '                        will_save_ckpts = (force_save and self.cfg.trainer.ckpt_interval > 0) or ckpt_interval_save  # strl\n'),
+    ],
+}
+
+
+def scaling_patches(cfg) -> dict:
+    """The exact-source SkyRL patches an experiment needs (none for single-node full fine-tuning with checkpoints)."""
+    from .experiment import finetune, save_optimizer_state
+    patches = {}
+    if cfg['compute']['nodes'] > 1 and finetune(cfg)['mode'] == 'lora':
+        patches.update(LORA_SYNC_PER_HOST)
+    if not save_optimizer_state(cfg):
+        patches.update(NO_OPTIMIZER_CHECKPOINT)
+    return patches
+
+
+def patch_scaling(root, cfg) -> list[str]:
+    """Run on EVERY node before Ray starts: Ray workers import SkyRL from each node's own tree."""
+    from .ipv6_patch import patch_tree
+    patches = scaling_patches(cfg)
+    if patches:
+        patch_tree(root, patches)
+    return sorted(patches)
+
+
 def preflight(env=None):
     ensure_router()
     from .ipv6_patch import patch_tree

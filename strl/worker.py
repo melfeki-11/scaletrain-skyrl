@@ -1,4 +1,4 @@
-"""Single-node ScaleTrain worker for any experiment: budget -> services -> Ray -> preflight -> train -> select -> final eval.
+"""ScaleTrain worker for any experiment: budget -> services -> Ray -> preflight -> train -> select -> final eval.
 
 Phases and receipts (all synced to ``<artifact_uri>``):
   budget.json (write-once) -> worker-started.json -> artifacts/runtime.json (preflight) -> [dry-run.json] -> training.log,
@@ -6,6 +6,12 @@ Phases and receipts (all synced to ``<artifact_uri>``):
 Modes (STRL_MODE): dry (CPU: every gate except GPU training), canary (2 updates, no final eval), train.
 Watchdog: if training makes no progress for budget.stall_seconds, the child is killed, an alert is sent, and the latest
 export (if any) is still evaluated, so a stalled run is salvaged instead of silently burning its allocation.
+
+Multi-node (compute.nodes > 1; one pod per node, rank = JOB_COMPLETION_INDEX): every node runs the same budget / services /
+preflight / SkyRL patches before Ray. The head (rank 0) publishes leader-network.json, waits for N nodes x G GPUs, runs the
+cluster probe (artifacts/network.json), trains with a liveness watcher (aborts when a node is lost), verifies each node's own
+checkpoint shards over Ray and evaluates on its own GPUs. Peers join Ray and wait (strl.multinode.peer_wait): exit 0 once
+completion.json exists, nonzero when the head goes silent. Single-node jobs take exactly the previous code path.
 """
 import json
 import os
@@ -20,12 +26,12 @@ import traceback
 import boto3
 from botocore.exceptions import ClientError
 
-from .experiment import current
+from .experiment import current, finetune, save_optimizer_state
 from .network import head_network, ray_start_args
 from .resources import allocated_cpus
 from .storage import get_json, put_json, split_uri, sync_local
 from .tasks import get_environment
-from .verify import verify_export_change, verify_shards
+from .verify import verify_adapter_change, verify_cluster_shards, verify_export_change, verify_shards
 
 RAY = '/opt/skyrl-venv/bin/ray'
 SYNC_EXCLUDE = ('checkpoints/',)  # optimizer shards stay on the node; exports/metrics/evals go to S3
@@ -39,7 +45,8 @@ def _progress_mtime(progress: Path | None) -> float | None:
     return progress.stat().st_mtime if progress is not None and progress.is_file() else None
 
 
-def child(args, log, deadline, canary_path=None, canary_seconds=1200, env=None, progress=None, stall_seconds=None):
+def child(args, log, deadline, canary_path=None, canary_seconds=1200, env=None, progress=None, stall_seconds=None, abort=None):
+    """``abort``: optional callable returning a reason to stop (multi-node liveness watcher)."""
     started = time.time()
     with Path(log).open('w') as output:
         process = subprocess.Popen(args, stdout=output, stderr=subprocess.STDOUT, start_new_session=True, env=env)
@@ -49,6 +56,9 @@ def child(args, log, deadline, canary_path=None, canary_seconds=1200, env=None, 
                 now = time.time()
                 if now >= deadline:
                     raise TimeoutError('Phase exceeded authorized time budget')
+                reason = abort() if abort is not None else None
+                if reason:
+                    raise RuntimeError(f'Cluster liveness: {reason}')
                 if canary_path is not None and now >= started + canary_seconds and not canary_path.exists():
                     raise TimeoutError('Canary did not verify two updates in time')
                 seen = _progress_mtime(progress)
@@ -183,6 +193,37 @@ def evaluate_test_split(cfg, env_spec, base_model, trained_model, eval_dir, dead
     return {label: merge_shards([read_jsonl(eval_dir / f'{label}-{s}.jsonl') for s in range(n)], ids) for label in ('base', 'candidate')}
 
 
+def run_probe(nodes, gpus, cpu, deadline):
+    """Cluster probe in a child process (bounded; CUDA/NCCL state never leaks into the worker). Returns the network summary."""
+    child([sys.executable, '-m', 'strl.probe', '--nodes', str(nodes), '--gpus-per-node', str(gpus), *(['--cpu'] if cpu else [])],
+          'artifacts/probe.log', deadline)
+    network = json.loads(Path('artifacts/network.json').read_text())
+    return {k: network.get(k) for k in ('passed', 'mode', 'nodes', 'hostnames', 'transport', 'efa_available', 'bandwidth_gbps', 'warnings')}
+
+
+def cluster_shards(root, world_size):
+    """Each node lists the checkpoint shards it holds (node-pinned Ray tasks, run before Ray stops); nothing is copied."""
+    step_file = root / 'checkpoints/latest_ckpt_global_step.txt'
+    if not step_file.is_file():
+        return None
+    import ray
+    from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+    from .verify import local_shards
+    task = ray.remote(num_cpus=0)(local_shards)
+    step = int(step_file.read_text())
+    nodes = [n for n in ray.nodes() if n['Alive']]
+    return ray.get([task.options(scheduling_strategy=NodeAffinitySchedulingStrategy(node_id=n['NodeID'], soft=False)).remote(
+        str(root.resolve()), step, world_size) for n in nodes], timeout=300)
+
+
+def peer(prefix, rank, begin, identity):
+    """Peers keep their Ray node (and its GPUs) in the head's cluster until the head finishes or goes silent."""
+    from . import multinode
+    final = multinode.peer_wait(prefix, rank, begin['deadline'], identity={'hostname': identity['hostname']})
+    put_json(f'{prefix}/workers/{rank}/finished.json', dict(identity, finished_at=time.time(), head_status=final.get('status')))
+    print(json.dumps({'peer': rank, 'head_status': final.get('status')}), flush=True)
+
+
 def main():
     cfg = current()
     runtime = json.loads(Path('runtime.json').read_text())
@@ -194,13 +235,18 @@ def main():
     os.environ['GRPO_ARTIFACT_URI'] = prefix
     Path('artifacts').mkdir(exist_ok=True)
     gpus = cfg['compute']['gpus_per_node']
+    nodes = int(cfg['compute']['nodes'])
+    multi, rank = nodes > 1, int(os.environ.get('JOB_COMPLETION_INDEX', '0'))
     identity = {'hostname': socket.gethostname(), 'started_at': time.time(), 'model': cfg['model']['id'], 'model_revision': cfg['model']['revision'],
                 'experiment': cfg['name'], 'experiment_sha': cfg['_meta']['sha'], 'environment': env_spec.name, 'mode': mode,
                 'profile': profile.name}
+    if multi:
+        identity.update(rank=rank, nodes=nodes)
     phases = {'worker_start': time.time()}
+    heartbeat = watcher = None
     try:
-        if int(os.environ.get('NUM_INSTANCES', '1')) != 1 or int(os.environ.get('JOB_COMPLETION_INDEX', '0')) != 0:
-            raise RuntimeError('Incorrect worker allocation: expected exactly one node')
+        if int(os.environ.get('NUM_INSTANCES', '1')) != nodes or not 0 <= rank < nodes:
+            raise RuntimeError('Incorrect worker allocation: expected exactly ' + ('one node' if nodes == 1 else f'{nodes} nodes'))
         begin = budget(runtime, cfg)
         identity['budget'] = begin
         reserve = int(cfg['budget']['final_eval_reserve_seconds']) if mode == 'train' and cfg['evaluation']['final_eval'] else 120
@@ -218,62 +264,98 @@ def main():
             STRL_METRICS_JSONL=str((Path('artifacts') / runtime['run_name'] / 'metrics.jsonl').resolve()))
         interface = os.environ['NETWORK_INTERFACE_NAME']
         port = os.environ.get('LEADER_PORT', '6379')
-        local_ip, address = head_network(interface, port)
+        if multi:
+            from . import multinode
+            local_ip, leader_ip, address = multinode.shared_job_network(rank, interface, port, prefix, min(time.time() + 600, begin['deadline']))
+            identity['leader_ip'] = leader_ip
+        else:
+            local_ip, address = head_network(interface, port)
         os.environ['NCCL_SOCKET_IFNAME'] = '=' + interface
         os.environ['GLOO_SOCKET_IFNAME'] = interface
         os.environ['NCCL_SOCKET_FAMILY'] = 'AF_INET6' if ':' in local_ip else 'AF_INET'
         os.environ['RAY_ADDRESS'] = address
         cpus = allocated_cpus()
         identity.update(node_ip=local_ip, interface=interface, ray_address=address, cpus=cpus, gpus=gpus)
-        put_json(prefix + '/worker-started.json', identity)
+        put_json(prefix + ('/worker-started.json' if rank == 0 else f'/workers/{rank}/started.json'), identity)
+        if multi and rank == 0:
+            heartbeat = multinode.Heartbeat(f'{prefix}/{multinode.HEAD_HEARTBEAT}', {'hostname': identity['hostname']})
+            heartbeat.start()
         print(json.dumps({'network': {k: identity[k] for k in ('node_ip', 'interface', 'ray_address', 'cpus', 'gpus')}}), flush=True)
         identity['services'] = setup_services(cfg, runtime, env_spec, mode)
-        from .runtime import SKYRL_ROOT, preflight
+        from .runtime import SKYRL_ROOT, patch_scaling, preflight
         Path('artifacts/runtime.json').write_text(json.dumps(preflight(env_spec), indent=2))
         env_spec.assert_manifest(cfg)
         env_spec.patch_runtime(SKYRL_ROOT, cfg)
         if subprocess.check_output(['git', '-C', SKYRL_ROOT, 'rev-parse', 'HEAD'], text=True).strip() != cfg['runtime']['skyrl_commit']:
             raise RuntimeError('SkyRL image revision mismatch')
-        subprocess.run([RAY, 'stop', '--force'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(ray_start_args(0, address, port, local_ip, cpus, gpus), check=True, timeout=120)
+        patches = patch_scaling(SKYRL_ROOT, cfg)   # every node: Ray workers import SkyRL from their own node's tree
+        if patches:
+            identity['skyrl_patches'] = patches
+        if multi:
+            from .probe import configure_efa
+            identity['efa'] = configure_efa()      # FI_PROVIDER=efa when usable; inherited by this node's Ray workers
+            identity['ray_join_tries'] = multinode.start_ray(rank, address, port, local_ip, cpus, gpus, min(time.time() + 600, begin['deadline']))
+            if rank:
+                return peer(prefix, rank, begin, identity)
+        else:
+            subprocess.run([RAY, 'stop', '--force'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(ray_start_args(0, address, port, local_ip, cpus, gpus), check=True, timeout=120)
         import ray
         ray.init(address=address)
-        until = time.time() + 120
-        while time.time() < until:
-            if len([n for n in ray.nodes() if n['Alive']]) == 1 and int(ray.cluster_resources().get('GPU', 0)) == gpus:
-                break
-            time.sleep(3)
+        if multi:
+            identity['cluster'] = multinode.wait_for_cluster(nodes, gpus, max(60, min(900, begin['deadline'] - time.time() - 600)))
         else:
-            raise RuntimeError('Ray did not expose the configured GPU count')
+            until = time.time() + 120
+            while time.time() < until:
+                if len([n for n in ray.nodes() if n['Alive']]) == 1 and int(ray.cluster_resources().get('GPU', 0)) == gpus:
+                    break
+                time.sleep(3)
+            else:
+                raise RuntimeError('Ray did not expose the configured GPU count')
         ray.shutdown()
         phases['ray_ready'] = time.time()
+        if multi:
+            identity['network'] = run_probe(nodes, gpus, mode == 'dry', min(time.time() + 900, begin['deadline'] - 300))
+            phases['probe_done'] = time.time()
+            print(json.dumps({'probe': identity['network']}), flush=True)
         if mode == 'dry':  # CPU rehearsal of every gate the GPU run depends on; never starts training
             gates = dry_run_gates(cfg, runtime, env_spec, identity['services'])
             dry = dict(identity, status='dry_run_passed', phases=phases, gates=gates, train_deadline=float(os.environ['GRPO_TRAIN_DEADLINE']),
                        skyrl_commit=cfg['runtime']['skyrl_commit'])
             put_json(prefix + '/dry-run.json', dry)
-            put_json(prefix + '/completion.json', {'status': 'dry_run_passed', 'experiment_sha': cfg['_meta']['sha']})
+            put_json(prefix + '/completion.json', {'status': 'dry_run_passed', 'experiment_sha': cfg['_meta']['sha'],
+                                                   **({'network': identity['network']} if multi else {})})
             print(json.dumps(dry, default=str), flush=True)
             return
         root = Path('artifacts') / runtime['run_name']
         stalled = None
+        if multi:   # head-side liveness: a lost peer aborts training instead of hanging in NCCL until the deadline
+            ray.init(address=address)
+            watcher = multinode.Watcher(multinode.cluster_check(nodes))
+            watcher.start()
         try:
             child([sys.executable, '-m', 'strl.train'], 'artifacts/training.log', begin['deadline'] - (480 if mode == 'train' else 60),
                   root / 'canary.json', cfg['budget']['canary_max_seconds'], progress=root / 'progress.json',
-                  stall_seconds=int(cfg['budget']['stall_seconds']))
+                  stall_seconds=int(cfg['budget']['stall_seconds']), abort=watcher)
         except Stalled as error:
             stalled = str(error)
             _resume_alert(cfg, runtime, 'Training stalled', stalled)
         phases['training_end'] = time.time()
+        shard_reports = None
+        if multi:
+            watcher.stop()
+            shard_reports = cluster_shards(root, nodes * gpus) if save_optimizer_state(cfg) else None
+            ray.shutdown()
         subprocess.run([RAY, 'stop', '--force'], check=False)
         progress = json.loads((root / 'training_completed.json').read_text()) if (root / 'training_completed.json').is_file() else \
             json.loads((root / 'progress.json').read_text()) if (root / 'progress.json').is_file() else {}
         steps = int(progress.get('optimizer_steps', progress.get('optimizer_step', 0)))
         if steps < 2 or not (root / 'canary.json').is_file():
             raise RuntimeError('Missing successful real training canary' + (f' ({stalled})' if stalled else ''))
+        extra = {'nodes': nodes, 'network': identity.get('network')} if multi else {}
         if mode == 'canary' or not cfg['evaluation']['final_eval']:
             final = dict(status='completed', mode=mode, optimizer_steps=steps, stalled=stalled, phases=phases,
-                         elapsed_seconds=time.time() - begin['started_at'], gpus=gpus, experiment_sha=cfg['_meta']['sha'])
+                         elapsed_seconds=time.time() - begin['started_at'], gpus=gpus, experiment_sha=cfg['_meta']['sha'], **extra)
             sync_local('artifacts', prefix, exclude=SYNC_EXCLUDE)
             put_json(prefix + '/completion.json', final)
             print(json.dumps(final), flush=True)
@@ -289,10 +371,28 @@ def main():
         if not available:
             raise RuntimeError('No validation-selected checkpoint export')
         accuracy, selected, export = max(available, key=lambda item: (item[0], item[1]))
-        export = profile.prepare_export_for_vllm(cfg['model']['local_path'], export, root / 'reload' / f'global_step_{selected}')
-        shard_step = int((root / 'checkpoints/latest_ckpt_global_step.txt').read_text())
-        shards = verify_shards(root, shard_step, gpus)
-        change = verify_export_change(cfg['model']['local_path'], export)
+        from .lora import is_adapter, keep_adapter, merge_adapter
+        if is_adapter(export):   # LoRA: keep the adapter (+ its base), evaluate a merged copy with the unchanged evaluator
+            extra['adapter'] = keep_adapter(export, root / 'reload' / f'global_step_{selected}', cfg['model']['id'], cfg['model']['revision'],
+                                            cfg['model']['local_path'])
+            change = verify_adapter_change(export)
+            merged = root / 'merged' / f'global_step_{selected}'
+            change['merge'] = merge_adapter(cfg['model']['local_path'], export, merged)
+            export = merged
+        else:
+            export = profile.prepare_export_for_vllm(cfg['model']['local_path'], export, root / 'reload' / f'global_step_{selected}')
+            change = None
+        if not save_optimizer_state(cfg):
+            shards = {'skipped': 'budget.save_optimizer_state=false: no FSDP checkpoint (optimizer state) was written'}
+        elif multi:
+            if shard_reports is None:
+                raise RuntimeError('Missing distributed checkpoint (no latest_ckpt_global_step.txt on the head)')
+            shards = verify_cluster_shards(shard_reports, nodes * gpus)
+        else:
+            shard_step = int((root / 'checkpoints/latest_ckpt_global_step.txt').read_text())
+            shards = verify_shards(root, shard_step, gpus)
+        if change is None:
+            change = verify_export_change(cfg['model']['local_path'], export)
         eval_dir = Path('artifacts/final_eval')
         eval_dir.mkdir(exist_ok=True)
         phases['eval_start'] = time.time()
@@ -316,7 +416,7 @@ def main():
         final = dict(status='completed', mode=mode, optimizer_steps=steps, stalled=stalled, selected_step=selected, validation_accuracy=accuracy,
                      validation_by_step=validation, checkpoint=shards, parameter_change=change, test=result, flips=counts, by_source=by_source,
                      phases=phases, elapsed_seconds=time.time() - begin['started_at'], gpus=gpus, experiment=cfg['name'],
-                     experiment_sha=cfg['_meta']['sha'], environment=env_spec.name, metric=env_spec.metric, model=cfg['model']['id'])
+                     experiment_sha=cfg['_meta']['sha'], environment=env_spec.name, metric=env_spec.metric, model=cfg['model']['id'], **extra)
         (eval_dir / 'result.json').write_text(json.dumps(final, indent=2))
         import wandb
         run = wandb.init(project=cfg['tracking']['project'], entity=cfg['tracking']['entity'], id=runtime['wandb_run_id'], resume='must')
@@ -339,6 +439,13 @@ def main():
         print(json.dumps(final), flush=True)
     except BaseException as error:
         failed = dict(identity, status='failed', error_type=type(error).__name__, error=str(error), failed_at=time.time(), phases=phases)
+        if rank:   # a peer never writes completion.json (the head owns the attempt's outcome) and never alerts
+            Path(f'artifacts/failure-{rank}.log').write_text(traceback.format_exc())
+            try:
+                put_json(f'{prefix}/workers/{rank}/failed.json', failed)
+            except Exception:
+                pass
+            raise
         Path('artifacts/failure.log').write_text(traceback.format_exc())
         _resume_alert(cfg, runtime, f'Run failed: {type(error).__name__}', str(error))
         try:
@@ -348,6 +455,9 @@ def main():
             pass
         raise
     finally:
+        for thread in (watcher, heartbeat):
+            if thread is not None:
+                thread.stop()
         subprocess.run([RAY, 'stop', '--force'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         os.environ.pop('WANDB_API_KEY', None)
         for secret_file in ('.modal-runtime.toml', '.litellm-key'):

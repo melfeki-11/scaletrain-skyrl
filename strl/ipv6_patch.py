@@ -75,15 +75,16 @@ PATCHES = {
 }
 
 
-def patch_tree(root: str | Path) -> None:
+def patch_tree(root: str | Path, patches: dict | None = None) -> None:
+    """Apply exact-source replacements (idempotent; refuses when the pinned source changed). Default: the IPv6 patches."""
     root = Path(root)
-    for relative, replacements in PATCHES.items():
+    for relative, replacements in (PATCHES if patches is None else patches).items():
         path = root / relative
         text = path.read_text(encoding="utf-8")
         for before, after in replacements:
             if after in text:
                 continue
             if text.count(before) != 1:
-                raise RuntimeError(f"IPv6 patch no longer applies cleanly to {relative}")
+                raise RuntimeError(f"Exact-source patch no longer applies cleanly to {relative}")
             text = text.replace(before, after, 1)
         path.write_text(text, encoding="utf-8")

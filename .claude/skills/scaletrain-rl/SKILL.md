@@ -9,7 +9,7 @@ Everything is driven by ONE experiment YAML and ONE CLI, run from the repo root 
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements-local.txt   # once (~2 min)
-.venv/bin/python -m unittest discover -s tests -t .                                                # unit, contract and golden tests (55)
+.venv/bin/python -m unittest discover -s tests -t .                                                # unit, contract and golden tests (79)
 .venv/bin/python -m strl plan experiments/mbpp-qwen35-partial.yaml --against experiments/mbpp-qwen35-binary.yaml
 ```
 
@@ -95,7 +95,7 @@ always `dry` -> `canary` before a new model/environment/reward's first real run;
 - Pinned SkyRL forwards `MODAL_TOKEN_*` into Ray if set: only `MODAL_CONFIG_PATH/PROFILE/ENVIRONMENT` are forwarded.
 - `ml-admin` cannot write `s3://scale-ml`; staging uses `production-developer`. LiteLLM on a laptop needs ambient creds to assume
   `ml-worker` (`eval "$(aws configure export-credentials --profile ml-admin --format env)"`).
-- A slice's wall-clock deadline costs `gpus/8` node-seconds; `stage` converts the ledger's node-seconds accordingly.
+- A wall-clock second costs `nodes x gpus/8` node-seconds (slices and multi-node alike); `stage` converts the ledger accordingly.
 - A canary that "completes" can still be hollow. `can-hb-b` ran 2 updates while every Harbor trial died on turn 1, because the
   context was too small. The step-2 canary rule now fails when >= 50% of GRPO groups are masked by environment failures.
   Still read the canary yourself: `environment/masked_group_fraction`, `generate/num_error_trajectories`, and for Harbor
