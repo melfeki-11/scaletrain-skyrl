@@ -337,7 +337,12 @@ class Staging(unittest.TestCase):
                       Body=json.dumps(manifest).encode())
         receipt, job = self.stage('dry', s3=s3)
         self.assertFalse(any(c[0] == 'upload_file' for c in s3.calls))
-        self.assertIn('max_concurrency=16', job['command'][2])       # 12 GB model: 16-thread multipart fetch in the pod
+        command = job['command'][2]
+        self.assertIn('max_concurrency=8', command)                  # 12 GB model: multipart fetch in the pod, 4 files at a time
+        self.assertIn('ThreadPoolExecutor(4)', command)              # 16 files x 16 parts filled a 30 GiB CPU pod's memory and stalled (dry-27b-a)
+        self.assertIn('records=[r for r in records if not', command)           # a dry run only validates configuration: no 55 GB of weights per CPU pod
+        receipt, job = self.stage('train', s3=s3)
+        self.assertNotIn('records=[r for r in records if not', job['command'][2])
         out = stage_model(str(TMP / 'exp.yaml'), attempt='fetch-q', output=str(TMP / 'fetch.json'))
         job = json.loads((TMP / 'fetch.json').read_text())
         self.assertEqual((job['preset_instance_type'], job['num_instances'], out['gpu_fraction']), ('m5.2xlarge', 1, 0.0))

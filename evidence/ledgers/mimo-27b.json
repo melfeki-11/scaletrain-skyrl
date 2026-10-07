@@ -72,6 +72,16 @@
       "gpu_fraction": 0.125,
       "nodes": 1,
       "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db3b9s4f8c4g07jrodsg",
+      "attempt": "dry-27b-b",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-07T21:09:04Z",
+      "terminal_at": "2026-10-07T21:13:18Z",
+      "gpu_fraction": 0.0,
+      "nodes": 2,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
     }
   ]
 }

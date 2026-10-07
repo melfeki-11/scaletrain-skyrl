@@ -147,14 +147,14 @@ b=s3.get_object(Bucket={bucket!r},Key={key!r})['Body'].read()
 assert hashlib.sha256(b).hexdigest()=={digest!r}
 tarfile.open(fileobj=io.BytesIO(b),mode='r:gz').extractall('.',filter='data')
 {overlay_fetch}Path({model_rel!r}).mkdir(parents=True,exist_ok=True)
-{'from boto3.s3.transfer import TransferConfig' + chr(10) + 'cfg=TransferConfig(multipart_chunksize=64<<20,max_concurrency=16)' + chr(10) if large_model else ''}def fetch(record):
+{'from boto3.s3.transfer import TransferConfig' + chr(10) + 'cfg=TransferConfig(multipart_chunksize=64<<20,max_concurrency=8)' + chr(10) if large_model else ''}def fetch(record):
  p=Path({model_rel!r})/record['name']
  s3.download_file({bucket!r},{model_prefix_ + '/'!r}+record['name'],str(p){',Config=cfg' if large_model else ''})
  h=hashlib.sha256()
  with p.open('rb') as f:
   for block in iter(lambda:f.read({'8<<20' if large_model else '1024*1024'}),b''):h.update(block)
  assert h.hexdigest()==record['sha256'],record['name']
-with ThreadPoolExecutor({16 if large_model else 4}) as pool:list(pool.map(fetch,json.loads(Path('assets/model-manifest.json').read_text())))
+{"records=json.loads(Path('assets/model-manifest.json').read_text())" + chr(10) + ("records=[r for r in records if not r['name'].endswith('.safetensors')]" + chr(10) if mode == 'dry' else '') + "with ThreadPoolExecutor(4) as pool:list(pool.map(fetch,records))" if large_model else "with ThreadPoolExecutor(4) as pool:list(pool.map(fetch,json.loads(Path('assets/model-manifest.json').read_text())))"}
 print('Verified pinned payload, model and data staging',flush=True)
 '''
     pythonpath = (f'{POD_ROOT}/assets/overlay:' if overlay is not None else '') + f'{POD_ROOT}:/workspace/src:/workspace/vendor/SkyRL:/workspace/vendor/SkyRL/skyrl-gym'
