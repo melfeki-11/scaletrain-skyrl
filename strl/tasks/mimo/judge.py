@@ -117,9 +117,11 @@ def vision_final(scores: dict[str, float]) -> float:
 def combine(request: dict, scores: dict[str, float]) -> float:
     """final = (base_score + sum_i w_i * s_i) / total_weight over the request's items. Vision requests may omit ``items``: the
     three vision keys then weigh 1/3 each with total_weight 1 and base 0 (the MiMo evaluation score)."""
+    if request.get('force_zero'):   # an in-sandbox gate failed (general: anti-tamper / required rule): never judged, never positive
+        return 0.0
     items = request.get('items')
-    if request.get('kind') == 'vision' and not items:
-        return float(request.get('base_score', 0.0)) + vision_final(scores)
+    if request.get('kind') == 'vision':   # the vision score is MiMo's fixed formula; any `items` only carry the rubric text
+        return max(0.0, min(1.0, float(request.get('base_score', 0.0)) + vision_final(scores)))
     total = float(request.get('total_weight') or 0.0)
     if total <= 0:
         raise ValueError('judge_request.total_weight must be > 0')

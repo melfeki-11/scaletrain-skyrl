@@ -1486,3 +1486,45 @@ class HonestPower(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SeamsBetweenGradersAndJudge(unittest.TestCase):
+    """Track B's real grader outputs through Track A's judge.combine (found by reading both sides, not by either track's tests)."""
+
+    def test_webdev_request_from_the_real_grader_combines_through_the_vision_formula(self):
+        from strl.tasks.mimo import judge
+        request = {
+            'kind': 'vision', 'base_score': 0.0, 'base_weight': 0.0, 'total_weight': 1.0,
+            'items': [{'id': 'webdev_rubric', 'weight': 1.0, 'question': 'full vendored rubric prompt', 'anchor': ''}],
+            'images': ['/logs/verifier/screenshot.png'], 'query': 'q', 'rubric': 'webdev_eval_v1'}
+        scores = {'visual': 0.6, 'query_fulfillment': 0.9, 'premium_assets': 0.3}
+        self.assertAlmostEqual(judge.combine(request, scores), 0.6)   # not "no judge score for items ['webdev_rubric']"
+
+    def test_force_zero_never_scores_positive(self):
+        from strl.tasks.mimo import judge
+        request = {'kind': 'rubric', 'force_zero': True, 'base_score': 0.9, 'total_weight': 1.0,
+                   'items': [{'id': 'a', 'weight': 0.1, 'question': 'q', 'answer': 'x'}]}
+        self.assertEqual(judge.combine(request, {'a': 1.0}), 0.0)
+
+    # Through the generator, with the exact request shapes Track B's graders write ------------------------------------------------
+    PNG = b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\rIHDR' + (64).to_bytes(4, 'big') * 2 + b'\x08\x02\x00\x00\x00' + b'\x00' * 16
+
+    def test_general_gate_failure_scores_zero_without_a_judge_call(self):
+        request = {**RUBRIC, 'force_zero': True, 'base_score': 0.0}
+        with tempfile.TemporaryDirectory() as temp:
+            chat = FakeChat([])
+            env = Env(temp, domain='general', judge_obj=judge.Judge(fast(), chat=chat))
+            env.queue = [fake_results(reward=0.0, trial_dir=env.trial_dir(reward_txt='0', details={'metric': 0.0, 'gate_failed': True}, request=request))]
+            out, summary = env.go(phase='train')
+            self.assertEqual((out['reward'], out['stop_reason'], summary['masked']), (0.0, 'complete', False))   # scored 0, not masked
+            self.assertEqual(len(chat.calls), 0)                                                                  # and no judge cost
+
+    def test_webdev_vision_trial_is_scored_not_masked(self):
+        request = {'kind': 'vision', 'base_score': 0.0, 'base_weight': 0.0, 'total_weight': 1.0, 'images': ['/logs/verifier/screenshot.png'],
+                   'items': [{'id': 'webdev_rubric', 'weight': 1.0, 'question': 'vendored rubric prompt', 'anchor': ''}], 'query': 'a cafe site'}
+        with tempfile.TemporaryDirectory() as temp:
+            env = Env(temp, domain='webdev', judge_obj=judge.Judge(fast(), chat=FakeChat([VISION_OK])))
+            env.queue = [fake_results(reward=0.0, trial_dir=env.trial_dir(reward_txt='0', request=request, files={'screenshot.png': self.PNG}))]
+            out, summary = env.go(phase='train')
+            self.assertEqual((out['stop_reason'], summary['masked']), ('complete', False))
+            self.assertAlmostEqual(out['reward'], (0.6 + 0.9 + 0.3) / 3)   # visual = mean of the five visual keys; MiMo eval formula

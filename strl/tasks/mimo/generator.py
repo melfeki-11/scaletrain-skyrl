@@ -250,6 +250,10 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
     metric = details.get('metric')
     metric = reward if metric is None else float(metric)
     request = files['judge_request']
+    if request is not None and request.get('force_zero') and exc not in ('ContextLengthExceededError', 'VerifierTimeoutError'):
+        reward = metric = 0.0   # a gate failed in the sandbox: reward 0 without spending a judge call (and never masked)
+        summary['judge'] = {'final': 0.0, 'scores': {}, 'rationale': 'force_zero: verifier gate failed', 'meta': {'skipped': True}}
+        request = None
     if request is not None and exc not in ('ContextLengthExceededError', 'VerifierTimeoutError'):
         if deps.judge is None:
             return _masked(trajectory_id, seconds), masked_summary(domain, name, rep, 'judge', error='no judge configured', seconds=round(seconds, 1))
