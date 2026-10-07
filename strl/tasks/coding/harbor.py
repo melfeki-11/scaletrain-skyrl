@@ -15,6 +15,7 @@ import hashlib
 import json
 from functools import wraps
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 from typing import Any
 
 from . import harness
@@ -252,8 +253,10 @@ async def run_trial(config: dict) -> dict:
     except Exception as error:
         return {'reward': None, 'exception': f'{type(error).__name__}: {error}'[:300], 'seconds': round(time.monotonic() - started, 1)}
     verifier = results.verifier_result
+    trial_uri = getattr(results, 'trial_uri', None)
     return {'reward': float(verifier.rewards['reward']) if verifier and verifier.rewards else None,
-            'exception': results.exception_info.exception_type if results.exception_info else None, 'seconds': round(time.monotonic() - started, 1)}
+            'exception': results.exception_info.exception_type if results.exception_info else None, 'seconds': round(time.monotonic() - started, 1),
+            'trial_dir': str(Path(unquote(urlparse(trial_uri).path))) if trial_uri else None}   # <trial_dir>/verifier/{reward.txt,details.json,...}
 
 
 # ------------------------------------------------------------------------------------------------------------- compat patch

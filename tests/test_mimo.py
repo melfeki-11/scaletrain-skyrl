@@ -1552,3 +1552,21 @@ class VerifierThatNeverRan(unittest.TestCase):
             env.queue = [fake_results(exc='VerifierTimeoutError', reward=None, trial_dir=env.trial_dir(reward_txt='0', details=None))]
             out, summary = env.go()
             self.assertEqual((out['stop_reason'], summary['masked'], summary['reward']), ('complete', False, 0.0))
+
+
+class VerifierRanCheck(unittest.TestCase):
+    def test_distinguishes_a_correct_zero_from_a_verifier_that_never_ran(self):
+        with tempfile.TemporaryDirectory() as temp:
+            def trial(details):
+                d = Path(temp) / f't{len(list(Path(temp).iterdir()))}'
+                (d / 'verifier').mkdir(parents=True)
+                (d / 'verifier/reward.txt').write_text('0')
+                if details is not None:
+                    (d / 'verifier/details.json').write_text(details)
+                return d
+            self.assertEqual(generator.verifier_ran(trial('{"metric": 0.0, "infra_error": false}')), (True, ''))
+            self.assertEqual(generator.verifier_ran(trial(None))[1], 'no details.json')          # reward.txt = 0, nothing else: the old bug
+            self.assertEqual(generator.verifier_ran(trial('{}'))[1], 'empty details.json')
+            self.assertTrue(generator.verifier_ran(trial('{"infra_error": true, "error": "boom"}'))[1].startswith('infra_error'))
+            self.assertIn('unreadable', generator.verifier_ran(trial('{nope'))[1])
+            self.assertEqual(generator.verifier_ran(None), (False, 'no trial dir'))

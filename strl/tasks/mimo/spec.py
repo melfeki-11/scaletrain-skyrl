@@ -256,10 +256,16 @@ class MimoSpec(CodingHarborSpec):
         template = mimo_template(cfg)
         configs = {d: coding_harbor.build_trial_config(template, t, model_name=None, api_base=None, agent_name='nop') for d, t in tasks.items()}
         results = dict(zip(configs, asyncio.run(coding_harbor._run(list(configs.values())))))
-        receipt: dict[str, Any] = {'nop': {d: {'reward': r['reward'], 'exception': r['exception'], 'seconds': r['seconds']} for d, r in results.items()}}
+        from .generator import verifier_ran
+        ran = {d: verifier_ran(r.get('trial_dir')) for d, r in results.items()}
+        receipt: dict[str, Any] = {'nop': {d: {'reward': r['reward'], 'exception': r['exception'], 'seconds': r['seconds'],
+                                               'verifier_ran': ran[d][0], 'verifier_note': ran[d][1]} for d, r in results.items()}}
         bad = {d: r for d, r in results.items() if r['reward'] is None or r['exception'] or (d not in JUDGED and r['reward'] != 0.0)}
         if bad:
             raise RuntimeError(f'Harbor nop verifier check failed: {bad}')
+        dead = {d: why for d, (ok, why) in ran.items() if not ok}   # reward 0 alone cannot tell a correct verifier from one that never ran
+        if dead:
+            raise RuntimeError(f'verifier did not run (a nop reward of 0 is not evidence): {dead}')
         selftest = judge.selftest(judge.judge_settings(cfg))
         receipt['judge'] = selftest
         if not all(v['ok'] for v in selftest.values()):

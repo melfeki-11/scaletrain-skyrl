@@ -135,6 +135,25 @@ def read_verifier(trial_dir: Path | None) -> dict:
     return out
 
 
+def verifier_ran(trial_dir: str | Path | None) -> tuple[bool, str]:
+    """(ran, why-not): the verifier left a non-empty details.json without an infra flag. A reward of 0 proves nothing about this: a verifier
+    that never ran scores exactly like a correct one on a no-op agent (the first music/general graders never ran and the nop gate passed)."""
+    if trial_dir is None:
+        return False, 'no trial dir'
+    details = Path(trial_dir) / 'verifier' / 'details.json'
+    if not details.is_file():
+        return False, 'no details.json'
+    try:
+        body = json.loads(details.read_text())
+    except ValueError as error:
+        return False, f'unreadable details.json: {error}'
+    if not isinstance(body, dict) or not body:
+        return False, 'empty details.json'
+    if body.get('infra_error'):
+        return False, f"infra_error: {str(body.get('error'))[:120]}"
+    return True, ''
+
+
 def read_artifacts(verifier_dir: Path | None, names: list[str], cap: int) -> tuple[str | None, str | None]:
     """(first non-empty text artifact truncated to ``cap`` chars, screenshot path) from the host copy of the verifier outputs."""
     if verifier_dir is None:
