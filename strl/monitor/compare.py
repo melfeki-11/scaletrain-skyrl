@@ -23,7 +23,8 @@ def _download(cfg: dict, attempt: str, dest: Path) -> Path:
     base = f"{st['prefix']}/attempts/{attempt}/artifacts"
     dest.mkdir(parents=True, exist_ok=True)
     for name, key in {'base.jsonl': 'final_eval/base.jsonl', 'candidate.jsonl': 'final_eval/candidate.jsonl', 'result.json': 'final_eval/result.json',
-                      'metrics.jsonl': f'{attempt}/metrics.jsonl', 'runtime.json': 'runtime.json'}.items():
+                      'metrics.jsonl': f'{attempt}/metrics.jsonl', 'runtime.json': 'runtime.json', 'network.json': 'network.json',
+                      'completion.json': 'completion.json', 'evaluation_timing.jsonl': f'{attempt}/evaluation_timing.jsonl'}.items():
         target = dest / name
         if not target.is_file():
             try:
@@ -63,11 +64,20 @@ def compare(specs: list[str], workdir: str | Path = 'evidence/compare', samples:
         result = json.loads((local / 'result.json').read_text()) if (local / 'result.json').is_file() else {}
         runs.append({'attempt': attempt, 'experiment': cfg['name'], 'sha': cfg['_meta']['sha'], 'base': base, 'trained': cand, 'result': result,
                      'curves': summarize_curves(_rows(local / 'metrics.jsonl')),
-                     'reward': ' + '.join(f"{c.get('weight', 1)}*{c['fn']}" for c in cfg['reward']['components']), 'model': cfg['model']['id']})
+                     'reward': ' + '.join(f"{c.get('weight', 1)}*{c['fn']}" for c in cfg['reward']['components']), 'model': cfg['model']['id'],
+                     'domainful': cfg['environment']['name'] == 'mimo'})
     report = {'runs': [], 'pairs': []}
     for r in runs:
         entry = {k: r[k] for k in ('attempt', 'experiment', 'sha', 'reward', 'model', 'curves')}
-        if r['base'] and r['trained']:
+        if r['base'] and r['trained'] and r['domainful']:   # per-domain environments: honest_power (drops masked/missing ids, resamples tasks)
+            stats = honest_power(r['base'], r['trained'], samples=samples)
+            if stats.get('macro'):
+                m = stats['macro']
+                entry['test'] = {'baseline_accuracy': m['baseline'], 'candidate_accuracy': m['candidate'], 'accuracy_delta': m['delta'],
+                                 'ci_lower': m['ci_lower'], 'ci_upper': m['ci_upper']}
+            entry.update(domains=stats['domains'], macro=stats.get('macro'), dropped=stats['dropped'], by_source=r['result'].get('by_source'),
+                         selected_step=r['result'].get('selected_step'), selection=r['result'].get('selection'))
+        elif r['base'] and r['trained']:
             entry['test'] = paired_bootstrap([x['correct'] for x in r['base']], [x['correct'] for x in r['trained']], samples=samples)
             entry['by_source'] = r['result'].get('by_source')
         entry['optimizer_steps'] = r['result'].get('optimizer_steps')
@@ -75,6 +85,12 @@ def compare(specs: list[str], workdir: str | Path = 'evidence/compare', samples:
         report['runs'].append(entry)
     for i in range(len(runs)):
         for j in range(i + 1, len(runs)):
+            if runs[i]['domainful'] and runs[j]['domainful']:   # trained vs trained per domain + macro on the shared trial ids
+                stats = honest_power(runs[i]['trained'], runs[j]['trained'], samples=samples)
+                if stats.get('domains'):
+                    report['pairs'].append({'a': runs[i]['attempt'], 'b': runs[j]['attempt'], 'examples': sum(d['trials'] for d in stats['domains'].values()),
+                                            'domains': stats['domains'], 'macro': stats.get('macro'), 'dropped': stats['dropped']})
+                continue
             a = {x['sample_id']: x['correct'] for x in runs[i]['trained']}
             b = {x['sample_id']: x['correct'] for x in runs[j]['trained']}
             ids = sorted(set(a) & set(b))
@@ -106,11 +122,46 @@ def markdown(report: dict) -> str:
                          f"{num(get('reward/avg_raw_reward'))} ({num(get('reward/avg_raw_reward', 'max'))}) | "
                          f"{num(get('eval/task_metric'))} ({num(get('eval/task_metric', 'max'))}) | {comps or '-'} | "
                          f"{num(get('timing/step'))} | {modes or '-'} |")
+    lines += domain_tables(report)
     for p in report['pairs']:
+        if 'b_minus_a' not in p:
+            continue
         d = p['b_minus_a']
         lines.append(f"\n**{p['b']} vs {p['a']}** (trained vs trained, {p['examples']} paired tasks): {100 * d['accuracy_delta']:+.2f} points "
                      f"[{100 * d['ci_lower']:+.2f}, {100 * d['ci_upper']:+.2f}]")
     return '\n'.join(lines)
+
+
+def _delta(d: dict) -> str:
+    return f"{d['delta']:+.4f} [{d['ci_lower']:+.4f}, {d['ci_upper']:+.4f}]"
+
+
+def domain_tables(report: dict) -> list[str]:
+    """mimo-style runs: per-domain base / trained / delta [CI] / n tasks / dropped (+ macro) for every run, then run-vs-run trained-vs-trained
+    paired deltas per domain and macro. Empty for single-metric environments (their tables are unchanged)."""
+    lines: list[str] = []
+    for r in report['runs']:
+        if not r.get('domains'):
+            continue
+        selection = f" (trained = step {r['selected_step']}: {r['selection']})" if r.get('selected_step') is not None else ''
+        lines += ['', f"**{r['attempt']}** per domain{selection}", '', '| domain | base | trained | delta [95% CI] | n tasks | dropped |', '| --- | --- | --- | --- | --- | --- |']
+        for name, d in r['domains'].items():
+            lines.append(f"| {name} | {d['baseline']:.4f} | {d['candidate']:.4f} | {_delta(d)} | {d['tasks']} | {d['dropped']} |")
+        m = r.get('macro')
+        if m:
+            lines.append(f"| **macro** | {m['baseline']:.4f} | {m['candidate']:.4f} | {_delta(m)} | {sum(d['tasks'] for d in r['domains'].values())} | "
+                         f"{(r.get('dropped') or {}).get('total', 0)} |")
+    for p in report['pairs']:
+        if 'domains' not in p:
+            continue
+        lines += ['', f"**{p['b']} vs {p['a']}** (trained vs trained, paired per task; delta = {p['b']} - {p['a']})", '',
+                  '| domain | A | B | B - A [95% CI] | n tasks | dropped |', '| --- | --- | --- | --- | --- | --- |']
+        for name, d in p['domains'].items():
+            lines.append(f"| {name} | {d['baseline']:.4f} | {d['candidate']:.4f} | {_delta(d)} | {d['tasks']} | {d['dropped']} |")
+        m = p.get('macro')
+        if m:
+            lines.append(f"| **macro** | {m['baseline']:.4f} | {m['candidate']:.4f} | {_delta(m)} | | {p['dropped']['total']} |")
+    return lines
 
 
 def honest_power(base: list[dict], candidate: list[dict], *, samples: int = 10000, seed: int = 29, level: float = 0.95,

@@ -33,9 +33,33 @@ def rescore(cfg: dict, env, rows: list[dict]) -> list[bool]:
     return [bool(verdicts.get(i, {}).get('failure_class') == 'ok') for i in range(len(rows))]
 
 
+def verify_in_loop(cfg: dict, attempt: str, local: Path, env) -> dict:
+    """Generic in-loop result (final_eval: false, single metric): recompute the paired statistics from the persisted base/trained rows
+    and compare them with the worker's result.json."""
+    base, cand = _rows(local / 'base.jsonl'), _rows(local / 'candidate.jsonl')
+    result = json.loads((local / 'result.json').read_text()) if (local / 'result.json').is_file() else {}
+    out = {'attempt': attempt, 'experiment': cfg['name'], 'experiment_sha': cfg['_meta']['sha'], 'environment': env.name, 'mode': 'in_loop',
+           'selected_step': result.get('selected_step'), 'selection': result.get('selection')}
+    if not base or not cand or not result.get('paired'):
+        out.update(verified=False, reasons=[f"no paired result to verify: {result.get('reason') or 'final_eval files missing'}"])
+    else:
+        stats = env.paired_result(base, cand, cfg)
+        diff = {k: (result.get('test') or {}).get(k) for k in ('baseline_accuracy', 'candidate_accuracy', 'accuracy_delta')
+                if abs(float((result.get('test') or {}).get(k, float('nan'))) - stats['test'][k]) > 1e-9}
+        out.update(test=stats['test'], worker_test=result.get('test'), flips=stats.get('flips'), disagreements=diff, verified=not diff,
+                   reasons=[f'worker {k} differs from the recomputation' for k in diff])
+    (local / 'verified-result.json').write_text(json.dumps(out, indent=2, default=str))
+    return out
+
+
 def verify(cfg: dict, attempt: str) -> dict:
     env = get_environment(cfg['environment']['name'])
     local = _download(cfg, attempt, Path('evidence') / attempt)
+    if not cfg['evaluation'].get('final_eval', True):   # in-loop paired result (mimo): independent recomputation + offline re-grading
+        if env.name == 'mimo':
+            from .tasks.mimo.results import verify_attempt
+            return verify_attempt(cfg, attempt, local, env)
+        return verify_in_loop(cfg, attempt, local, env)
     base, cand = _rows(local / 'base.jsonl'), _rows(local / 'candidate.jsonl')
     result = json.loads((local / 'result.json').read_text())
     ids = env.final_eval_ids(cfg)

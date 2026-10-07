@@ -16,6 +16,7 @@
   ledger    <exp> --attempt A --job-id J   record a terminal attempt's allocated interval in the program budget ledger
   verify    <exp> --attempt A              independent re-scoring of the final evaluation from S3
   compare   <exp>:<attempt> ...            paired comparison of finished attempts on the same held-out ids
+  report    <exp>:<attempt> ... [--no-wandb]  evidence/results/<group>-report.md (headline, per-domain, curves, infra) + a W&B report run
   eval-llm  <exp> --model M                reference eval of an external LLM with the training prompts/harness
   critic    <exp> [--n 5]                  run the LiteLLM critic on sample failures (no GPUs)
 """
@@ -236,6 +237,13 @@ def cmd_compare(a):
     print(markdown(report))
 
 
+def cmd_report(a):
+    from .monitor.report import write_reports
+    for entry in write_reports(a.runs, wandb=not a.no_wandb):
+        print(json.dumps(entry, default=str))
+        print(Path(entry['path']).read_text())
+
+
 def cmd_eval_llm(a):
     from . import evals
     cfg = _load(a.experiment)
@@ -292,6 +300,7 @@ def main(argv=None):
     s.add_argument('--ledger', help='program budget ledger (default: budget.ledger of the experiment)')
     s = sub.add_parser('verify'); s.add_argument('experiment'); s.add_argument('--attempt', required=True)
     s = sub.add_parser('compare'); s.add_argument('runs', nargs='+', help='experiment.yaml:attempt')
+    s = sub.add_parser('report'); s.add_argument('runs', nargs='+', help='experiment.yaml:attempt'); s.add_argument('--no-wandb', action='store_true')
     s = sub.add_parser('eval-llm'); s.add_argument('experiment'); s.add_argument('--model', default='openai/gpt-6-luna')
     s.add_argument('--split', default='validation'); s.add_argument('--limit', type=int, default=20); s.add_argument('--max-completion-tokens', type=int, default=4096)
     s.add_argument('--harbor', action='store_true', help='use the Harbor/Terminus-2 agent even for coding_exec tasks')
@@ -300,7 +309,7 @@ def main(argv=None):
     os.chdir(ROOT)
     {'plan': cmd_plan, 'fetch': cmd_fetch, 'prepare': cmd_prepare, 'executor': cmd_executor, 'overlay': cmd_overlay, 'capacity': cmd_capacity,
      'stage': cmd_stage, 'stage-model': cmd_stage_model, 'check-template': cmd_check_template, 'submit': cmd_submit, 'status': cmd_status, 'monitor': cmd_monitor, 'ledger': cmd_ledger, 'verify': cmd_verify,
-     'compare': cmd_compare, 'eval-llm': cmd_eval_llm, 'critic': cmd_critic}[a.cmd](a)
+     'compare': cmd_compare, 'report': cmd_report, 'eval-llm': cmd_eval_llm, 'critic': cmd_critic}[a.cmd](a)
 
 
 if __name__ == '__main__':
