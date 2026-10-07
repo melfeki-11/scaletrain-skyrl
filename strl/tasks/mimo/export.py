@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import stat
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -337,8 +338,13 @@ def build_strl_json(domain: str, row: dict, image: str, *, judge_kind: str | Non
 # ------------------------------------------------------------------- general_agent env fetch
 
 
+def _quote(path: str) -> str:
+    """Percent-encode a repo path (workspace file names carry spaces and non-ASCII characters; http.client sends ASCII only)."""
+    return urllib.parse.quote(path, safe="/")
+
+
 def _hf_list(path: str) -> list[dict]:
-    with urllib.request.urlopen(_HF_API + path, timeout=30) as resp:
+    with urllib.request.urlopen(_HF_API + _quote(path), timeout=30) as resp:
         return json.loads(resp.read())
 
 
@@ -359,7 +365,7 @@ def fetch_general_agent_env_dir(instance_id: str, env_task_dir: str, dest: Path)
                 _walk(entry["path"], out_dir / rel)
             else:
                 local_path.parent.mkdir(parents=True, exist_ok=True)
-                with urllib.request.urlopen(_HF_RESOLVE + entry["path"], timeout=60) as resp:
+                with urllib.request.urlopen(_HF_RESOLVE + _quote(entry["path"]), timeout=60) as resp:
                     local_path.write_bytes(resp.read())
 
     _walk(root, out_dir)
@@ -463,8 +469,10 @@ def _default_general_env_dir_fn(dest_root: Path):
 
 
 def export_task(row: dict, dest: Path, *, split: str, general_env_dir_fn=None) -> dict:
-    """Export one row to ``<dest>/<split>/<domain>-<instance_id>/``. Deterministic for a fixed
-    row (see module docstring re: ``MIMO_EXPORT_OFFLINE``). Returns the manifest entry."""
+    """Export one row into ``dest``, the final task directory ``<data_dir>/tasks/<split>/<domain>-<instance_id>`` (the contract in
+    strl/tasks/mimo/__init__.py; data.prepare passes exactly that). Deterministic for a fixed row (see module docstring re:
+    ``MIMO_EXPORT_OFFLINE``). Returns the manifest entry. An existing ``dest`` is replaced only if it is empty or a previous export
+    (has strl.json): a wrongly passed directory must never be deleted recursively."""
     domain = row["domain"]
     if domain not in DOMAINS:
         raise ValueError(f"unknown domain {domain!r}; expected one of {DOMAINS}")
@@ -476,8 +484,10 @@ def export_task(row: dict, dest: Path, *, split: str, general_env_dir_fn=None) -
     # the contract's background, it runs on a plain python:3.12-slim + abcmidi + tmux image.
     image = MUSIC_IMAGE if domain == "music" else image_ref(domain, instance)
 
-    task_dir = dest / split / f"{domain}-{instance_id}"
+    task_dir = dest
     if task_dir.exists():
+        if any(task_dir.iterdir()) and not (task_dir / "strl.json").is_file():
+            raise ValueError(f"refusing to replace {task_dir}: not empty and not a previous mimo export (no strl.json)")
         shutil.rmtree(task_dir)
     (task_dir / "environment").mkdir(parents=True, exist_ok=True)
 

@@ -209,7 +209,7 @@ def capture_pristine_binary(image_ref: str, *, repo_path: str = "/home/agent") -
 
     app = modal.App.lookup("mimo-export-capture", create_if_missing=True)
     image = modal.Image.from_registry(image_ref)
-    sb = modal.Sandbox.create(app=app, image=image, cpu=1, memory=1024, timeout=180, block_network=True)
+    sb = modal.Sandbox.create('sleep', 'infinity', app=app, image=image, cpu=1, memory=1024, timeout=1200, block_network=True)
     try:
         proc = sb.exec("tar", "czf", "/tmp/binary.tar.gz", "-C", repo_path, "binary")
         proc.wait()

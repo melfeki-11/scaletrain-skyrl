@@ -436,3 +436,38 @@ class ExportTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HfPathQuoting(unittest.TestCase):
+    def test_non_ascii_and_space_paths_are_percent_encoded(self):
+        """general_agent workspaces contain names like 'Budget – Q3 résumé.xlsx': a raw URL raised UnicodeEncodeError in http.client."""
+        from strl.tasks.mimo import export
+        quoted = export._quote('general/envs/x/workspace/Budget – Q3 résumé.xlsx')
+        quoted.encode('ascii')   # must be pure ASCII now
+        self.assertIn('%20', quoted)
+        self.assertTrue(quoted.startswith('general/envs/x/workspace/'))
+
+
+class DataLayerWithTheRealExporter(unittest.TestCase):
+    """Track A's data.prepare + Track B's export.export_task together (each track tested its side against a fake of the other: the
+    double-nested layout `tasks/test/<name>/test/<name>/` slipped through and broke every downstream path)."""
+
+    def test_prepare_writes_tasks_where_the_data_layer_reads_them(self):
+        from strl import experiment
+        from strl.tasks.mimo import data
+        with tempfile.TemporaryDirectory() as td:
+            cfg = experiment.load("experiments/mimo-qwen35-0p8b-smoke.yaml",
+                                  overrides=[f"run.data_dir={td}", "environment.mimo.domains={music: {train: 2, test: 2}}",
+                                                "algorithm.prompts_per_step=2", "algorithm.minibatch_prompts=2"])
+            manifest = data.prepare(cfg)
+            self.assertEqual(manifest["counts"]["train"], 2)
+            for split in ("train", "test", "canary"):
+                dirs = sorted((Path(td) / "tasks" / split).iterdir())
+                self.assertTrue(dirs, split)
+                for task in dirs:
+                    self.assertTrue((task / "strl.json").is_file(), task)          # not tasks/<split>/<name>/<split>/<name>/strl.json
+                    self.assertTrue((task / "task.toml").is_file(), task)
+            data.assert_manifest(cfg)                                              # the deep check A runs in the pod
+            with self.assertRaises(ValueError):                                    # the clobber guard
+                (Path(td) / "keep.txt").write_text("x")
+                export.export_task({"domain": "music", "instance_id": "x", "group": "g", "raw": _rows("music", limit=1)[0]}, Path(td), split="train")

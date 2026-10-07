@@ -125,6 +125,10 @@ def cmd_prepare(a):
             from .tasks.coding import executor
             print(json.dumps(executor.ensure_deployed()))
             manifest = env.prepare_data(cfg, **kwargs)
+    elif env.needs_modal:   # e.g. mimo: the exporter captures per-task state (base refs, pristine binaries) in Modal sandboxes
+        from .services.modal import local_profile
+        with local_profile(cfg['services']['modal'].get('environment', 'main')):
+            manifest = env.prepare_data(cfg)
     else:
         manifest = env.prepare_data(cfg)
     print(json.dumps({k: manifest.get(k) for k in ('counts', 'files', 'prompt_tokens', 'executor_version') if k in manifest} or

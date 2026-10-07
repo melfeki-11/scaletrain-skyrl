@@ -72,7 +72,7 @@ def build_task_image(task_dir: Path, *, app_name: str = "mimo-prebuild", timeout
     try:
         image = modal.Image.from_dockerfile(task_dir / "environment" / "Dockerfile", context_dir=task_dir / "environment")
         app = modal.App.lookup(app_name, create_if_missing=True)
-        sb = modal.Sandbox.create(app=app, image=image, cpu=1, memory=1024, timeout=120, block_network=True)
+        sb = modal.Sandbox.create('sleep', 'infinity', app=app, image=image, cpu=1, memory=1024, timeout=600, block_network=True)
         try:
             proc = sb.exec("tmux", "-V")
             tmux_version = proc.stdout.read().strip()

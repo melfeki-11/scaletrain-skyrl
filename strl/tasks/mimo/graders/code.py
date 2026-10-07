@@ -161,24 +161,38 @@ def grade(
 # ---------------------------------------------------------------------- Modal-backed helpers
 
 
-def compute_base_ref(image_ref: str, cwd: str) -> str:
+def compute_base_ref(image_ref: str, cwd: str, attempts: int = 3) -> str:
     """``git rev-parse HEAD`` in a fresh sandbox of ``image_ref`` -- the task's immutable base
     commit, captured once at export time (see ``build`` below). Requires Modal; not used by
-    unit tests, which pass ``base_ref`` directly to ``grade``."""
+    unit tests, which pass ``base_ref`` directly to ``grade``.
+
+    The sandbox lifetime counts from creation and these images are ~3 GB: with a short lifetime the pull alone consumed it and the
+    first exec failed with "Sandbox is shutting down" (seen on real code tasks), so the lifetime covers the pull and a failed
+    attempt is retried."""
     import modal
 
     app = modal.App.lookup("mimo-export-capture", create_if_missing=True)
-    image = modal.Image.from_registry(image_ref)
-    sb = modal.Sandbox.create(app=app, image=image, cpu=1, memory=2048, timeout=180, block_network=True)
-    try:
-        proc = sb.exec("git", "rev-parse", "HEAD", workdir=cwd)
-        out = proc.stdout.read().strip()
-        proc.wait()
-        if proc.returncode != 0 or len(out) != 40:
-            raise RuntimeError(f"compute_base_ref: 'git rev-parse HEAD' failed in {image_ref}:{cwd}: {out!r}")
-    finally:
-        sb.terminate()
-    return out
+    last: Exception | None = None
+    for _ in range(attempts):
+        sb = None
+        try:
+            image = modal.Image.from_registry(image_ref)
+            sb = modal.Sandbox.create('sleep', 'infinity', app=app, image=image, cpu=1, memory=4096, timeout=1200, block_network=True)   # explicit entrypoint: the image's own CMD exits (status 128)
+            proc = sb.exec("git", "rev-parse", "HEAD", workdir=cwd)
+            out = proc.stdout.read().strip()
+            proc.wait()
+            if proc.returncode != 0 or len(out) != 40:
+                raise RuntimeError(f"compute_base_ref: 'git rev-parse HEAD' failed in {image_ref}:{cwd}: {out!r}")
+            return out
+        except Exception as error:   # transient sandbox lifecycle errors (ConflictError, shutting down) are retried
+            last = error
+        finally:
+            if sb is not None:
+                try:
+                    sb.terminate()
+                except Exception:
+                    pass
+    raise RuntimeError(f"compute_base_ref failed after {attempts} attempts for {image_ref}: {type(last).__name__}: {last}")
 
 
 def screen_task(row: dict, *, run_fn) -> dict[str, Any]:
