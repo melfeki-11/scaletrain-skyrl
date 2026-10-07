@@ -33,3 +33,18 @@ Judge hand-off (generator.py + judge.py, OUTSIDE the sandbox; the judge key neve
 Trial template per task = base template (strl/tasks/coding/harbor.py trial_template) overridden by strl.json (agent, max_turns,
 max_tokens) and task.toml; NO global override_* keys. Terminus-2 tasks use the default agent; SingleShotAgent makes exactly one
 policy call and writes the reply to the first artifact path, with metadata["n_episodes"] = 1.
+
+Python API (export.py, track B)
+  DOMAINS = ("music", "cyber", "code", "general", "webdev")
+  image_ref(domain, instance_json: dict) -> str          docker.io/xiaomimimo/mimo-v2.6-rl-oss:<tag> via image-mapping.jsonl
+  export_task(row: dict, dest: Path, *, split: str) -> dict
+        row = {"domain", "instance_id", "group", "raw": <parquet row as dict; extra_info.instance_json is a JSON string>}
+        returns the manifest entry {"task_dir", "domain", "instance_id", "group", "image", "tree_sha256"}; deterministic (same row =>
+        byte-identical dir). Tasks are written under dest = <data_dir>/tasks/<split>/<domain>-<instance_id>.
+  graders/<domain>.py   build(row, task_dir) writes tests/ files; each grader also exposes grade(workdir, ...) used by unit tests
+Data API (data.py, track A)
+  load_pool(domain) -> list[row]; build_selection(cfg) -> {"train": [row], "test": [row], "canary": [row]} with fixed grouped test
+  sets per domain (hash-pinned in <data_dir>/manifest.json); prepare(cfg) calls export_task for every selected row.
+Eval repetitions: the exported dataset lists a test task `eval_repeats` times with env_extras.rep = 0..n-1 (SkyRL's step-wise eval
+dump has no per-sample index), so eval_n_samples_per_prompt stays 1 and identity = (task_dir name, rep).
+"""
