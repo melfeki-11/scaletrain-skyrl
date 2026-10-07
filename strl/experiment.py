@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -42,17 +43,19 @@ SCHEMA: dict[str, Any] = {
         'eval_temperature': (int, float),
     },
     'inference': {'tensor_parallel_size': int, 'gpu_memory_utilization': (int, float), 'max_num_seqs': int, 'enforce_eager': bool,
-                  'max_env_workers': int},
+                  'max_env_workers': int, 'num_engines': int, 'max_num_batched_tokens': int, 'engine_init_kwargs': dict},
+    'finetune': {'mode': str, 'lora': dict},
     'evaluation': {
         'interval_steps': int, 'checkpoint_interval_steps': int, 'max_checkpoints': int, 'eval_batch_size': int,
         'fixed_qualitative_samples': int, 'training_groups_to_log': int, 'bootstrap_samples': int, 'bootstrap_seed': int,
         'ci_level': (int, float), 'eval_shards_per_model': int, 'final_eval': bool,
     },
     'compute': {'nodes': int, 'gpus_per_node': int, 'instance_type': str, 'team': str, 'product': str, 'priority': str,
-                'allow_borrowing': bool, 'image': str},
+                'allow_borrowing': bool, 'image': str, 'training': dict},
     'runtime': {'skyrl_commit': str, 'python': str},
     'budget': {'total_seconds': int, 'attempt_max_seconds': int, 'bootstrap_margin_seconds': int,
-               'final_eval_reserve_seconds': int, 'canary_max_seconds': int, 'stall_seconds': int, 'ledger': str},
+               'final_eval_reserve_seconds': int, 'canary_max_seconds': int, 'stall_seconds': int, 'ledger': str,
+               'save_optimizer_state': bool},
     'tracking': {'base_url': str, 'entity': str, 'project': str, 'group': str, 'credentials_uri': str, 'tags': list, 'critic': None,
                  'alerts': bool},
     'storage': {'bucket': str, 'prefix': str, 'profile': str, 'region': str},
@@ -60,8 +63,57 @@ SCHEMA: dict[str, Any] = {
     'run': {'data_dir': str, 'artifact_dir': str},
     'services': {'modal': None, 'litellm': None},
 }
+# Scaling knobs. Defaults live here (not in the resolved config), so experiments that do not set them keep their sha and
+# render exactly the SkyRL overrides they always did.
+FINETUNE_DEFAULTS = {'mode': 'full', 'lora': {'rank': 0, 'alpha': 16, 'dropout': 0.0, 'target_modules': 'all-linear', 'exclude_modules': None}}
+LORA_TYPES = {'rank': int, 'alpha': int, 'dropout': (int, float), 'target_modules': (str, list), 'exclude_modules': (str, type(None))}
+TRAINING_DEFAULTS = {'fsdp_size': None, 'cpu_offload': False, 'reshard_after_forward': True, 'reduce_dtype': 'fp32',
+                     'max_tokens_per_microbatch': None, 'gradient_checkpointing': True}
+TRAINING_TYPES = {'fsdp_size': (int, type(None)), 'cpu_offload': bool, 'reshard_after_forward': bool, 'reduce_dtype': str,
+                  'max_tokens_per_microbatch': (int, type(None)), 'gradient_checkpointing': bool}
+
+
+def finetune(cfg: dict) -> dict:
+    """The experiment's finetune section with defaults (mode full; LoRA settings only meaningful in lora mode)."""
+    raw = cfg.get('finetune') or {}
+    return {'mode': raw.get('mode', 'full'), 'lora': {**FINETUNE_DEFAULTS['lora'], **(raw.get('lora') or {})}}
+
+
+def training(cfg: dict) -> dict:
+    """compute.training with defaults (fsdp_size None = full shard over every GPU)."""
+    return {**TRAINING_DEFAULTS, **(cfg['compute'].get('training') or {})}
+
+
+def save_optimizer_state(cfg: dict) -> bool:
+    return bool(cfg['budget'].get('save_optimizer_state', True))
+
+
 REQUIRED_SECTIONS = ('model', 'environment', 'reward', 'algorithm', 'inference', 'evaluation', 'compute', 'runtime',
                      'budget', 'tracking', 'storage', 'limits', 'run')
+
+
+def parse_override(text: str) -> tuple[list[str], Any]:
+    """'a.b.c=value' -> (['a', 'b', 'c'], YAML-parsed value)."""
+    key, sep, value = text.partition('=')
+    if not sep or not key.strip() or any(not part for part in key.strip().split('.')):
+        raise ExperimentError([f'--set expects KEY=VALUE with a dotted key, got {text!r}'])
+    parsed = yaml.safe_load(value) if value.strip() else ''
+    if isinstance(parsed, str) and re.fullmatch(r'[-+]?(\d+\.?\d*|\.\d+)[eE][-+]?\d+', parsed.strip()):
+        parsed = float(parsed)   # YAML 1.1 reads 3e-5 as a string
+    return key.strip().split('.'), parsed
+
+
+def apply_overrides(raw: dict, overrides: list[str]) -> dict:
+    out = copy.deepcopy(raw)
+    for text in overrides:
+        path, value = parse_override(text)
+        node = out
+        for part in path[:-1]:
+            if not isinstance(node.get(part), dict):
+                node[part] = {}
+            node = node[part]
+        node[path[-1]] = value
+    return out
 
 
 def deep_merge(base: dict, override: dict) -> dict:
@@ -151,7 +203,8 @@ def _absolutize(cfg: dict, root: Path) -> None:
 def derive_placement(cfg: dict) -> dict:
     gpus = cfg['compute']['nodes'] * cfg['compute']['gpus_per_node']
     tp = cfg['inference']['tensor_parallel_size']
-    return {'world_size': gpus, 'num_engines': gpus // tp if tp and gpus % tp == 0 else 0,
+    engines = cfg['inference'].get('num_engines') or (gpus // tp if tp and gpus % tp == 0 else 0)
+    return {'world_size': gpus, 'num_engines': engines,
             'rollouts_per_step': cfg['algorithm']['prompts_per_step'] * cfg['algorithm']['n_samples']}
 
 
@@ -203,6 +256,7 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
         problems.append('algorithm.lr must be positive')
     if c['priority'] not in {'high', 'normal', 'low'}:
         problems.append('compute.priority must be high, normal or low')
+    problems += _scaling_problems(cfg, gpus)
     components = cfg['reward']['components']
     if not components or not all(isinstance(x, dict) and 'fn' in x for x in components):
         problems.append('reward.components must be a non-empty list of {fn, weight, ...params}')
@@ -226,9 +280,57 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
         raise ExperimentError(problems)
 
 
-def load(path: str | Path, *, check_registries: bool = True) -> dict:
+def _scaling_problems(cfg: dict, gpus: int) -> list[str]:
+    """finetune / compute.training / inference scaling knobs (types, ranges, divisibility)."""
+    problems = []
+    ft = cfg.get('finetune') or {}
+    mode = ft.get('mode', 'full')
+    if mode not in {'full', 'lora'}:
+        problems.append(f'finetune.mode must be full or lora, got {mode!r}')
+    lora = ft.get('lora') or {}
+    for key, value in lora.items():
+        if key not in LORA_TYPES:
+            problems.append(f'unknown key finetune.lora.{key} (allowed: {sorted(LORA_TYPES)})')
+        elif not _type_ok(value, LORA_TYPES[key]) and not (type(None) in LORA_TYPES[key] and value is None):
+            problems.append(f'finetune.lora.{key} has the wrong type: {value!r}')
+    rank = lora.get('rank', 0)
+    if isinstance(rank, int) and not isinstance(rank, bool):
+        if mode == 'lora' and rank <= 0:
+            problems.append('finetune.mode lora needs finetune.lora.rank > 0')
+        if mode == 'full' and rank > 0:
+            problems.append('finetune.lora.rank > 0 is only valid with finetune.mode: lora')
+    if isinstance(lora.get('dropout', 0.0), (int, float)) and not 0 <= lora.get('dropout', 0.0) < 1:
+        problems.append('finetune.lora.dropout must be in [0, 1)')
+    tr = cfg['compute'].get('training') or {}
+    for key, value in tr.items():
+        if key not in TRAINING_TYPES:
+            problems.append(f'unknown key compute.training.{key} (allowed: {sorted(TRAINING_TYPES)})')
+        elif not (_type_ok(value, TRAINING_TYPES[key]) or (value is None and type(None) in TRAINING_TYPES[key])):
+            problems.append(f'compute.training.{key} has the wrong type: {value!r}')
+    fsdp = tr.get('fsdp_size')
+    if isinstance(fsdp, int) and not isinstance(fsdp, bool) and (fsdp < 1 or gpus % fsdp):
+        problems.append(f'compute.training.fsdp_size={fsdp} must be a positive divisor of the {gpus} GPUs (null = full shard)')
+    if tr.get('reduce_dtype', 'fp32') not in {'fp32', 'bf16'}:
+        problems.append('compute.training.reduce_dtype must be fp32 or bf16')
+    micro = tr.get('max_tokens_per_microbatch')
+    if isinstance(micro, int) and not isinstance(micro, bool) and micro < 1:
+        problems.append('compute.training.max_tokens_per_microbatch must be positive (null = sample-count micro-batches)')
+    inf = cfg['inference']
+    tp = inf['tensor_parallel_size']
+    if 'num_engines' in inf and inf['num_engines'] * tp != gpus:
+        problems.append(f'inference.num_engines={inf["num_engines"]} x tensor_parallel_size={tp} must equal the {gpus} colocated GPUs')
+    if 'max_num_batched_tokens' in inf and inf['max_num_batched_tokens'] < 1:
+        problems.append('inference.max_num_batched_tokens must be positive')
+    return problems
+
+
+def load(path: str | Path, *, check_registries: bool = True, overrides: list[str] | None = None) -> dict:
+    """Resolve, apply ``--set`` overrides (dotted KEY=VALUE, YAML-parsed, recorded in _meta and the sha), fill defaults, validate."""
     raw = resolve(path)
     chain = raw.pop('_chain')
+    overrides = list(overrides or [])
+    if overrides:
+        raw = apply_overrides(raw, overrides)
     raw.setdefault('name', Path(path).stem)
     cfg = copy.deepcopy(raw)
     problems = check_schema(cfg)
@@ -250,13 +352,17 @@ def load(path: str | Path, *, check_registries: bool = True) -> dict:
     cfg['budget'].setdefault('ledger', 'evidence/budget-ledger.json')
     validate(cfg, check_registries=check_registries)
     cfg['derived'] = derive_placement(cfg)
-    cfg['_meta'] = {'chain': chain, 'sha': experiment_sha(cfg), 'repo_root': str(REPO_ROOT)}
+    cfg['_meta'] = {'chain': chain, 'sha': experiment_sha(cfg, overrides), 'repo_root': str(REPO_ROOT)}
+    if overrides:
+        cfg['_meta']['overrides'] = overrides
     return cfg
 
 
-def experiment_sha(cfg: dict) -> str:
+def experiment_sha(cfg: dict, overrides: list[str] | None = None) -> str:
     """Content hash of the resolved experiment (paths made repo-relative so it is machine independent)."""
     payload = {k: v for k, v in cfg.items() if not k.startswith('_') and k != 'derived'}
+    if overrides:
+        payload['_overrides'] = list(overrides)
     text = json.dumps(payload, sort_keys=True, default=str).replace(str(REPO_ROOT), '<REPO>')
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 

@@ -1,0 +1,15 @@
+# Applied by `strl stage <experiment> --mode canary` instead of canary_overlay.yaml when the experiment is multi-node or its model
+# does not fit on one GPU (strl.derive estimate). Same as canary_overlay.yaml (small batch, 2 updates, no final eval, critic
+# table exercised) but it KEEPS compute.nodes / gpus_per_node and the experiment's inference settings (TP, memory utilisation),
+# so the canary exercises the real placement: rendezvous, cross-host NCCL, FSDP layout, per-host LoRA sync, TP engines.
+algorithm:
+  prompts_per_step: 8         # 8 x 4 = 32 rollouts: 2 per GPU on 2 x 8 H100
+  minibatch_prompts: 8
+  n_samples: 4                # capped at the experiment's own n_samples
+  micro_train_per_gpu: 1
+  micro_forward_per_gpu: 1
+evaluation:
+  final_eval: false
+  eval_shards_per_model: 0
+tracking:
+  critic: {every_n_steps: 1, max_rows: 4}

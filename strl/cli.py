@@ -1,12 +1,14 @@
 """strl: one CLI for the whole experiment lifecycle. Run from the repo root with the local control venv (.venv).
 
-  plan      <exp> [--against <exp>]        resolve, validate, derive infra, estimate time/cost, print decision-point warnings
+  plan      <exp> [--against <exp>] [--set K=V] [--network network.json]
+                                           resolve, validate, derive infra + layout, estimate time/cost/memory, print warnings
   fetch     <exp>                          download the pinned model + router wheel, then prepare the environment's data
   prepare   <exp>                          (re)build the environment's data only (coding: validates references in Modal)
   executor  deploy|check                   the Modal code executor used by coding rewards
   overlay                                  build assets/overlay (Modal/Harbor packages for the training image)
   capacity  [--gpus-per-node 8,4,2,1]      read-only ScaleTrain/EKS capacity by team and borrowing route
-  stage     <exp> --attempt A --mode dry|canary|train      upload assets + render job.json (never submits)
+  stage     <exp> --attempt A --mode dry|canary|train [--set K=V]  upload assets + render job.json (never submits)
+  stage-model <exp> --attempt A            render a CPU job that downloads the model in a pod and uploads it to S3 (large models)
   submit    <job.json> [--user-id U]       submit once; receipt written before the POST
   status    <job_id> | --list              job state
   monitor   <exp> --attempt A [--job-id J] live status line + alerts until the attempt finishes
@@ -30,10 +32,10 @@ ROOT = Path(__file__).resolve().parents[1]
 USER = os.environ.get('STRL_SCALETRAIN_USER', 'mohamed.elfeki')
 
 
-def _load(path: str) -> dict:
+def _load(path: str, overrides: list[str] | None = None) -> dict:
     from .experiment import ExperimentError, load
     try:
-        return load(path)
+        return load(path, overrides=overrides)
     except ExperimentError as error:
         print(f'experiment {path} is invalid:\n{error}', file=sys.stderr)
         raise SystemExit(2)
@@ -42,8 +44,8 @@ def _load(path: str) -> dict:
 def cmd_plan(a):
     from .derive import plan
     from .experiment import diff
-    cfg = _load(a.experiment)
-    report = plan(cfg)
+    cfg = _load(a.experiment, a.set)
+    report = plan(cfg, json.loads(Path(a.network).read_text()) if a.network else None)
     if a.against:
         report['diff_vs'] = {a.against: [{'key': k, 'from': x, 'to': y} for k, x, y in diff(_load(a.against), cfg)]}
     if a.json:
@@ -59,17 +61,25 @@ def cmd_plan(a):
           f"{e['node_hours']:.2f} node-h; memory train {e['memory']['training_phase_gb']} GB / rollout {e['memory']['rollout_phase_gb']} GB "
           f"(fits={e['memory']['fits']}); from profile {e['profile']}"
           + ("" if e.get('calibrated') else " (UNCALIBRATED: different environment/model; the canary measures the real step time)"))
+    lay, mem = report['layout'], e['memory']
+    print(f"  layout       {lay['mode']} | FSDP group {lay['fsdp_group']} x {lay['replicas']} replica(s), cpu_offload={lay['cpu_offload']} | "
+          f"vLLM TP{lay['tp']} x {lay['engines']} engine(s) | per-GPU train {lay['train_gb_per_gpu']} GB, rollout {lay['rollout_gb_per_gpu']} GB "
+          f"(weights {mem['engine_weights_gb']}, KV room {mem['kv_room_gb']})"
+          + (f", LoRA {mem['lora_params_m']}M params" if mem['lora_params_m'] else '') + f"; recommended: {lay['recommended']['reason']}")
     print(f"  monitoring   {report['monitoring']['wandb']}  critic={report['monitoring']['critic']}")
     ledger_path = Path(cfg['budget'].get('ledger') or '')
     if ledger_path.is_file():   # the program budget the next stage would draw from (node-seconds)
         from .budget import remaining_seconds
         ledger = json.loads(ledger_path.read_text())
         left = remaining_seconds(ledger['attempts'], ledger['total_seconds'])
-        frac = cfg['compute']['nodes'] * cfg['compute']['gpus_per_node'] / 8
-        train = int(frac * cfg['budget']['attempt_max_seconds'])
-        canary = int(min(3600, cfg['budget']['canary_max_seconds'] + 600) / 8)
+        from .budget import node_fraction
+        from .stage import CANARY_OVERLAY, canary_overlay_for
+        train = int(node_fraction(cfg) * cfg['budget']['attempt_max_seconds'])
+        small = canary_overlay_for(cfg) == CANARY_OVERLAY
+        canary = int(min(3600, cfg['budget']['canary_max_seconds'] + 600) * (1 / 8 if small else node_fraction(cfg)))
+        shape = '1-GPU' if small else '{}x{}-GPU'.format(cfg['compute']['nodes'], cfg['compute']['gpus_per_node'])
         print(f"  budget       {ledger_path}: {left} of {ledger['total_seconds']} node-s left; a train attempt reserves up to "
-              f"{train} node-s, a 1-GPU canary up to {canary} ({len(ledger['attempts'])} attempts recorded)")
+              f"{train} node-s, a {shape} canary up to {canary} ({len(ledger['attempts'])} attempts recorded)")
     for w in report['warnings']:
         print(f'  ! {w}')
     for k, rows in report.get('diff_vs', {}).items():
@@ -140,11 +150,20 @@ def cmd_capacity(a):
 def cmd_stage(a):
     from .stage import stage
     receipt = stage(a.experiment, attempt=a.attempt, mode=a.mode, team=a.team, allow_borrowing=a.allow_borrowing, ledger=a.ledger,
-                    output=a.output or f'evidence/{a.attempt}/job.json')
+                    output=a.output or f'evidence/{a.attempt}/job.json', overrides=a.set)
     Path(f'evidence/{a.attempt}').mkdir(parents=True, exist_ok=True)
     Path(f'evidence/{a.attempt}/stage.json').write_text(json.dumps(receipt, indent=2))
     print(json.dumps(receipt, indent=1))
     print(f"\nnext: python -m strl submit {receipt['job_file']}")
+
+
+def cmd_stage_model(a):
+    from .stage import stage_model
+    receipt = stage_model(a.experiment, attempt=a.attempt, team=a.team, output=a.output or f'evidence/{a.attempt}/job.json', overrides=a.set)
+    Path(f'evidence/{a.attempt}').mkdir(parents=True, exist_ok=True)
+    Path(f'evidence/{a.attempt}/stage.json').write_text(json.dumps(receipt, indent=2))
+    print(json.dumps(receipt, indent=1))
+    print(f"\nnext: python -m strl submit {receipt['job_file']}  (CPU; then stage the experiment: it reads {receipt['manifest']})")
 
 
 def _scaletrain(*args) -> subprocess.CompletedProcess:
@@ -188,6 +207,7 @@ def cmd_ledger(a):
     stage_receipt = json.loads(Path(f'evidence/{a.attempt}/stage.json').read_text())
     entry = {'job_id': a.job_id, 'attempt': a.attempt, 'status': job['status'], 'allocated_at': str(job['created_at']).replace(' ', 'T')[:19] + 'Z',
              'terminal_at': a.terminal_at or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'gpu_fraction': stage_receipt['gpu_fraction'],
+             'nodes': int(stage_receipt.get('nodes', 1)),
              'evidence': 'conservative: job created_at to first terminal observation (includes queue/pod start)'}
     ledger['attempts'].append(entry)
     ledger_path.write_text(json.dumps(ledger, indent=2) + '\n')
@@ -240,6 +260,8 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog='python -m strl', description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='cmd', required=True)
     s = sub.add_parser('plan'); s.add_argument('experiment'); s.add_argument('--against'); s.add_argument('--json', action='store_true')
+    s.add_argument('--set', action='append', default=[], metavar='KEY=VALUE', help='dotted experiment override, YAML value (repeatable)')
+    s.add_argument('--network', help="a probe result (an attempt's artifacts/network.json) for the layout recommendation")
     s = sub.add_parser('fetch'); s.add_argument('experiment')
     s = sub.add_parser('prepare'); s.add_argument('experiment')
     s = sub.add_parser('executor'); s.add_argument('action', choices=['deploy', 'check']); s.add_argument('--environment', default='main')
@@ -249,6 +271,9 @@ def main(argv=None):
     s = sub.add_parser('stage'); s.add_argument('experiment'); s.add_argument('--attempt', required=True)
     s.add_argument('--mode', choices=['dry', 'canary', 'train'], required=True); s.add_argument('--team'); s.add_argument('--allow-borrowing', action='store_true')
     s.add_argument('--output'); s.add_argument('--ledger', help='program budget ledger (default: budget.ledger of the experiment)')
+    s.add_argument('--set', action='append', default=[], metavar='KEY=VALUE', help='dotted experiment override, YAML value (repeatable)')
+    s = sub.add_parser('stage-model'); s.add_argument('experiment'); s.add_argument('--attempt', required=True); s.add_argument('--team')
+    s.add_argument('--output'); s.add_argument('--set', action='append', default=[], metavar='KEY=VALUE')
     s = sub.add_parser('submit'); s.add_argument('job'); s.add_argument('--user-id', default=USER); s.add_argument('--receipt')
     s = sub.add_parser('status'); s.add_argument('job_id', nargs='?'); s.add_argument('--list', action='store_true'); s.add_argument('--user-id', default=USER)
     s = sub.add_parser('monitor'); s.add_argument('experiment'); s.add_argument('--attempt', required=True); s.add_argument('--job-id')
@@ -265,7 +290,7 @@ def main(argv=None):
     a = p.parse_args(argv)
     os.chdir(ROOT)
     {'plan': cmd_plan, 'fetch': cmd_fetch, 'prepare': cmd_prepare, 'executor': cmd_executor, 'overlay': cmd_overlay, 'capacity': cmd_capacity,
-     'stage': cmd_stage, 'submit': cmd_submit, 'status': cmd_status, 'monitor': cmd_monitor, 'ledger': cmd_ledger, 'verify': cmd_verify,
+     'stage': cmd_stage, 'stage-model': cmd_stage_model, 'submit': cmd_submit, 'status': cmd_status, 'monitor': cmd_monitor, 'ledger': cmd_ledger, 'verify': cmd_verify,
      'compare': cmd_compare, 'eval-llm': cmd_eval_llm, 'critic': cmd_critic}[a.cmd](a)
 
 

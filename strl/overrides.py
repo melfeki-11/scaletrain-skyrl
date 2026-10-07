@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from . import models
+from .experiment import finetune, save_optimizer_state, training
 from .tasks import get_environment
 
 
@@ -22,6 +23,50 @@ def encode(value: Any) -> str:
     if isinstance(value, str):
         return value
     return repr(value)
+
+
+def flatten_kwargs(prefix: str, value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return {k: v for key, item in value.items() for k, v in flatten_kwargs(f'{prefix}.{key}', item).items()}
+    return {prefix: value}
+
+
+def scaling_values(cfg: dict[str, Any], steps: int) -> dict[str, Any]:
+    """finetune / compute.training / inference / budget scaling knobs -> SkyRL keys, rendered ONLY when they differ from the
+    defaults (so existing experiments keep their exact override set). LoRA on the vLLM side needs no extra keys: pinned SkyRL
+    enables it (enable_lora, max_lora_rank) from trainer.policy.model.lora.rank."""
+    out: dict[str, Any] = {}
+    ft, tr, inf = finetune(cfg), training(cfg), cfg['inference']
+    if ft['mode'] == 'lora':
+        lora = ft['lora']
+        out.update({'trainer.policy.model.lora.rank': lora['rank'], 'trainer.policy.model.lora.alpha': lora['alpha'],
+                    'trainer.policy.model.lora.dropout': float(lora['dropout']),
+                    'trainer.policy.model.lora.target_modules': lora['target_modules']})
+        if lora['exclude_modules']:
+            out['trainer.policy.model.lora.exclude_modules'] = lora['exclude_modules']
+    for role in ('policy', 'ref'):
+        fsdp = f'trainer.{role}.fsdp_config'
+        if tr['fsdp_size'] is not None:
+            out[f'{fsdp}.fsdp_size'] = tr['fsdp_size']
+        if tr['cpu_offload']:
+            out[f'{fsdp}.cpu_offload'] = True
+        if not tr['reshard_after_forward']:
+            out[f'{fsdp}.reshard_after_forward'] = False
+        if tr['reduce_dtype'] != 'fp32':
+            out.update({f'{fsdp}.mixed_precision.param_dtype': 'bf16', f'{fsdp}.mixed_precision.reduce_dtype': tr['reduce_dtype'],
+                        f'{fsdp}.mixed_precision.buffer_dtype': 'fp32'})
+    if tr['max_tokens_per_microbatch'] is not None:
+        out['trainer.max_tokens_per_microbatch'] = tr['max_tokens_per_microbatch']
+    if not tr['gradient_checkpointing']:
+        out['trainer.gradient_checkpointing'] = False
+    if 'max_num_batched_tokens' in inf:
+        out['generator.inference_engine.max_num_batched_tokens'] = inf['max_num_batched_tokens']
+    out.update(flatten_kwargs('generator.inference_engine.engine_init_kwargs', inf.get('engine_init_kwargs') or {}))
+    if not save_optimizer_state(cfg):
+        # no FSDP checkpoints (they always carry optimizer shards) and exactly one HF export: at max_training_steps, or at the
+        # deadline stop through the trainer's end-of-training save (runtime.NO_OPTIMIZER_CHECKPOINT keeps the forced save off)
+        out.update({'trainer.ckpt_interval': -1, 'trainer.hf_save_interval': steps})
+    return out
 
 
 def skyrl_values(cfg: dict[str, Any], *, stage: str, run_name: str, learning_rate: float | None = None,
@@ -110,6 +155,7 @@ def skyrl_values(cfg: dict[str, Any], *, stage: str, run_name: str, learning_rat
         **profile.generator_overrides(cfg),
         **env.skyrl_overrides(cfg, stage),
     })
+    values.update(scaling_values(cfg, steps))
     return values
 
 
