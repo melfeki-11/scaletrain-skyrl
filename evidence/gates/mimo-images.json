@@ -1,0 +1,44 @@
+{
+  "note": "Real Modal builds, 2026-10-06, Modal environment 'main', AWS profile production-developer for credential fetch only. Each build used strl.tasks.mimo.export.build_dockerfile() for the given domain + a real task image. app=mimo-gate-canary.",
+  "results": [
+    {
+      "domain": "music",
+      "image": "python:3.12-slim",
+      "seconds": 67.3,
+      "ok": true,
+      "tmux_version": "tmux 3.4",
+      "note": "static tmux (built from source in the Alpine stage) + abcmidi via apt. abc2midi verified separately to run and produce a valid MIDI file inside this exact image (see mimo-music.json)."
+    },
+    {
+      "domain": "cyber",
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-35858",
+      "seconds": 118.9,
+      "ok": true,
+      "tmux_version": "tmux 3.4",
+      "note": "Ubuntu 20.04 base; confirmed /home/agent/{binary,src,submit.sh} present as probed. Static tmux works cross-distro (glibc Ubuntu 20.04, built in an Alpine/musl stage)."
+    },
+    {
+      "domain": "webdev",
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:webdev-rl-opensource",
+      "seconds": 201.0,
+      "ok": true,
+      "tmux_version": "tmux 3.4",
+      "note": "The published image ALREADY ships node 20 + playwright + a launchable chromium (`sync_playwright().start().chromium.launch()` succeeds out of the box) -- confirmed directly. export.py's playwright-install line was changed to probe-then-skip so it does not force a reinstall over a working preinstall (a forced `playwright==1.47.0` reinstall risked a python-package / already-downloaded-browser version mismatch)."
+    },
+    {
+      "domain": "general",
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:general-agent-env-0",
+      "seconds": 97.1,
+      "ok": true,
+      "tmux_version": "tmux 3.4",
+      "note": "Debian 12 (bookworm) base. Full MCP sidecar architecture verified end-to-end for real: all 15 MCP tool servers (from the fetched HF env dir for s3k_2076_legal_compliance_en_t5_rl_009) started under the low-privilege mcpsvc user via the ENTRYPOINT, listened on 39101-39115, and /usr/local/bin/mcp (our stdlib CLI wrapper) successfully called a real tool through the real MCP streamable-http protocol and got a real application-level response ('provide at least one matter filter')."
+    }
+  ],
+  "bugs_found_and_fixed_during_these_builds": [
+    "images.py / cyber.py / code.py all used `with modal.Sandbox.create(...) as sb:` -- modal.Sandbox does not support the context manager protocol in the pinned SDK; switched to sb = Sandbox.create(...); try/finally: sb.terminate().",
+    "Alpine's bison and byacc apk packages conflict (both provide cmd:yacc) -- dropped byacc from the static-tmux build stage.",
+    "The published general-agent-env-0 image ships `mcp` 2.2.0, whose `mcp.server.fastmcp.FastMCP` was renamed/restructured in `mcp.server.mcpserver.MCPServer`; the fetched env dir's mcp_http.py (authored against mcp 1.x) crashed on import. Pinned `mcp<2` in the general Dockerfile; confirmed mcp 1.x's `mcp.client.streamable_http.streamable_http_client` (the client API our mcp_cli.py uses) is present under BOTH 1.x and 2.x, so one pin satisfies server and client.",
+    "`pip install mcp` installs its OWN `mcp` console-script (needs `typer`, not pulled in by our pin) at /usr/local/bin/mcp, clobbering our CLI wrapper if COPY'd before the pip install; reordered the Dockerfile so our wrapper is copied AFTER the pip install."
+  ],
+  "modal_usd_estimate": "all CPU-only (1-2 cores, 1-4 GiB), short-lived sandboxes (<=4 min each), roughly a dozen builds/sandboxes total; well under $2 of the $25 budget."
+}

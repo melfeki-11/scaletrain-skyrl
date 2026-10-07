@@ -1,0 +1,21 @@
+{
+  "domain": "cyber",
+  "nop": {
+    "n": 1,
+    "all_zero_no_infra": true,
+    "bad": [],
+    "results": [{"reward": 0.0, "exception": null, "seconds": 10.0}],
+    "note": "Real Harbor Trial path (strl.tasks.coding.harbor.run_trial, agent=nop) against 1 real exported cyber task (cyber.parquet row 0, arvo_35858) in Modal, 2026-10-06. This run ALSO exercised the real, non-stubbed cyber_grader.capture_pristine_binary() export-time Modal capture (2,715,310 bytes of /home/agent/binary tarred from a fresh sandbox of arvo-rl:v1-arvo-35858). nop writes nothing to /home/agent/poc; grader correctly scores 0.0 with no infra_error."
+  },
+  "tamper": {
+    "attempted": true,
+    "method": "Direct sandbox probe (not through a full Harbor Trial): in a real sandbox of the built task image, overwrote /home/agent/binary/run.sh to unconditionally echo success and exit 0, clobbered /home/agent/submit.sh, and wrote a forged /home/agent/poc, then uploaded tests/ and ran tests/test.sh exactly as the real verifier would.",
+    "status": "inconclusive in this session: the script was still running in the background (a Modal Dockerfile build + sandbox + tar upload sequence exceeded the foreground shell timeout) when this report was written. By design, this should score 0: run_grade.py extracts tests/binary.tar.gz (captured at EXPORT time, before any agent touched the task) to a pristine temp dir and runs THAT copy's run.sh against the agent's poc, never reading /home/agent/binary/run.sh or /home/agent/submit.sh at verify time at all -- so editing either cannot affect the reward. This is asserted by design/code-reading, not yet confirmed by this specific Modal run."
+  },
+  "concurrency": {"not_run": "64-trial concurrency check not executed in this session (time/scope)."},
+  "positive_control": {"not_run": "Needs gpt-6-luna via the Scale LiteLLM proxy per the contract; not attempted in this session (would need the --luna flag path, not implemented/tested here -- see final report)."},
+  "bugs_found_and_fixed_during_this_run": [
+    "graders/cyber.py::build() passed the row's RAW docker_image tag (e.g. 'arvo-rl:v1-arvo-35858', MiMo's internal short name) straight to capture_pristine_binary(), which needs the fully-qualified docker.io/... reference; fixed to resolve through export.image_ref() first (lazy import to avoid a circular import with export.py, which imports this module at its own top level).",
+    "graders/cyber.py::capture_pristine_binary() used the deprecated `Sandbox.open()` legacy filesystem API (UnimplementedError on the pinned Modal backend); switched to reading the tarball back via `sb.exec('cat', path, text=False)`."
+  ]
+}

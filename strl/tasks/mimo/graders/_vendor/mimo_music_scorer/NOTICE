@@ -1,0 +1,9 @@
+Vendored from XiaomiMiMo/verl @ a2ad9f61 (branch mimo-oss), path
+recipes/design/music/scorer/{__init__.py,core.py,feats.py,score.py,baselines/ref_full4k.json,pipeline.py}.
+
+Copyright 2026 Bytedance Ltd. and/or its affiliates.
+Licensed under the Apache License, Version 2.0 (see the header in each file, or
+http://www.apache.org/licenses/LICENSE-2.0).
+
+Files are unmodified byte-for-byte from the upstream commit above. strl/tasks/mimo/graders/music.py
+is our own code that imports this package; it is not part of the vendored tree.
