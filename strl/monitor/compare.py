@@ -111,3 +111,56 @@ def markdown(report: dict) -> str:
         lines.append(f"\n**{p['b']} vs {p['a']}** (trained vs trained, {p['examples']} paired tasks): {100 * d['accuracy_delta']:+.2f} points "
                      f"[{100 * d['ci_lower']:+.2f}, {100 * d['ci_upper']:+.2f}]")
     return '\n'.join(lines)
+
+
+def honest_power(base: list[dict], candidate: list[dict], *, samples: int = 10000, seed: int = 29, level: float = 0.95,
+                 domain_key: str = 'domain', value_key: str = 'task_metric') -> dict:
+    """Per-domain paired bootstrap + macro average over domains, with honest accounting of what was dropped.
+
+    Rows are eval records ({sample_id, task, domain, task_metric, masked, ...}; ``sample_id`` = '<task>#r<rep>' identifies a trial).
+    A trial id is DROPPED when it is masked/invalid (``masked`` or a missing metric) for either model or absent from one of them;
+    drops are reported per domain, never silently turned into zeros. Pairs are aggregated per task (repeats of one task are
+    correlated) and the bootstrap resamples TASKS, within each domain; the macro CI resamples every domain jointly."""
+    import numpy as np
+    b = {r['sample_id']: r for r in base}
+    c = {r['sample_id']: r for r in candidate}
+    ids = sorted(set(b) | set(c))
+    usable = lambda r: r is not None and not r.get('masked') and r.get(value_key) is not None  # noqa: E731
+    dropped = {i: ('missing' if i not in b or i not in c else 'masked_or_invalid') for i in ids if not (usable(b.get(i)) and usable(c.get(i)))}
+    per_task: dict[str, dict[str, list[tuple[float, float]]]] = {}
+    drops_by_domain: dict[str, int] = {}
+    for i in ids:
+        row = b.get(i) or c.get(i)
+        domain = str(row.get(domain_key))
+        if i in dropped:
+            drops_by_domain[domain] = drops_by_domain.get(domain, 0) + 1
+            continue
+        per_task.setdefault(domain, {}).setdefault(str(row.get('task') or i), []).append((float(b[i][value_key]), float(c[i][value_key])))
+    rng = np.random.default_rng(seed)
+    alpha = (1.0 - level) / 2.0
+    arrays: dict[str, tuple] = {}
+    out: dict = {'domains': {}}
+    for domain in sorted(per_task):
+        tasks = list(per_task[domain].values())
+        base_means = np.array([np.mean([p[0] for p in t]) for t in tasks])
+        cand_means = np.array([np.mean([p[1] for p in t]) for t in tasks])
+        arrays[domain] = (base_means, cand_means)
+        delta = cand_means - base_means
+        means = delta[rng.integers(0, len(delta), size=(samples, len(delta)))].mean(axis=1)
+        lower, upper = np.quantile(means, [alpha, 1.0 - alpha])
+        out['domains'][domain] = {'tasks': len(tasks), 'trials': sum(len(t) for t in tasks), 'dropped': drops_by_domain.get(domain, 0),
+                                  'baseline': float(base_means.mean()), 'candidate': float(cand_means.mean()), 'delta': float(delta.mean()),
+                                  'ci_lower': float(lower), 'ci_upper': float(upper), 'quality_passed': bool(lower > 0.0)}
+    if arrays:
+        draws = np.zeros(samples)
+        for base_means, cand_means in arrays.values():
+            delta = cand_means - base_means
+            draws += delta[rng.integers(0, len(delta), size=(samples, len(delta)))].mean(axis=1)
+        draws /= len(arrays)
+        lower, upper = np.quantile(draws, [alpha, 1.0 - alpha])
+        out['macro'] = {'domains': sorted(arrays), 'baseline': float(np.mean([out['domains'][d]['baseline'] for d in arrays])),
+                        'candidate': float(np.mean([out['domains'][d]['candidate'] for d in arrays])),
+                        'delta': float(np.mean([out['domains'][d]['delta'] for d in arrays])),
+                        'ci_lower': float(lower), 'ci_upper': float(upper), 'ci_level': level, 'quality_passed': bool(lower > 0.0)}
+    out['dropped'] = {'total': len(dropped), 'by_domain': drops_by_domain, 'ids': sorted(dropped)[:50], 'of': len(ids)}
+    return out

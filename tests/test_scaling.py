@@ -178,7 +178,7 @@ class Overrides(unittest.TestCase):
 
     def test_existing_experiments_render_nothing_new(self):
         for path in sorted(Path(ROOT / 'experiments').glob('*.yaml')) + [ROOT / 'base/gsm8k.yaml']:
-            if '2node' in path.name:
+            if '2node' in path.name or path.name.startswith('mimo'):   # scaling experiments: LoRA / multi-node by design
                 continue
             cfg = load(str(path))
             self.assertEqual(scaling_values(cfg, 10), {}, path)
