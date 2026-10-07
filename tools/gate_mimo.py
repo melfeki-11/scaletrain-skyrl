@@ -25,7 +25,8 @@ from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "assets" / "overlay"))
+# the overlay is the Linux pod build (e.g. a x86_64-linux fastuuid .so): locally it is only a FALLBACK behind the venv's native packages
+sys.path.append(str(ROOT / "assets" / "overlay"))
 
 from strl.tasks.coding import harbor as coding_harbor  # noqa: E402
 

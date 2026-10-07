@@ -1,0 +1,24 @@
+{
+  "domain": "webdev",
+  "nop": {
+    "all_zero_no_infra": true,
+    "bad": [],
+    "n": 2,
+    "results": [
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 238.0
+      },
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 236.9
+      }
+    ]
+  },
+  "task_dirs": [
+    "assets/mimo/data-smoke/tasks/test/webdev-dasyn_260630_00021",
+    "assets/mimo/data-smoke/tasks/test/webdev-dasyn_260638_00176"
+  ]
+}

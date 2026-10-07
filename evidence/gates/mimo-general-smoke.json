@@ -1,0 +1,24 @@
+{
+  "domain": "general",
+  "nop": {
+    "all_zero_no_infra": true,
+    "bad": [],
+    "n": 2,
+    "results": [
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 115.1
+      },
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 110.4
+      }
+    ]
+  },
+  "task_dirs": [
+    "assets/mimo/data-smoke/tasks/test/general-s3k_0084_accounting_audit_tax_en_t3_rl_006",
+    "assets/mimo/data-smoke/tasks/test/general-s3k_1374_healthcare_ops_en_t3_rl_003"
+  ]
+}

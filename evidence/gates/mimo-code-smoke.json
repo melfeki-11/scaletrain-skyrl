@@ -1,0 +1,27 @@
+{
+  "domain": "code",
+  "nop": {
+    "all_zero_no_infra": false,
+    "bad": [
+      "assets/mimo/data-smoke/tasks/test/code-format-code-task-000588",
+      "assets/mimo/data-smoke/tasks/test/code-format-code-task-001404"
+    ],
+    "n": 2,
+    "results": [
+      {
+        "exception": "ConflictError",
+        "reward": null,
+        "seconds": 126.8
+      },
+      {
+        "exception": "ConflictError",
+        "reward": null,
+        "seconds": 324.8
+      }
+    ]
+  },
+  "task_dirs": [
+    "assets/mimo/data-smoke/tasks/test/code-format-code-task-000588",
+    "assets/mimo/data-smoke/tasks/test/code-format-code-task-001404"
+  ]
+}

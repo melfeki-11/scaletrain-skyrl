@@ -223,6 +223,11 @@ def build_dockerfile(domain: str, image: str) -> str:
         return _dockerfile(image, extra_lines=_WEBDEV_PLAYWRIGHT_LINES)
     if domain == "general":
         return _dockerfile(image, extra_lines=_GENERAL_AGENT_DOCKERFILE_TAIL)
+    if domain == "code":
+        # The published code images define no ENTRYPOINT, CMD or ENV at all, and Harbor creates sandboxes with no command: they
+        # exited immediately (status 128 -> ConflictError "Sandbox is shutting down"). Verified on a real image with 4 variants:
+        # only an explicit CMD keeps the sandbox alive (an ENV PATH alone does not).
+        return _dockerfile(image, extra_lines='CMD ["sleep", "infinity"]\n')
     return _dockerfile(image)
 
 

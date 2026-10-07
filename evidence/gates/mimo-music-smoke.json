@@ -1,0 +1,24 @@
+{
+  "domain": "music",
+  "nop": {
+    "all_zero_no_infra": true,
+    "bad": [],
+    "n": 2,
+    "results": [
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 38.5
+      },
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 40.1
+      }
+    ]
+  },
+  "task_dirs": [
+    "assets/mimo/data-smoke/tasks/test/music-gK-0426",
+    "assets/mimo/data-smoke/tasks/test/music-gK-0430"
+  ]
+}

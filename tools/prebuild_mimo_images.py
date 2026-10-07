@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "assets" / "overlay"))  # harbor + modal SDKs
+sys.path.append(str(ROOT / "assets" / "overlay"))  # Linux pod build: only a fallback behind the venv's native harbor + modal SDKs
 
 from strl.tasks.mimo import images  # noqa: E402
 

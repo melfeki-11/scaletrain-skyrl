@@ -471,3 +471,13 @@ class DataLayerWithTheRealExporter(unittest.TestCase):
             with self.assertRaises(ValueError):                                    # the clobber guard
                 (Path(td) / "keep.txt").write_text("x")
                 export.export_task({"domain": "music", "instance_id": "x", "group": "g", "raw": _rows("music", limit=1)[0]}, Path(td), split="train")
+
+
+class CodeImageStaysAlive(unittest.TestCase):
+    def test_code_dockerfile_defines_a_cmd_because_the_published_images_have_none(self):
+        """Harbor starts sandboxes without a command; the code images have no CMD, so without this line every code trial raised
+        ConflictError (found by the real nop gate, not by a unit test)."""
+        text = export.build_dockerfile("code", "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000588")
+        self.assertTrue(text.rstrip().endswith('CMD ["sleep", "infinity"]'))
+        for domain in ("music", "cyber", "general", "webdev"):   # these images already keep a sandbox alive: untouched
+            self.assertNotIn('CMD ["sleep"', export.build_dockerfile(domain, "x"))

@@ -1,0 +1,24 @@
+{
+  "domain": "cyber",
+  "nop": {
+    "all_zero_no_infra": true,
+    "bad": [],
+    "n": 2,
+    "results": [
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 81.2
+      },
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 82.1
+      }
+    ]
+  },
+  "task_dirs": [
+    "assets/mimo/data-smoke/tasks/test/cyber-arvo_19175",
+    "assets/mimo/data-smoke/tasks/test/cyber-arvo_42479691"
+  ]
+}
