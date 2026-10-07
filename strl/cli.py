@@ -8,6 +8,7 @@
   overlay                                  build assets/overlay (Modal/Harbor packages for the training image)
   capacity  [--gpus-per-node 8,4,2,1]      read-only ScaleTrain/EKS capacity by team and borrowing route
   stage     <exp> --attempt A --mode dry|canary|train [--set K=V]  upload assets + render job.json (never submits)
+  check-template <exp>                     does the model's chat template keep step-wise trajectories mergeable (SkyRL prefix merge)?
   stage-model <exp> --attempt A            render a CPU job that downloads the model in a pod and uploads it to S3 (large models)
   submit    <job.json> [--user-id U]       submit once; receipt written before the POST
   status    <job_id> | --list              job state
@@ -157,6 +158,13 @@ def cmd_stage(a):
     print(f"\nnext: python -m strl submit {receipt['job_file']}")
 
 
+def cmd_check_template(a):
+    from .models import template_check
+    cfg = _load(a.experiment, a.set)
+    result = template_check.check(cfg, online=True)
+    print(json.dumps(result or {'ok': None, 'detail': 'tokenizer unavailable'}, indent=1))
+
+
 def cmd_stage_model(a):
     from .stage import stage_model
     receipt = stage_model(a.experiment, attempt=a.attempt, team=a.team, output=a.output or f'evidence/{a.attempt}/job.json', overrides=a.set)
@@ -272,6 +280,7 @@ def main(argv=None):
     s.add_argument('--mode', choices=['dry', 'canary', 'train'], required=True); s.add_argument('--team'); s.add_argument('--allow-borrowing', action='store_true')
     s.add_argument('--output'); s.add_argument('--ledger', help='program budget ledger (default: budget.ledger of the experiment)')
     s.add_argument('--set', action='append', default=[], metavar='KEY=VALUE', help='dotted experiment override, YAML value (repeatable)')
+    s = sub.add_parser('check-template'); s.add_argument('experiment'); s.add_argument('--set', action='append', default=[])
     s = sub.add_parser('stage-model'); s.add_argument('experiment'); s.add_argument('--attempt', required=True); s.add_argument('--team')
     s.add_argument('--output'); s.add_argument('--set', action='append', default=[], metavar='KEY=VALUE')
     s = sub.add_parser('submit'); s.add_argument('job'); s.add_argument('--user-id', default=USER); s.add_argument('--receipt')
@@ -290,7 +299,7 @@ def main(argv=None):
     a = p.parse_args(argv)
     os.chdir(ROOT)
     {'plan': cmd_plan, 'fetch': cmd_fetch, 'prepare': cmd_prepare, 'executor': cmd_executor, 'overlay': cmd_overlay, 'capacity': cmd_capacity,
-     'stage': cmd_stage, 'stage-model': cmd_stage_model, 'submit': cmd_submit, 'status': cmd_status, 'monitor': cmd_monitor, 'ledger': cmd_ledger, 'verify': cmd_verify,
+     'stage': cmd_stage, 'stage-model': cmd_stage_model, 'check-template': cmd_check_template, 'submit': cmd_submit, 'status': cmd_status, 'monitor': cmd_monitor, 'ledger': cmd_ledger, 'verify': cmd_verify,
      'compare': cmd_compare, 'eval-llm': cmd_eval_llm, 'critic': cmd_critic}[a.cmd](a)
 
 

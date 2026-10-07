@@ -197,8 +197,15 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
     steps = int(seconds / timing['step_s']) if timing['step_s'] > 0 else 0
     if steps < 20:
         out.append(f'BUDGET: only ~{steps} optimizer steps fit in the attempt after startup and final-eval reserve; consider shorter generations or a longer attempt.')
-    if cfg['environment']['name'] == 'coding_harbor' and profile.name == 'qwen3_5':
-        out.append('HARBOR: Qwen3.5 history templates drop <think> blocks, so step-wise merging falls back to one sequence per turn (correct, slower).')
+    if env.generator_kind == 'harbor':   # step-wise GRPO merges a trajectory's turns only if the chat template keeps history verbatim
+        from .models import template_check
+        merge = template_check.check(cfg)   # local tokenizer / HF cache only: plan never goes online
+        if merge is None:
+            out.append('HARBOR: chat-template merge check skipped (tokenizer not local): run `strl check-template <exp>`. Without prefix merging '
+                       'every agent turn re-trains its growing prefix (correct, but several times more training tokens).')
+        elif merge['ok'] is False:
+            out.append(f"HARBOR: {merge['model']}'s chat template breaks step-wise prefix merging ({merge['detail']}): one sequence per turn, "
+                       'several times more training tokens. Use a template that keeps the generation prompt in history (e.g. Qwen3.8\'s).')
     if params_b is None:
         out.append('MEMORY: parameter count unknown (config.json unavailable); set model.params_b for memory/step estimates.')
     if memory and memory['training_phase_gb'] > MEMORY_LIMIT_GB:
