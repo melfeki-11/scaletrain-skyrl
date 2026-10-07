@@ -54,7 +54,7 @@ compute:
   team: gen_ai.agent_training_foundation
   product: agent_training_foundation
   priority: high
-  allow_borrowing: false
+  allow_borrowing: true             # ScaleTrain runbook (SKILLS.md): every job runs foundation team, high priority, borrowing on
   image: 692474966980.dkr.ecr.us-west-2.amazonaws.com/scale_train/shared/training/tmp:20260922-210801.d5d13a4a-e962-40ea-abe4-4057c5c1c82b
 
 runtime:

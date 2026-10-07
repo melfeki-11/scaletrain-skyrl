@@ -20,15 +20,20 @@
 - `stage` never submits. `submit` writes a receipt before the POST and refuses an existing name; if it reports an error, it
   reconciles by name (`reconciled_by_name`) - never resubmit blindly.
 - Job shape (rendered for you): `k8s-preset`, team `gen_ai.agent_training_foundation`, product `agent_training_foundation`,
-  priority `high`, `allow_borrowing: false` unless `--allow-borrowing`. Presets: `m5.2xlarge` (dry), `p5.48xlarge` (8 H100),
+  priority `high`, `allow_borrowing: true` (the ScaleTrain runbook, `SKILLS.md`, makes team/priority/borrowing mandatory on every job, CPU smokes included; `compute.allow_borrowing` in `base/infra.yaml`). Presets: `m5.2xlarge` (dry), `p5.48xlarge` (8 H100),
   `p5.48xlarge:4|:2|:1` (slices; one node).
-- `--team gen_ai.agents_research` when capacity says foundation has no room; borrowing only after both non-borrowing routes.
+- Team stays `gen_ai.agent_training_foundation` (runbook). `strl capacity` still ranks foundation/research x own/borrowing so you can SEE whether quota or topology is the blocker; only switch team with the user's say-so.
 
 ## Capacity reading
 
 `strl capacity` reports quota headroom AND whether any ready node in one network domain can fit the shape. "not enough distinct
 ready nodes" with large headroom means the cluster is busy right now: submit anyway (high priority queues first) or try smaller
 slices. A queued job is not a failure; never cancel/resubmit to chase small fluctuations.
+
+A 2 x 8 job whose status detail is `waiting_for_network_domain_capacity` is blocked by topology, not quota: both nodes must sit in ONE
+network domain, and `strl capacity` shows `compatible_nodes: {}` for every team/borrowing route at once (2026-10-07: 4 of 4 routes
+blocked for 3+ hours with 29 GPUs of quota headroom). Changing team or borrowing cannot help; keep the job queued, keep CPU work
+(prepare, image prebuild, 27B CPU dry run) going meanwhile, and budget wall-clock, not node-seconds, for the wait.
 
 ## Budget
 

@@ -105,7 +105,9 @@ class GoldenStage(unittest.TestCase):
             job = json.loads((TMP / f'{label}.json').read_text())
             golden = GOLDEN['jobs'][label]
             want = golden['job']
-            self.assertEqual({k: v for k, v in job.items() if k != 'command'}, {k: v for k, v in want.items() if k != 'command'}, label)
+            # intentional difference since 2026-10-07: the ScaleTrain runbook (SKILLS.md) makes borrowing mandatory on every job
+            self.assertTrue(job['allow_borrowing'], label)
+            self.assertEqual({k: v for k, v in job.items() if k != 'command'}, {k: v for k, v in want.items() if k != 'command'} | {'allow_borrowing': True}, label)
             self.assertEqual(job['command'][:2], want['command'][:2])
             self.assertEqual(self.normalize_command(job['command'][2]), want['command'][2].replace('<ROOT>', str(REPO_ROOT)), label)
             runtime = json.loads((Path(receipt['staging_dir']) / 'runtime.json').read_text())
