@@ -1,9 +1,9 @@
-# Multi-node smoke, LoRA arm: 2 x p5.48xlarge (16 H100), Qwen3.5-0.8B on GSM8K, 3 updates. It proves the path the 27B run uses
+# Multi-node smoke, LoRA arm: 2 x p5.48xlarge (16 H100), Qwen3.5-0.8B on GSM8K, 2 updates. It proves the path the 27B run uses
 # (S3 rendezvous, 2-node Ray, cross-host NCCL probe + EFA detection, HSDP within a node, per-host LoRA adapter sync, cross-node
 # shard verification, LoRA export -> merged final eval) on a model small enough that failures are cheap.
-# Draws from the program ledger evidence/ledgers/mimo-27b.json (6 node-hours); a train attempt reserves 2 x 2100 s.
+# Draws from the program ledger evidence/ledgers/mimo-27b.json (6 node-hours); a train attempt reserves 2 x 1500 s.
 name: gsm8k-qwen35-2node-smoke
-description: GSM8K GRPO, Qwen3.5-0.8B, 2 nodes x 8 H100, LoRA r16 (all-linear), 3 updates
+description: GSM8K GRPO, Qwen3.5-0.8B, 2 nodes x 8 H100, LoRA r16 (all-linear), 2 updates
 extends: base/gsm8k.yaml
 
 finetune:
@@ -23,17 +23,17 @@ algorithm:
   micro_forward_per_gpu: 8
   lr: 1.0e-05                     # LoRA adapters take a larger step than full fine-tuning (verified full: 2e-6)
   max_generate_length: 512
-  max_steps: 3
+  max_steps: 2
 
 evaluation:
-  interval_steps: 3
-  checkpoint_interval_steps: 3    # one export at the stop step; it is the only selectable checkpoint
+  interval_steps: 2
+  checkpoint_interval_steps: 2    # one export at the stop step; it is the only selectable checkpoint
   eval_shards_per_model: 4        # final eval runs on the head node's 8 GPUs
 
 budget:
   total_seconds: 21600
-  attempt_max_seconds: 2100
-  final_eval_reserve_seconds: 600
+  attempt_max_seconds: 1500
+  final_eval_reserve_seconds: 300
   canary_max_seconds: 1200
   ledger: evidence/ledgers/mimo-27b.json
 

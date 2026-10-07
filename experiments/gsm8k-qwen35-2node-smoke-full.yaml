@@ -1,7 +1,10 @@
+# Full fine-tuning arm of the 2-node smoke. Budget (6 node-h) pays for ONE 2x8 smoke (the LoRA arm, the mode the 27B run uses):
+# this arm is validated by the CPU dry run (validate_cfg at 16 GPUs) and by the LoRA smoke's measured cross-node bandwidth,
+# not GPU-run unless the program ledger is extended.
 # Multi-node smoke, full fine-tuning arm: identical to gsm8k-qwen35-2node-smoke.yaml except finetune.mode, the full-FT learning
 # rate and the FSDP layout (full shard over all 16 GPUs until a probe measures the cross-node bandwidth; see `strl plan`).
 name: gsm8k-qwen35-2node-smoke-full
-description: GSM8K GRPO, Qwen3.5-0.8B, 2 nodes x 8 H100, full fine-tuning, 3 updates
+description: GSM8K GRPO, Qwen3.5-0.8B, 2 nodes x 8 H100, full fine-tuning, 2 updates
 extends: experiments/gsm8k-qwen35-2node-smoke.yaml
 
 finetune:
