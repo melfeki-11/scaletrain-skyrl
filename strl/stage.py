@@ -169,6 +169,15 @@ print('Verified pinned payload, model and data staging',flush=True)
             '/opt/skyrl-venv/bin/python -c ' + shlex.quote(bootstrap) + '\nexec /opt/skyrl-venv/bin/python -m strl.worker\n')
 
 
+def plan_step_seconds(cfg: dict) -> float | None:
+    """`strl plan`'s per-step estimate (seconds), or None when it cannot be derived (model config unavailable, no profile)."""
+    try:
+        from .derive import estimate_step_seconds, params_and_config
+        return float(estimate_step_seconds(cfg, params_and_config(cfg)[2] or 1.0)['step_s'])
+    except Exception:
+        return None
+
+
 NCCL_TIMEOUT_MULTINODE = 900   # cross-host collectives and 2-node engine start-up (single node keeps the verified 300/600 s)
 
 
@@ -259,6 +268,9 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
                'total_seconds': ledger_data['total_seconds'], 'model_uri': f's3://{bucket}/{mprefix}', 'wandb_run_id': wandb_run_id,
                'run_name': attempt, 'mode': mode, 'gpu_fraction': gpu_fraction, 'nodes': nodes, 'experiment': cfg['name'],
                'experiment_sha': cfg['_meta']['sha']}
+    estimate = plan_step_seconds(cfg)
+    if estimate is not None:   # the plan's step estimate: the live monitor (STEP_SLOW) and in-run fail-fast compare measured step times to it
+        runtime['plan_step_seconds'] = estimate
     (staging / 'runtime.json').write_text(json.dumps(runtime, indent=2))
     save_resolved(cfg, staging / 'resolved.json', root=POD_ROOT)
 
@@ -295,6 +307,8 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
                'node_seconds_per_second': charge, 'canary_overlay': cfg['_meta'].get('canary_overlay'), 'team': job['team'],
                'allow_borrowing': job['allow_borrowing'], 'wandb_run_id': wandb_run_id, 'artifact_uri': artifact_uri, 'job_file': output,
                'profile': profile.name, 'overrides': cfg['_meta'].get('overrides', []), 'staging_dir': str(staging)}
+    if estimate is not None:
+        receipt['plan_step_seconds'] = estimate
     return receipt
 
 

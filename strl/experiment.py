@@ -29,6 +29,8 @@ class ExperimentError(ValueError):
         super().__init__('\n'.join(f'- {p}' for p in self.problems))
 
 
+FAILFAST_KEYS = ('mem_gb', 'domain_masked', 'step_slow_factor', 'min_steps')   # budget.failfast rules (see strl/tracking.py failfast_config)
+
 # Allowed keys per section. A value of None means "free-form mapping" (validated elsewhere).
 SCHEMA: dict[str, Any] = {
     'name': str, 'description': str, 'extends': str,
@@ -55,7 +57,7 @@ SCHEMA: dict[str, Any] = {
     'runtime': {'skyrl_commit': str, 'python': str},
     'budget': {'total_seconds': int, 'attempt_max_seconds': int, 'bootstrap_margin_seconds': int,
                'final_eval_reserve_seconds': int, 'canary_max_seconds': int, 'stall_seconds': int, 'ledger': str,
-               'save_optimizer_state': bool},
+               'save_optimizer_state': bool, 'failfast': dict},
     'tracking': {'base_url': str, 'entity': str, 'project': str, 'group': str, 'credentials_uri': str, 'tags': list, 'critic': None,
                  'alerts': bool},
     'storage': {'bucket': str, 'prefix': str, 'profile': str, 'region': str},
@@ -225,6 +227,11 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
         problems.append('budget.attempt_max_seconds cannot exceed budget.total_seconds')
     if b['final_eval_reserve_seconds'] + 900 >= b['attempt_max_seconds'] and e.get('final_eval', True):
         problems.append('budget leaves no training time: attempt_max_seconds must exceed final_eval_reserve_seconds + 900')
+    for key, value in (b.get('failfast') or {}).items():
+        if key not in FAILFAST_KEYS:
+            problems.append(f'budget.failfast.{key}: unknown rule; allowed {list(FAILFAST_KEYS)}')
+        elif value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
+            problems.append(f'budget.failfast.{key} must be a non-negative number (or null to disable the rule), got {value!r}')
     if '*' not in lim['models'] and cfg['model']['id'] not in lim['models']:
         problems.append(f'model {cfg["model"]["id"]!r} is not authorized by limits.models={lim["models"]}')
     tp = i['tensor_parallel_size']
