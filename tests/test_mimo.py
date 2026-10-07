@@ -752,7 +752,17 @@ def fake_skyrl_harbor():
     module = types.ModuleType('examples.train_integrations.harbor.harbor_generator')
     module.HarborGenerator, module.HarborTrajectoryOutput, module.build_step_wise_generator_output = HarborGenerator, HarborTrajectoryOutput, build
     logger = types.SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None, debug=lambda *a, **k: None)
-    stubs = {'examples': types.ModuleType('examples'), 'examples.train_integrations': types.ModuleType('examples.train_integrations'),
+
+    class Bar:      # tqdm creates a multiprocessing lock on first use (a leaked-semaphore warning at exit): not needed here
+        def __init__(self, *a, **k):
+            pass
+
+        def update(self, n=1):
+            pass
+
+        def close(self):
+            pass
+    stubs = {'tqdm': types.SimpleNamespace(tqdm=Bar), 'examples': types.ModuleType('examples'), 'examples.train_integrations': types.ModuleType('examples.train_integrations'),
              'examples.train_integrations.harbor': types.ModuleType('examples.train_integrations.harbor'),
              'examples.train_integrations.harbor.harbor_generator': module, 'loguru': types.SimpleNamespace(logger=logger)}
     with patch.dict(sys.modules, stubs):
@@ -782,7 +792,7 @@ class GeneratorClass(unittest.TestCase):
                 finish_session=lambda s: asyncio.sleep(0)), tokenizer=None, max_seq_len=1000, mimo={'step_deadline_sec': 0.3, 'caps': {}})
             batch = self.batch('x', 'eval', ['/d/code-a', '/d/music-b', '/d/webdev-slow'])
             with patch.object(generator, 'run_trajectory', fake_run):
-                output = run(gen.generate(batch))
+                output = run(gen.generate(batch, disable_tqdm=True))
         self.assertEqual({k: v['temperature'] for k, v in seen.items()}, {'0': 0.0, '1': 0.0, '2': 0.0})   # eval temperature reaches the agent
         self.assertEqual({v['phase'] for v in seen.values()}, {'eval'})
         self.assertEqual(output['rewards'], [1.0, 1.0, 0.0])
@@ -812,7 +822,7 @@ class GeneratorClass(unittest.TestCase):
             batch = self.batch('x', 'train', ['/d/code-a'])
             del batch['sampling_params']['temperature']                          # falls back to the generator's eval temperature only in eval
             with patch.object(generator, 'run_trajectory', fake_run):
-                output = run(gen.generate(batch))
+                output = run(gen.generate(batch, disable_tqdm=True))
             self.assertEqual(output['rollout_metrics']['environment/masked_group_fraction'], 1.0)
             self.assertEqual(output['rewards'], [0.0])
 
@@ -1271,6 +1281,11 @@ class Spec(DataCase):
         self.assertFalse(self.env.uses_coding_executor)
         self.assertTrue(get_environment('coding_harbor').uses_coding_executor)
         self.assertIn('env.uses_coding_executor', (ROOT / 'strl/cli.py').read_text())
+
+    def test_judge_key_reaches_the_pod_and_grpo_key_exists_in_pinned_skyrl(self):
+        self.assertIn('env_spec.needs_litellm', (ROOT / 'strl/worker.py').read_text())      # the worker writes the key file for the environment's judge
+        pinned = (ROOT / 'pinned/pinned-config.py').read_text()
+        self.assertIn('    grpo_norm_by_std: bool = True', pinned)                        # the key mimo sets (false) is a real SkyRL algorithm option
 
     def test_env_metrics_from_reads_the_summary_store(self):
         generator.SUMMARIES.clear()

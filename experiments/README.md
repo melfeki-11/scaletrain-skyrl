@@ -11,6 +11,9 @@ before anything else: it validates, derives the infrastructure, estimates time/c
 | `mbpp-qwen3-1p7b.yaml` | model | model switch to Qwen3-1.7B (dense Qwen3 profile) |
 | `harbor-qwen35.yaml` | environment | same tasks as multi-turn Harbor/Terminus-2 tasks in Modal sandboxes |
 | `mbpp-qwen35-custom-reward.yaml` | reward (your own code) | arm A + `user_rewards.examples:docstring_bonus`, the `module:function` pattern |
+| `mimo-qwen38-27b-lora.yaml` | environment `mimo` (five MiMo domains), model, LoRA, 2 nodes | multi-domain agentic RL, Qwen3.8-27B, LoRA r64; `strl prepare` first |
+| `mimo-qwen38-27b-full.yaml` | finetune mode | the same, full fine-tuning (full shard over 16 GPUs) |
+| `mimo-qwen35-0p8b-smoke.yaml` | model, compute: 1 GPU | cheap end-to-end check of the mimo path (also the 1-GPU canary arm) |
 
 Merge rules for `extends:`:
 - Mappings merge key by key.

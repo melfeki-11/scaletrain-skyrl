@@ -454,7 +454,7 @@ def prepare(cfg: dict, *, exporter: Callable[..., dict] | None = None, screen: C
                         'test_filters': mcfg['domains'][d]['test_filters'], 'max_prompt_tokens': mcfg['domains'][d]['max_prompt_tokens'],
                         'parquet_sha256': parquet_sha256(d, raw_dir(mcfg, raw))} for d, info in chosen['domains'].items()},
         **selection_shas(mcfg, ids), 'screened': chosen['screened'],
-        'counts': {s: len(selection[s]) for s in SPLITS}, 'prompt_tokens': prompt_report(selection, tokenizer if tokenizer is not None else load_tokenizer(cfg)),
+        'counts': {s: len(selection[s]) for s in SPLITS}, 'prompt_tokens': prompt_report({s: selection[s] for s in ('train', 'test')}, tokenizer if tokenizer is not None else load_tokenizer(cfg)),
         'tasks': tasks}
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / 'manifest.json').write_text(json.dumps(manifest, indent=1, sort_keys=True) + '\n')

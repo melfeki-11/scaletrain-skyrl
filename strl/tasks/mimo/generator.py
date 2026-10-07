@@ -19,7 +19,7 @@ import asyncio
 import json
 import time
 import tomllib
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -235,7 +235,7 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
     files = read_verifier(trial_dir_of(trial, results))
     details = files['details']
     summary = {'domain': domain, 'task': name, 'rep': rep, 'masked': False, 'mask_reason': None, 'components': details.get('components') or {},
-               'turns': int(getattr(getattr(results, 'agent_result', None), 'metadata', {}).get('n_episodes', 0) or 0), 'tokens': completion_tokens(rollout),
+               'turns': int((getattr(getattr(results, 'agent_result', None), 'metadata', None) or {}).get('n_episodes', 0) or 0), 'tokens': completion_tokens(rollout),
                'seconds': round(seconds, 1), 'judge': None,
                'stop': {'ContextLengthExceededError': 'context_length', 'AgentTimeoutError': 'agent_timeout', 'VerifierTimeoutError': 'verifier_timeout'}.get(exc, 'complete')}
     summary['artifact'], summary['screenshot'] = read_artifacts(files['dir'], meta.get('artifacts') or [], int(settings['summary_chars']))
@@ -247,7 +247,8 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
     else:
         verifier = getattr(results, 'verifier_result', None)
         reward = float(verifier.rewards['reward']) if verifier and verifier.rewards.get('reward') is not None else (files['reward'] or 0.0)
-    metric = details.get('metric', reward)
+    metric = details.get('metric')
+    metric = reward if metric is None else float(metric)
     request = files['judge_request']
     if request is not None and exc not in ('ContextLengthExceededError', 'VerifierTimeoutError'):
         if deps.judge is None:
@@ -359,10 +360,9 @@ def make_generator_class():
             self._caps = (mimo or {}).get('caps') or {}
 
         def _deps(self) -> Any:
-            from harbor.models.trial.config import TrialConfig
-            from harbor.trial.trial import Trial
-
             async def create_trial(config: dict) -> Any:
+                from harbor.models.trial.config import TrialConfig
+                from harbor.trial.trial import Trial
                 return await Trial.create(TrialConfig.model_validate(config))
 
             return SimpleNamespace(template=self._harbor_trial_config_template, settings=self._mimo, rate_limiter=self._rate_limiter,
