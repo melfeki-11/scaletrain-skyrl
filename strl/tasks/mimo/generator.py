@@ -239,6 +239,11 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
                'seconds': round(seconds, 1), 'judge': None,
                'stop': {'ContextLengthExceededError': 'context_length', 'AgentTimeoutError': 'agent_timeout', 'VerifierTimeoutError': 'verifier_timeout'}.get(exc, 'complete')}
     summary['artifact'], summary['screenshot'] = read_artifacts(files['dir'], meta.get('artifacts') or [], int(settings['summary_chars']))
+    if not details and exc is None:   # only a trial that finished cleanly: timeouts/context errors keep their own policy
+        # The shared verifier entrypoint always leaves a non-empty details.json. Its absence means the verifier did not run (the
+        # first version called /usr/bin/python3, which two images lack: every music/general trial silently scored 0). Mask it, loudly.
+        details = {'infra_error': True, 'error': 'verifier_no_details'}
+        summary['mask_detail'] = 'verifier produced no details.json'
     if details.get('infra_error'):
         return _masked(trajectory_id, seconds), {**summary, **masked_summary(domain, name, rep, 'infra_error', seconds=round(seconds, 1)),
                                                  'artifact': summary['artifact'], 'screenshot': summary['screenshot']}
@@ -252,7 +257,7 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
     request = files['judge_request']
     if request is not None and request.get('force_zero') and exc not in ('ContextLengthExceededError', 'VerifierTimeoutError'):
         reward = metric = 0.0   # a gate failed in the sandbox: reward 0 without spending a judge call (and never masked)
-        summary['judge'] = {'final': 0.0, 'scores': {}, 'rationale': 'force_zero: verifier gate failed', 'meta': {'skipped': True}}
+        summary['judge'] = {'final': 0.0, 'scores': {}, 'rationale': 'force_zero: verifier gate failed', 'meta': {'skipped': True, 'latency_s': 0.0, 'cost_usd': 0.0, 'calls': 0}}
         request = None
     if request is not None and exc not in ('ContextLengthExceededError', 'VerifierTimeoutError'):
         if deps.judge is None:

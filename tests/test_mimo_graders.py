@@ -481,3 +481,105 @@ class CodeImageStaysAlive(unittest.TestCase):
         self.assertTrue(text.rstrip().endswith('CMD ["sleep", "infinity"]'))
         for domain in ("music", "cyber", "general", "webdev"):   # these images already keep a sandbox alive: untouched
             self.assertNotIn('CMD ["sleep"', export.build_dockerfile(domain, "x"))
+
+
+class SharedVerifierEntrypoint(unittest.TestCase):
+    """Executes the rendered test.sh with /tests and /logs/verifier redirected to temp dirs. The first version of this entrypoint called
+    /usr/bin/python3, which python:3.12-slim and general-agent-env-0 do not have: the verifier never ran, no-op still scored 0, and
+    every unit test and the Modal nop gate passed."""
+
+    def setUp(self):
+        import tempfile
+        self.root = Path(tempfile.mkdtemp())
+        self.tests, self.verifier, self.agent = self.root / "tests", self.root / "verifier", self.root / "agent"
+        for d in (self.tests, self.verifier, self.agent):
+            d.mkdir()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def install(self, grade_body: str, artifacts=(), terminal_bench=False):
+        from strl.tasks.mimo.graders import common
+        (self.tests / "run_grade.py").write_text(grade_body)
+        if terminal_bench:
+            (self.tests / "test.sh").write_text("#!/bin/sh\nprintf '1\\n' > /logs/verifier/reward.txt\n")
+        common.finalize_tests(self.root, [str(a) for a in artifacts], terminal_bench=terminal_bench)
+        for f in self.tests.iterdir():   # redirect the sandbox paths
+            if f.is_file():
+                f.write_text(f.read_text().replace("/logs/verifier", str(self.verifier)).replace("/tests", str(self.tests)))
+
+    def run_sh(self, path=None):
+        import os
+        import subprocess
+        env = dict(os.environ, PATH=path if path is not None else os.environ["PATH"])
+        return subprocess.run(["/bin/bash", str(self.tests / "test.sh")], env=env, capture_output=True, text=True, timeout=60)
+
+    def details(self):
+        return json.loads((self.verifier / "details.json").read_text())
+
+    GOOD = ("import json\nopen('/logs/verifier/reward.txt','w').write('0.5')\n"
+            "json.dump({'infra_error': False, 'components': {'x': 1}}, open('/logs/verifier/details.json','w'))\n")
+
+    def test_does_not_call_a_hardcoded_interpreter(self):
+        from strl.tasks.mimo.graders import common
+        text = common.test_sh()
+        self.assertNotIn("\n/usr/bin/python3 ", text)           # the grader is never launched through a fixed path (the first version did)
+        self.assertIn('PY=$(command -v python3 || ', text)       # it is found on PATH; absolute paths are only fallbacks
+        self.assertIn('"$PY" /tests/run_grade.py', text)
+
+    def test_grader_runs_and_details_are_normalized(self):
+        self.install(self.GOOD)
+        self.assertEqual(self.run_sh().returncode, 0)
+        d = self.details()
+        self.assertEqual((d["metric"], d["passed"], d["infra_error"], d["components"]), (0.5, False, False, {"x": 1}))
+        self.assertEqual((self.verifier / "reward.txt").read_text().strip(), "0.5")
+
+    def test_agent_forged_reward_and_stale_judge_request_are_wiped(self):
+        self.install("pass\n")   # a grader that writes nothing
+        (self.verifier / "reward.json").write_text('{"reward": 1}')
+        (self.verifier / "judge_request.json").write_text('{"kind": "rubric"}')
+        self.run_sh()
+        self.assertFalse((self.verifier / "reward.json").exists())
+        self.assertFalse((self.verifier / "judge_request.json").exists())
+        self.assertEqual((self.verifier / "reward.txt").read_text().strip(), "0")
+
+    def test_agent_planted_module_in_tests_is_deleted_before_the_grader_runs(self):
+        self.install("import json\nopen('/logs/verifier/details.json','w').write(json.dumps({'ok': True}))\n")
+        (self.tests / "json.py").write_text("raise SystemExit('planted module ran')\n")
+        r = self.run_sh()
+        self.assertFalse((self.tests / "json.py").exists(), r.stderr)
+        self.assertEqual(self.details()["ok"], True)
+
+    def test_a_grader_that_crashes_or_never_ran_is_an_infra_error_not_a_zero(self):
+        self.install("raise RuntimeError('boom')\n")
+        self.run_sh()
+        d = self.details()
+        self.assertTrue(d["infra_error"])
+        self.assertIn("no details.json", d["error"])
+
+    def test_missing_interpreter_is_reported(self):
+        self.install(self.GOOD)
+        script = self.tests / "test.sh"   # neutralize the absolute-path fallbacks too (this Mac has /usr/bin/python3)
+        script.write_text(script.read_text().replace("/usr/local/bin/python3", "/nonexistent/a").replace("/usr/bin/python3", "/nonexistent/b"))
+        self.run_sh(path="/nonexistent")
+        d = self.details()
+        self.assertTrue(d["infra_error"])
+        self.assertIn("no python3", d["error"])
+
+    def test_artifacts_are_copied_into_the_verifier_dir(self):
+        poc = self.agent / "poc"
+        poc.write_bytes(b"A" * 64)
+        self.install("pass\n", artifacts=[poc, self.agent / "absent.txt"])
+        self.run_sh()
+        self.assertEqual((self.verifier / "poc").read_bytes(), b"A" * 64)
+        self.assertFalse((self.verifier / "absent.txt").exists())
+
+    def test_terminal_bench_keeps_its_own_test_sh_inside_the_wrapper(self):
+        self.install("pass\n", terminal_bench=True)
+        self.assertTrue((self.tests / "tb_test.sh").is_file())
+        (self.verifier / "reward.json").write_text('{"reward": 1}')
+        self.run_sh()
+        self.assertFalse((self.verifier / "reward.json").exists())
+        self.assertEqual((self.verifier / "reward.txt").read_text().strip(), "1")   # their script's own reward, now with a details.json
+        self.assertEqual(self.details()["metric"], 1.0)

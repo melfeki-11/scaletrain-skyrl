@@ -22,6 +22,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from .graders import common as graders_common
 from .graders import cyber as cyber_grader
 from .graders import code as code_grader
 from .graders import general as general_grader
@@ -525,7 +526,10 @@ def export_task(row: dict, dest: Path, *, split: str, general_env_dir_fn=None) -
     (task_dir / "environment" / "Dockerfile").write_text(build_dockerfile(domain, image))
     (task_dir / "task.toml").write_text(build_task_toml(domain))
     (task_dir / "instruction.md").write_text(build_instruction(domain, row, mcp_server_names=mcp_server_names))
-    (task_dir / "strl.json").write_text(json.dumps(build_strl_json(domain, row, image, judge_kind=judge_kind), sort_keys=True))
+    strl_json = build_strl_json(domain, row, image, judge_kind=judge_kind)
+    (task_dir / "strl.json").write_text(json.dumps(strl_json, sort_keys=True))
+    is_terminal_bench = domain == "general" and general_grader.dataset_sub_kind(row) == "terminal_bench"
+    graders_common.finalize_tests(task_dir, strl_json["artifacts"], terminal_bench=is_terminal_bench)   # the shared hardened test.sh
 
     return {
         "task_dir": str(task_dir),

@@ -505,7 +505,11 @@ class Env:
             settings={**generator.DEFAULT_SETTINGS, **(settings or {})}, caps=lambda d: (caps or {}).get(d, {}), rate_limiter=NullCtx(), judge=judge_obj,
             create_trial=self.create_trial, finish_session=self.finish)
 
-    def trial_dir(self, *, reward_txt='1', details=None, request=None, files=None):
+    def trial_dir(self, *, reward_txt='1', details=..., request=None, files=None):
+        """details=... (default) mirrors a real trial: the shared verifier entrypoint always leaves a non-empty details.json;
+        pass details=None to simulate a verifier that did not run."""
+        if details is ...:
+            details = {'metric': float(reward_txt)} if reward_txt is not None else None
         directory = self.temp / f'trial{len(list(self.temp.glob("trial*")))}'
         (directory / 'verifier').mkdir(parents=True)
         if reward_txt is not None:
@@ -607,7 +611,7 @@ class Generator(unittest.TestCase):
     def test_retry_only_transport_errors_and_at_most_two_attempts(self):
         with tempfile.TemporaryDirectory() as temp:
             env = Env(temp)
-            good = env.trial_dir(reward_txt='1', details={})
+            good = env.trial_dir(reward_txt='1', details={'metric': 1.0})
             env.queue = [RuntimeError('modal hiccup'), fake_results(reward=1.0, trial_dir=good)]
             out, summary = env.go()
             self.assertEqual((len(env.configs), out['reward'], summary['masked']), (2, 1.0, False))
@@ -1528,3 +1532,23 @@ class SeamsBetweenGradersAndJudge(unittest.TestCase):
             out, summary = env.go(phase='train')
             self.assertEqual((out['stop_reason'], summary['masked']), ('complete', False))
             self.assertAlmostEqual(out['reward'], (0.6 + 0.9 + 0.3) / 3)   # visual = mean of the five visual keys; MiMo eval formula
+
+
+class VerifierThatNeverRan(unittest.TestCase):
+    """The first graders called /usr/bin/python3, absent from two images: reward.txt stayed 0, no details.json was written, and every
+    trial of those domains scored a silent 0 (the nop gate passes on a broken verifier too)."""
+
+    def test_no_details_json_masks_the_trial_loudly(self):
+        with tempfile.TemporaryDirectory() as temp:
+            env = Env(temp, domain='music')
+            env.queue = [fake_results(reward=0.0, trial_dir=env.trial_dir(reward_txt='0', details=None))]
+            out, summary = env.go(phase='train')
+            self.assertEqual((out['stop_reason'], out['rollout_details'], summary['masked'], summary['mask_reason']), ('error', None, True, 'infra_error'))
+            self.assertIn('no details.json', summary['mask_detail'])
+
+    def test_timeouts_without_details_are_still_scored_not_masked(self):
+        with tempfile.TemporaryDirectory() as temp:
+            env = Env(temp, domain='code')
+            env.queue = [fake_results(exc='VerifierTimeoutError', reward=None, trial_dir=env.trial_dir(reward_txt='0', details=None))]
+            out, summary = env.go()
+            self.assertEqual((out['stop_reason'], summary['masked'], summary['reward']), ('complete', False, 0.0))
