@@ -13,6 +13,8 @@ import hashlib
 import json
 import math
 import os
+import re
+import threading
 import time
 from numbers import Real
 from pathlib import Path
@@ -246,6 +248,90 @@ def env_failure_fraction(metrics: dict, prompts_per_step: int) -> float | None:
 
 
 CANARY_MAX_ENV_FAILURE = 0.5   # a canary whose groups are mostly masked never exercised the environment: fail it
+EXPORT_ESTIMATE_SECONDS = 120.0     # HF export + checkpoint after the forced final eval (predictive deadline)
+STEP_TIME_MARGIN = 1.15             # slack on the mean of the last two step times (predictive deadline)
+DOMAIN_MASKED_KEY = re.compile(r'^environment/([^/]+)/masked_group_fraction$')
+
+
+def failfast_config(cfg: dict, env=None) -> dict:
+    """The effective ``budget.failfast`` rules: the environment spec's defaults (``failfast_defaults``, {} for environments that do not
+    opt in) overridden by the experiment's ``budget.failfast`` block; ``null`` disables a rule. Empty = fail-fast renders nothing."""
+    if env is None:
+        from .tasks import get_environment
+        env = get_environment(cfg['environment']['name'])
+    rules = {**(env.failfast_defaults(cfg) or {}), **((cfg.get('budget') or {}).get('failfast') or {})}
+    return {k: v for k, v in rules.items() if v is not None}
+
+
+def domain_masked_fractions(*sources: dict | None) -> dict[str, float]:
+    """{domain: masked-group fraction} from ``environment/<domain>/masked_group_fraction`` keys (later sources win)."""
+    out: dict[str, float] = {}
+    for source in sources:
+        for key, value in (source or {}).items():
+            match = DOMAIN_MASKED_KEY.match(key)
+            if match and isinstance(value, Real):
+                out[match.group(1)] = float(value)
+    return out
+
+
+def memory_gb_from_metrics(metrics: dict | None) -> float | None:
+    """The largest GPU-memory-in-GB scalar SkyRL's Ray monitor (``ray/gpu.mem_used_gb.*``) or our sampler (``gpu/mem_*_gb``) logged."""
+    values = [float(v) for k, v in (metrics or {}).items()
+              if isinstance(v, Real) and k.startswith(('gpu/', 'ray/gpu')) and 'mem' in k and 'gb' in k and math.isfinite(float(v))]
+    return max(values) if values else None
+
+
+class MemorySampler:
+    """Peak GPU memory (GB, the largest of this host's GPUs) from ``nvidia-smi``, sampled by a daemon thread. Head node only (the driver
+    runs there); guarded: when nvidia-smi is missing or fails ``peak`` stays None, so no fail-fast rule can fire on an unmeasured value.
+    SkyRL's policy workers are Ray actors, so torch.cuda in this process would not see their memory."""
+
+    def __init__(self, interval: float = 5.0, query: Callable[[], float | None] | None = None):
+        self.interval, self.peak, self.last = interval, None, None
+        self._query = query or self._nvidia_smi
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @staticmethod
+    def _nvidia_smi() -> float | None:
+        import subprocess
+        out = subprocess.run(['nvidia-smi', '--query-gpu=memory.used', '--format=csv,noheader,nounits'], capture_output=True, text=True, timeout=15)
+        values = [float(x) for x in out.stdout.split() if x.replace('.', '', 1).isdigit()]
+        return max(values) / 1024.0 if out.returncode == 0 and values else None
+
+    def sample(self) -> float | None:
+        try:
+            value = self._query()
+        except Exception:
+            return None
+        if value is not None:
+            self.last, self.peak = value, value if self.peak is None else max(self.peak, value)
+        return value
+
+    def start(self) -> 'MemorySampler':
+        if self.sample() is None:       # not measurable here (no GPU / no nvidia-smi): do not even start a thread
+            return self
+        self._thread = threading.Thread(target=self._run, name='strl-mem-sampler', daemon=True)
+        self._thread.start()
+        return self
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            self.sample()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
+def predictive_stop(now: float, step_times: list[float], eval_seconds: float, deadline: float, *, export_seconds: float = EXPORT_ESTIMATE_SECONDS) -> tuple[bool, float | None]:
+    """(stop, projected_finish). One more step can start only if it, the final eval and the export still fit before ``deadline``:
+    stop after this step when now + 1.15 x mean(last two step times) + eval + export >= deadline. With fewer than two step times
+    known (the first step: one cold-start time is not an estimate) it is the plain ``now >= deadline`` check."""
+    if len(step_times) < 2:
+        return now >= deadline, None
+    recent = step_times[-2:]
+    projected = now + STEP_TIME_MARGIN * sum(recent) / len(recent) + eval_seconds + export_seconds
+    return projected >= deadline, projected
 
 
 def make_callback_class():
@@ -263,6 +349,82 @@ def make_callback_class():
             self.max_grad = 0.0
             self.env_failures: dict[int, float] = {}
             self.env = _env()
+            self.clock: Callable[[], float] = time.monotonic     # injectable (unit tests)
+            self.step_times: list[float] = []                   # generation + training seconds of each step (on_step_start -> on_step_end)
+            self.eval_seconds: float | None = None              # wall seconds of the last in-loop eval
+            self._step_started: float | None = None
+            self._eval_started: float | None = None
+            self.stop_reason: str | None = None
+            self.failfast = json.loads(os.environ.get('STRL_FAILFAST') or '{}')     # {} = no rules (environments that do not opt in)
+            plan = os.environ.get('STRL_PLAN_STEP_SECONDS')
+            self.plan_step_seconds = float(plan) if plan else None
+            self._slow_steps: list[int] = []                    # consecutive-step bookkeeping per rule / domain
+            self._hot_domains: dict[str, int] = {}
+            self._mem_checked = False
+            self._mem_seen: float | None = None
+            self.memory = MemorySampler().start() if self.failfast.get('mem_gb') is not None else None
+
+        def on_step_start(self, trainer, callback_input, control) -> None:
+            self._step_started = self.clock()
+
+        def on_eval_start(self, trainer, callback_input, control) -> None:
+            self._eval_started = self.clock()
+
+        def check_failfast(self, trainer, callback_input, step: int, step_seconds: float | None) -> None:
+            """budget.failfast: raise (after a W&B alert) when the run is unhealthy in a way that more steps will not fix. Each rule acts only
+            on a quantity it could measure; canary runs (a different, smaller infrastructure) skip the plan-relative and masking rules."""
+            rules = self.failfast
+            if not rules or step < int(rules.get('min_steps', 1)):
+                return
+            canary = os.environ.get('STRL_STAGE') == 'canary'
+            reason = None
+            if rules.get('mem_gb') is not None and not self._mem_checked:
+                self._mem_checked = True                       # the first measured step: peak memory is set by the first train step
+                peaks = [v for v in (self.memory.peak if self.memory else None, self._mem_seen,
+                                     memory_gb_from_metrics(getattr(trainer, 'all_metrics', None)), memory_gb_from_metrics(callback_input.metrics))
+                         if v is not None]
+                if peaks and max(peaks) > float(rules['mem_gb']):
+                    reason = ('memory', f'peak GPU memory {max(peaks):.1f} GB at step {step} exceeds budget.failfast.mem_gb={rules["mem_gb"]} '
+                                        '(lower micro batches / max_generate_length / gpu_memory_utilization, or use LoRA)')
+            if reason is None and rules.get('domain_masked') is not None and not canary:
+                threshold = float(rules['domain_masked'])
+                seen = domain_masked_fractions(getattr(trainer, 'all_metrics', None), callback_input.metrics)
+                for domain in list(self._hot_domains):
+                    if domain not in seen:
+                        self._hot_domains[domain] = 0
+                for domain, fraction in seen.items():
+                    self._hot_domains[domain] = self._hot_domains.get(domain, 0) + 1 if fraction > threshold else 0
+                    if self._hot_domains[domain] >= 2 and reason is None:
+                        reason = ('domain_masked', f'{fraction:.0%} of {domain} GRPO groups were masked (infra/judge failures) for 2 consecutive steps '
+                                                   f'(> budget.failfast.domain_masked={threshold:.0%}); the environment, not the model, is failing: '
+                                                   f'see environment/{domain}/*, generate/{domain}/num_masked')
+            if reason is None and rules.get('step_slow_factor') is not None and self.plan_step_seconds and step_seconds is not None and not canary:
+                limit = float(rules['step_slow_factor']) * self.plan_step_seconds
+                self._slow_steps = (self._slow_steps + [step])[-2:] if step_seconds > limit else []
+                if len(self._slow_steps) == 2 and self._slow_steps[1] == self._slow_steps[0] + 1:
+                    reason = ('step_slow', f'step time {step_seconds:.0f}s > {rules["step_slow_factor"]} x the plan estimate {self.plan_step_seconds:.0f}s '
+                                           'for 2 consecutive steps: the run would not reach its planned steps inside the allocation')
+            if reason is not None:
+                name, text = reason
+                alert(f'Fail-fast: {name}', f'{text} ({os.environ.get("GRPO_RUN_NAME")})')
+                try:
+                    target = Path(trainer.cfg.trainer.export_path).parent / 'failfast.json'
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(json.dumps({'rule': name, 'message': text, 'optimizer_step': step, 'rules': rules, 'at': time.time()}, indent=2))
+                except Exception:
+                    pass
+                raise RuntimeError(f'Fail-fast ({name}): {text}')
+
+        def eval_estimate(self, trainer) -> float:
+            """Seconds one in-loop eval takes: the last measured one (evaluation_timing.jsonl; before any step the step-0 eval)."""
+            if self.eval_seconds:
+                return self.eval_seconds
+            path = Path(trainer.cfg.trainer.export_path).parent / 'evaluation_timing.jsonl'
+            try:
+                last = json.loads(path.read_text().strip().splitlines()[-1])
+                return float(last.get('eval_seconds') or last.get('eval_generate_seconds') or 0.0)
+            except Exception:
+                return 0.0
 
         def on_step_end(self, trainer, callback_input, control) -> None:
             step = int(callback_input.global_step)
@@ -298,6 +460,12 @@ def make_callback_class():
                 target.write_text(json.dumps({'optimizer_steps': 2, 'finite_gradients': True, 'max_grad_norm': self.max_grad,
                                               'learning_signal_steps_1_2': signal, 'gradient_path_exercised': self.max_grad > 0,
                                               'env_failure_fraction_steps_1_2': worst}, indent=2))
+            step_seconds = None
+            if self._step_started is not None:
+                step_seconds = self.clock() - self._step_started
+                self.step_times.append(step_seconds)
+                self._step_started = None
+            self.check_failfast(trainer, callback_input, step, step_seconds)
             try:   # watchdog heartbeat: on_log fires only after this step's eval, which can take minutes for agentic envs
                 progress_path = Path(trainer.cfg.trainer.export_path).parent / 'progress.json'
                 previous = json.loads(progress_path.read_text()) if progress_path.is_file() else {}
@@ -309,10 +477,14 @@ def make_callback_class():
             if time.monotonic() - self.last_checkpoint_at >= self.checkpoint_seconds:
                 control.should_save = True
             deadline = float(os.environ['GRPO_TRAIN_DEADLINE'])
-            if time.time() >= deadline:
-                trainer.cfg.trainer.max_training_steps = step
-                control.should_save = True
-                control.should_evaluate = True
+            if self.stop_reason is None:
+                now = time.time()
+                stop, projected = predictive_stop(now, self.step_times, self.eval_estimate(trainer), deadline)
+                if stop:   # once: the forced final eval + export happen at this step, then training ends
+                    self.stop_reason = 'deadline' if now >= deadline or projected is None else 'predictive_deadline'
+                    trainer.cfg.trainer.max_training_steps = step
+                    control.should_save = True
+                    control.should_evaluate = True
 
         def on_log(self, trainer, callback_input, control) -> None:
             logs = callback_input.logs or {}
@@ -322,6 +494,13 @@ def make_callback_class():
                 time.time() - float(os.environ['GRPO_WORKER_BEGAN_EPOCH'])) / 3600.0
             logs['budget/final_eval_reserve_seconds'] = float(os.environ.get('GRPO_FINAL_EVAL_RESERVE_SECONDS', '0'))
             logs['checkpoint/age_seconds'] = time.monotonic() - self.last_checkpoint_at
+            if self.stop_reason:
+                logs['budget/stop_reason'] = self.stop_reason
+            if self.memory is not None and self.memory.peak is not None:
+                logs['gpu/mem_peak_gb'], logs['gpu/mem_used_gb_max'] = self.memory.peak, self.memory.last
+            seen = memory_gb_from_metrics(logs)
+            if seen is not None:
+                self._mem_seen = seen if self._mem_seen is None else max(self._mem_seen, seen)
             rewards = logs.get('reward/avg_raw_reward')
             if rewards is not None:
                 logs.setdefault('train/reward', rewards)
@@ -405,9 +584,13 @@ def make_callback_class():
                 for item in complete:
                     handle.write(json.dumps(item, sort_keys=True, default=str) + '\n')
             timing = callback_input.metrics or {}
+            row = {'optimizer_step': step, 'examples': len(complete), 'eval_generate_seconds': float(timing.get('timing/eval_generate', 0.0))}
+            if self._eval_started is not None:   # total wall seconds of this eval (generation + scoring + judge): the predictive deadline's estimate
+                self.eval_seconds = self.clock() - self._eval_started
+                row['eval_seconds'] = self.eval_seconds
+                self._eval_started = None
             with (Path(trainer.cfg.trainer.export_path).parent / 'evaluation_timing.jsonl').open('a', encoding='utf-8') as handle:
-                handle.write(json.dumps({'optimizer_step': step, 'examples': len(complete),
-                                         'eval_generate_seconds': float(timing.get('timing/eval_generate', 0.0))}, sort_keys=True) + '\n')
+                handle.write(json.dumps(row, sort_keys=True) + '\n')
 
         def on_save(self, trainer, callback_input, control) -> None:
             # S3 upload is done by the worker's background sync, never inline in the training loop.
@@ -421,6 +604,8 @@ def make_callback_class():
                 pass
             root = Path(trainer.cfg.trainer.export_path).parent
             (root / 'training_completed.json').write_text(json.dumps({'optimizer_steps': int(callback_input.global_step),
-                                                                       'completed_at': time.time()}, indent=2))
+                                                                       'completed_at': time.time(), 'stop_reason': self.stop_reason or 'max_steps'}, indent=2))
+            if self.memory is not None:
+                self.memory.stop()
 
     return EvidenceCallback
