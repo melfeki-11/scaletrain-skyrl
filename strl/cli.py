@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime
 import os
 import subprocess
 import sys
@@ -224,6 +225,26 @@ def worker_started(cfg: dict, attempt: str, s3=None) -> bool:
         raise
 
 
+POD_START_SLACK_SECONDS = 180   # image pull + container start happen before the worker writes budget.json
+
+
+def allocation_start(cfg: dict, attempt: str, s3=None) -> float | None:
+    """Epoch seconds at which this attempt's pods were running: the worker's write-once ``budget.json`` ``started_at`` (the FIRST incarnation
+    when a preempted job was requeued) minus the pod-start slack. None when no worker ever ran. ScaleTrain reports no allocation times, and
+    charging ``created_at`` made a 2 x 8 job that waited 3.5 h in the queue cost more than the whole 6 node-hour program."""
+    import boto3
+    from botocore.exceptions import ClientError
+    st = cfg['storage']
+    s3 = s3 or boto3.Session(profile_name=st['profile']).client('s3')
+    try:
+        body = s3.get_object(Bucket=st['bucket'], Key=f"{st['prefix']}/attempts/{attempt}/artifacts/budget.json")['Body'].read()
+    except ClientError as error:
+        if error.response.get('Error', {}).get('Code') in {'404', 'NoSuchKey', 'NotFound'}:
+            return None
+        raise
+    return float(json.loads(body)['started_at']) - POD_START_SLACK_SECONDS
+
+
 def cmd_ledger(a):
     cfg = _load(a.experiment)
     ledger_path = Path(a.ledger) if a.ledger else ROOT / cfg['budget']['ledger']
@@ -238,6 +259,11 @@ def cmd_ledger(a):
              'terminal_at': a.terminal_at or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'gpu_fraction': stage_receipt['gpu_fraction'],
              'nodes': int(stage_receipt.get('nodes', 1)),
              'evidence': 'conservative: job created_at to first terminal observation (includes queue/pod start)'}
+    started = None if a.never_started else allocation_start(cfg, a.attempt)
+    if started is not None:   # a worker ran: charge the time the pods were up, never the time the job waited in the queue
+        created = datetime.fromisoformat(entry['allocated_at'].replace('Z', '+00:00')).timestamp()
+        entry.update(allocated_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(max(created, started))),
+                     evidence=f'worker budget.json started_at - {POD_START_SLACK_SECONDS} s (pods up) to the terminal observation; queue time (created_at {entry["allocated_at"]}) is not charged')
     if a.never_started:   # cancelled while QUEUED: no pod, no GPU time -> not charged (budget.remaining_seconds skips an unallocated terminal job)
         if job['status'] not in {'CANCELED', 'CANCELLED'}:
             raise SystemExit('--never-started applies only to a cancelled job')

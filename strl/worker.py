@@ -272,6 +272,13 @@ def peer(prefix, rank, begin, identity):
     print(json.dumps({'peer': rank, 'head_status': final.get('status')}), flush=True)
 
 
+def outcome_status(error: BaseException) -> str:
+    """'preempted' when the pod was told to stop (SIGTERM: Ray's handler turns it into SystemExit(15)) - capacity borrowed from another team
+    is reclaimed with no warning (g4-mimo-a: 70 s after it started) - else 'failed'. A preempted attempt cannot resume (no optimizer-state
+    checkpoints by design, the budget window is anchored at the first start): restage it as a new attempt."""
+    return 'preempted' if isinstance(error, SystemExit) and error.code == 15 else 'failed'
+
+
 def main():
     cfg = current()
     runtime = json.loads(Path('runtime.json').read_text())
@@ -495,7 +502,7 @@ def main():
         put_json(prefix + '/completion.json', final)
         print(json.dumps(final), flush=True)
     except BaseException as error:
-        failed = dict(identity, status='failed', error_type=type(error).__name__, error=str(error), failed_at=time.time(), phases=phases)
+        failed = dict(identity, status=outcome_status(error), error_type=type(error).__name__, error=str(error), failed_at=time.time(), phases=phases)
         if rank:   # a peer never writes completion.json (the head owns the attempt's outcome) and never alerts
             Path(f'artifacts/failure-{rank}.log').write_text(traceback.format_exc())
             try:
@@ -504,7 +511,7 @@ def main():
                 pass
             raise
         Path('artifacts/failure.log').write_text(traceback.format_exc())
-        _resume_alert(cfg, runtime, f'Run failed: {type(error).__name__}', str(error))
+        _resume_alert(cfg, runtime, f'Run {failed["status"]}: {type(error).__name__}', str(error))
         try:
             sync_local('artifacts', prefix, exclude=SYNC_EXCLUDE)
             put_json(prefix + '/completion.json', failed)

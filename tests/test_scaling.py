@@ -583,3 +583,31 @@ class NeverStartedJobs(unittest.TestCase):
         attempts = [{'job_id': 'j1', 'attempt': 'x', 'status': 'CANCELED', 'allocated_at': None, 'terminal_at': '2026-10-07T09:00:00Z',
                      'gpu_fraction': 0.125, 'nodes': 1}]
         self.assertEqual(remaining_seconds(attempts, 21600), 21600)
+
+
+    def test_charge_starts_when_the_pods_started_not_when_the_job_was_created(self):
+        """g4-mimo-a waited 3.5 h for two nodes: created_at -> terminal would have cost 7 node-hours of a 6 node-hour program."""
+        from botocore.exceptions import ClientError
+        from strl.cli import POD_START_SLACK_SECONDS, allocation_start
+        cfg = {'storage': {'bucket': 'b', 'prefix': 'p', 'profile': 'x'}}
+
+        class S3:
+            def __init__(self, code=None):
+                self.code = code
+
+            def get_object(self, **kw):
+                if self.code:
+                    raise ClientError({'Error': {'Code': self.code}}, 'GetObject')
+                import io
+                return {'Body': io.BytesIO(b'{"started_at": 1000000.0}')}
+        self.assertEqual(allocation_start(cfg, 'a', S3()), 1000000.0 - POD_START_SLACK_SECONDS)
+        self.assertIsNone(allocation_start(cfg, 'a', S3('NoSuchKey')))
+        with self.assertRaises(ClientError):          # fails closed: an access error is not evidence of a never-started pod
+            allocation_start(cfg, 'a', S3('AccessDenied'))
+
+
+    def test_sigterm_is_recorded_as_preempted_not_failed(self):
+        from strl.worker import outcome_status
+        self.assertEqual(outcome_status(SystemExit(15)), 'preempted')
+        self.assertEqual(outcome_status(SystemExit(1)), 'failed')
+        self.assertEqual(outcome_status(RuntimeError('x')), 'failed')
