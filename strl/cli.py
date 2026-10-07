@@ -115,7 +115,7 @@ def cmd_prepare(a):
     from .tasks import get_environment
     env = get_environment(cfg['environment']['name'])
     kwargs = {}
-    if env.needs_modal:
+    if env.needs_modal and env.uses_coding_executor:
         from transformers import AutoTokenizer
         from .services.modal import local_profile
         kwargs['tokenizer'] = AutoTokenizer.from_pretrained(cfg['model']['local_path'])

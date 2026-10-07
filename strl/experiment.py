@@ -40,7 +40,7 @@ SCHEMA: dict[str, Any] = {
         'micro_forward_per_gpu': int, 'lr': (int, float), 'update_epochs': int, 'use_kl_loss': bool, 'kl_coef': (int, float),
         'zero_variance_filter': bool, 'temperature': (int, float), 'top_p': (int, float), 'max_prompt_tokens': int,
         'max_generate_length': int, 'max_steps': int, 'bf16': bool, 'seed': int, 'zero_reward_on_non_stop': bool,
-        'eval_temperature': (int, float),
+        'eval_temperature': (int, float), 'grpo_norm_by_std': bool,
     },
     'inference': {'tensor_parallel_size': int, 'gpu_memory_utilization': (int, float), 'max_num_seqs': int, 'enforce_eager': bool,
                   'max_env_workers': int, 'num_engines': int, 'max_num_batched_tokens': int, 'engine_init_kwargs': dict},

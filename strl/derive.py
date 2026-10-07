@@ -49,6 +49,9 @@ def estimate_step_seconds(cfg: dict, params_b: float) -> dict[str, float]:
     if cfg['environment']['name'] == 'coding_harbor' and p['environment'] != 'coding_harbor':
         hb = cfg['environment'].get('harbor') or {}
         gen = max(gen * int(hb.get('max_turns', 8)) * 0.5, 60.0)                  # multi-turn agent + sandbox startup (uncalibrated)
+    if cfg['environment']['name'] == 'mimo' and p['environment'] != 'mimo':
+        deadline = float((cfg['environment'].get('mimo') or {}).get('step_deadline_sec') or 1200)
+        gen = max(gen, 0.6 * deadline)                                            # a step waits for its slowest agent episodes (uncalibrated)
     calibrated = p['environment'] == cfg['environment']['name'] and p['model'] == cfg['model']['id'] and cfg['compute']['nodes'] == 1
     return {'generate_s': round(gen, 1), 'train_s': round(train, 1), 'other_s': round(other, 1),
             'step_s': round(gen + train + other, 1), 'profile': p['name'],
@@ -197,8 +200,9 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
     steps = int(seconds / timing['step_s']) if timing['step_s'] > 0 else 0
     if steps < 20:
         out.append(f'BUDGET: only ~{steps} optimizer steps fit in the attempt after startup and final-eval reserve; consider shorter generations or a longer attempt.')
-    if cfg['environment']['name'] == 'coding_harbor' and profile.name == 'qwen3_5':
+    if env.generator_kind == 'harbor' and profile.name == 'qwen3_5':
         out.append('HARBOR: Qwen3.5 history templates drop <think> blocks, so step-wise merging falls back to one sequence per turn (correct, slower).')
+    out += env.plan_warnings(cfg)
     if params_b is None:
         out.append('MEMORY: parameter count unknown (config.json unavailable); set model.params_b for memory/step estimates.')
     if memory and memory['training_phase_gb'] > MEMORY_LIMIT_GB:

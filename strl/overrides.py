@@ -137,6 +137,8 @@ def skyrl_values(cfg: dict[str, Any], *, stage: str, run_name: str, learning_rat
         'generator.eval_sampling_params.max_generate_length': a['max_generate_length'],
         'trainer.enable_ray_gpu_monitor': True,
     }
+    if 'grpo_norm_by_std' in a:     # rendered only when set: existing experiments keep SkyRL's default (true) and their exact override set
+        values['trainer.algorithm.grpo_norm_by_std'] = a['grpo_norm_by_std']
     chat = profile.chat_kwargs(cfg)
     if chat:
         values['generator.chat_template_kwargs'] = chat

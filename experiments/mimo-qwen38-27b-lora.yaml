@@ -1,0 +1,18 @@
+# MiMo multi-domain RL, LoRA arm: Qwen3.8-27B, 2 x 8 H100, rank-64 adapters on every linear layer. The frozen base is sharded within
+# each node (HSDP, fsdp_size 8) and replicated across the two nodes, so only the small adapter gradients cross the network.
+name: mimo-qwen38-27b-lora
+description: MiMo five-domain agentic GRPO, Qwen3.8-27B, LoRA r64/a64 all-linear, 2 nodes x 8 H100
+extends: base/mimo.yaml
+
+finetune:
+  mode: lora
+  lora: {rank: 64, alpha: 64, dropout: 0.0, target_modules: all-linear}
+
+compute:
+  training: {fsdp_size: 8}
+
+algorithm:
+  lr: 1.0e-05                       # adapters take ~10x the full-parameter step (full arm: 1e-6)
+
+tracking:
+  tags: ['nodes:2', 'finetune:lora']
