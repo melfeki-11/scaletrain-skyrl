@@ -22,6 +22,16 @@
       "gpu_fraction": 0.0,
       "nodes": 2,
       "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db2v603mjdjg07lcros0",
+      "attempt": "dry-mimo-a",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-07T07:21:36Z",
+      "terminal_at": "2026-10-07T07:24:51Z",
+      "gpu_fraction": 0.0,
+      "nodes": 1,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
     }
   ]
 }
