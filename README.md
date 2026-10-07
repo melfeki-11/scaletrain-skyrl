@@ -52,6 +52,34 @@ Full tables, examples and job IDs are in [RESULTS.md](RESULTS.md). Raw evidence 
     "reward up, metric flat" effect that `strl plan` warns about, visible in W&B.
   - 0 Modal infra errors. The LiteLLM critic cost about $0.012 per run.
 
+## Beyond one node: LoRA or full fine-tuning, 2+ nodes, and the 5-domain MiMo suite
+
+The same experiment file now also switches **how** the model is trained and **where**:
+
+| Switch | Key | Notes |
+| --- | --- | --- |
+| LoRA vs full fine-tuning | `finetune.mode: lora \| full` (+ `finetune.lora.{rank,alpha,target_modules}`) | LoRA shards the frozen base inside each node and only moves adapter gradients across nodes; full needs fast cross-node links (the probe measures them) |
+| Nodes | `compute.nodes`, `compute.gpus_per_node` (`limits.max_nodes` gates it) | S3 rendezvous, a probe (NCCL transport, all-gather GB/s, EFA), per-host LoRA adapter sync, node-aware budget (`nodes x gpus/8` per second) |
+| Large models | `strl stage-model <exp> --attempt A` | A CPU job copies the HF snapshot into S3 one shard at a time (a 55.6 GB model never goes through a laptop) |
+| Any key, no YAML edit | `strl plan\|stage <exp> --set finetune.mode=full --set environment.mimo.domains.code.train=0` | recorded in the resolved config and its sha |
+
+**MiMo suite** (`environment.name: mimo`; [XiaomiMiMo/MiMo-V2.6-RL-oss](https://huggingface.co/datasets/XiaomiMiMo/MiMo-V2.6-RL-oss)):
+pick any subset of five domains at run time, each as sandboxed Harbor tasks graded by its own verifier.
+
+| Domain | Task | Grader (reward) |
+| --- | --- | --- |
+| `music` | write a piece in ABC notation under key/tempo/meter/voice constraints (single shot) | MiMo's deterministic human-likeness scorer (`abc2midi` + 18 features) |
+| `cyber` | reproduce a known ARVO sanitizer crash from source and a binary | re-run of the agent's PoC against a pristine copy of the binary: function + bug type must match |
+| `code` | resolve a repo issue (SWE) | reset + apply the hidden test patch from our own copy, run its test command: exit 0 |
+| `general` | office-style tasks over MCP tools (and terminal-bench tasks) | in-sandbox rule checks + an outside-the-sandbox LLM rubric judge |
+| `webdev` | build a static website | in-sandbox Playwright render + an outside-the-sandbox vision judge |
+
+`experiments/mimo-qwen38-27b-lora.yaml` and `-full.yaml` target Qwen3.8-27B on 2 x 8 H100; `mimo-qwen35-0p8b-smoke.yaml` is the 1-GPU canary
+(5 domains, 4 train + 2 held-out tasks each). Held-out sets are fixed per domain (grouped by project, repo, scenario or tag), so runs with a different
+training selection remain comparable; evaluation is in the training loop (step 0 = base, last step = trained) and reported per domain plus a macro average
+with paired bootstrap CIs (`strl verify`, `strl compare`, `strl report`). The verification ladder and what each rung caught are in
+[validation.md](.claude/skills/scaletrain-rl/references/validation.md).
+
 ## Quickstart
 
 ```bash
