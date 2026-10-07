@@ -72,3 +72,36 @@ Run on 2026-10-06 as two concurrent `p5.48xlarge:4` jobs in W&B group `mbpp-rewa
 - **Found while it ran:** `budget/consumed_node_hours` over-reported, adding the program's unused budget. Fixed; the deadline
   itself was always correct.
 - **Profiles:** both runs were added to `strl/profiles.json`. Coding plans are now calibrated: 29.7 s predicted vs 27.7 s measured.
+
+## Multi-node, LoRA/full and the MiMo suite (2026-10-07)
+
+Program ledger: `evidence/ledgers/mimo-27b.json`, 21,600 node-seconds (6 node-hours) authorized for Qwen3.8-27B on 2 x 8 H100. Status of each rung:
+
+| Rung | Result |
+| --- | --- |
+| 27B weights staged to S3 by a CPU job (`strl stage-model`) | COMPLETED in ~12 min: 29 files, 55.59 GB, sha256 manifest. Per-shard download with retries (HF 429s killed an earlier 27B attempt) |
+| 2-node CPU dry run, LoRA (`dry2-lora-a`, 2 x m5.2xlarge) | `dry_run_passed`: rendezvous via S3 leader record, 2 distinct hosts, Ray with 16 GPUs, `validate_cfg` accepted 82 overrides |
+| 2-node CPU dry run, full fine-tuning (`dry2-full-a`) | `dry_run_passed`: 76 overrides at 16 GPUs |
+| `efa_available` on the CPU pods | false, `ofi_plugins: []`: the image may lack aws-ofi-nccl, so cross-node NCCL may run over TCP sockets even on p5. The GPU smoke measures it; this is why LoRA + HSDP inside a node is the recommended 27B layout |
+| Chat template, step-wise prefix merging (811 real Terminus-2 turns from `can-hb-f`, every logged prompt re-rendered exactly) | Qwen3.5: 811 sequences (no merging). Qwen3.8 with `enable_thinking=false`: 209 sequences, 86% of merge points merge (~3.9x fewer training sequences). `strl check-template` + a plan warning replace a hard-coded Qwen3.5 assumption |
+| MiMo smoke selection + export (`strl prepare`, 5 domains x 4 train + 2 test) | works on real tasks; found 5 bugs unit tests could not (below) |
+| Strict nop gate, all 5 domains, real Harbor/Modal path | nop = 0 AND the verifier proven to have run (`details.json`); scripted positive controls: music tune scores 0.228, general's anchor-built answer reaches the judge request with 5 items |
+| `dry-mimo-a` (m5.2xlarge, pod) | `dry_run_passed`: nop from the pod in all 5 domains (7-36 s), judge selftest with gpt-6-luna: rubric call ok, **vision call ok** (gpt-6-luna handles images; $0.0006), SkyRL `validate_cfg` 89 overrides, W&B incremental table readback, critic call |
+| 1-GPU canary (`can-mimo-b`) | submitted from the fixed code; see the run table below |
+
+### What each rung caught
+
+| Rung | Bug |
+| --- | --- |
+| reading both sides of two tracks' interface | vision `judge_request` with an `items` entry raised "no judge score" -> every webdev trial would be masked; `force_zero` from the general grader was never consumed |
+| `strl prepare` on real tasks | exporter wrote `dest/<split>/<name>` while the data layer passed the final dir: every task double-nested (`tasks/test/x/test/x/`) |
+| `strl prepare` on real tasks | published code images define no `CMD`: sandboxes created without a command exit at once (status 128, `ConflictError: Sandbox is shutting down`), in capture code and in Harbor trials alike. Fixed with `CMD ["sleep","infinity"]`, tested on four Dockerfile variants |
+| `strl prepare` on real tasks | non-ASCII / spaced workspace file names raised `UnicodeEncodeError` (HF paths must be percent-encoded) |
+| gate tooling | `assets/overlay` (Linux pod build) shadowed the Mac venv's native packages: `No module named fastuuid.fastuuid` |
+| independent code review (not tests, not gates) | **music and general verifiers never ran** (`/usr/bin/python3` is absent from python:3.12-slim and general-agent-env-0): every trial scored 0 silently and the nop gate passed vacuously. Also: the agent could forge `reward.json` or shadow stdlib modules via `/tests`; artifacts never reached the verifier dir; `force_zero` raised KeyError; the soft stop deadline was before the child's hard kill; eval ran greedy so `eval_repeats: 2` were duplicates; step-deadline validation ignored the exporter's default timeouts |
+
+Fixes for the review findings: one shared hardened `test.sh` (interpreter on PATH, wipes forged verifier files, prunes unexpected `/tests` files, copies artifacts, guarantees a non-empty `details.json`); a trial whose verifier left no `details.json` is masked as an infra error; the nop gate and the pod dry run assert the verifier ran; `strl ledger --never-started` for a job cancelled in the queue.
+
+### Honest limits of this evidence
+- Full fine-tuning at 27B on 2 nodes is validated only by the config checks above (dry run at 16 GPUs, memory model), never GPU-run: the budget pays for one 2 x 8 smoke (LoRA) and the main LoRA run.
+- Cyber and code positive controls (an agent actually solving a task) and webdev's render-to-judge path with a real site need a model; they are exercised by the canary and the main run, not by a scripted control.
