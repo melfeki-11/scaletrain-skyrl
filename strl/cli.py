@@ -208,6 +208,22 @@ def cmd_monitor(a):
     watch(_load(a.experiment), a.attempt, a.job_id, interval=a.interval, once=a.once)
 
 
+def worker_started(cfg: dict, attempt: str, s3=None) -> bool:
+    """True if a worker ever ran in this attempt's pod (it writes artifacts/worker-started.json first thing). Fails closed: any S3 error other
+    than "not found" raises, so a claim of "never started" is only ever made on positive evidence."""
+    import boto3
+    from botocore.exceptions import ClientError
+    st = cfg['storage']
+    s3 = s3 or boto3.Session(profile_name=st['profile']).client('s3')
+    try:
+        s3.head_object(Bucket=st['bucket'], Key=f"{st['prefix']}/attempts/{attempt}/artifacts/worker-started.json")
+        return True
+    except ClientError as error:
+        if error.response.get('Error', {}).get('Code') in {'404', 'NoSuchKey', 'NotFound'}:
+            return False
+        raise
+
+
 def cmd_ledger(a):
     cfg = _load(a.experiment)
     ledger_path = Path(a.ledger) if a.ledger else ROOT / cfg['budget']['ledger']
@@ -222,6 +238,12 @@ def cmd_ledger(a):
              'terminal_at': a.terminal_at or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'gpu_fraction': stage_receipt['gpu_fraction'],
              'nodes': int(stage_receipt.get('nodes', 1)),
              'evidence': 'conservative: job created_at to first terminal observation (includes queue/pod start)'}
+    if a.never_started:   # cancelled while QUEUED: no pod, no GPU time -> not charged (budget.remaining_seconds skips an unallocated terminal job)
+        if job['status'] not in {'CANCELED', 'CANCELLED'}:
+            raise SystemExit('--never-started applies only to a cancelled job')
+        if worker_started(cfg, a.attempt):
+            raise SystemExit(f'{a.attempt} has worker-started.json: a pod ran, so it is charged from creation (omit --never-started)')
+        entry.update(allocated_at=None, evidence='cancelled while QUEUED; no worker-started.json in the attempt artifacts: the pod never started (not charged)')
     ledger['attempts'].append(entry)
     ledger_path.write_text(json.dumps(ledger, indent=2) + '\n')
     from .budget import remaining_seconds
@@ -301,6 +323,7 @@ def main(argv=None):
     s.add_argument('--interval', type=float, default=60); s.add_argument('--once', action='store_true')
     s = sub.add_parser('ledger'); s.add_argument('experiment'); s.add_argument('--attempt', required=True); s.add_argument('--job-id', required=True)
     s.add_argument('--terminal-at', help='ISO time of the terminal observation (default: now)')
+    s.add_argument('--never-started', action='store_true', help='a CANCELLED job that never left the queue (verified: no worker-started.json): not charged')
     s.add_argument('--ledger', help='program budget ledger (default: budget.ledger of the experiment)')
     s = sub.add_parser('verify'); s.add_argument('experiment'); s.add_argument('--attempt', required=True)
     s = sub.add_parser('compare'); s.add_argument('runs', nargs='+', help='experiment.yaml:attempt')

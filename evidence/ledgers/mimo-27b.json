@@ -32,6 +32,16 @@
       "gpu_fraction": 0.0,
       "nodes": 1,
       "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db2v7brmjdjg07lcrosg",
+      "attempt": "can-mimo-a",
+      "status": "CANCELED",
+      "allocated_at": null,
+      "terminal_at": "2026-10-07T08:26:07Z",
+      "gpu_fraction": 0.125,
+      "nodes": 1,
+      "evidence": "cancelled while QUEUED; no worker-started.json in the attempt artifacts: the pod never started (not charged)"
     }
   ]
 }

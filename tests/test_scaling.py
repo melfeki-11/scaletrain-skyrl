@@ -550,3 +550,31 @@ class Probe(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class NeverStartedJobs(unittest.TestCase):
+    """A job cancelled while QUEUED used to be charged from creation (an hour in the queue = 450 node-s at 1/8 of a node)."""
+
+    def test_worker_started_fails_closed(self):
+        from botocore.exceptions import ClientError
+        from strl.cli import worker_started
+        cfg = {'storage': {'bucket': 'b', 'prefix': 'p', 'profile': 'x'}}
+
+        class S3:
+            def __init__(self, code):
+                self.code = code
+
+            def head_object(self, **kw):
+                if self.code is None:
+                    return {}
+                raise ClientError({'Error': {'Code': self.code}}, 'HeadObject')
+        self.assertTrue(worker_started(cfg, 'a', S3(None)))
+        self.assertFalse(worker_started(cfg, 'a', S3('404')))
+        with self.assertRaises(ClientError):          # an access error is NOT evidence that nothing ran
+            worker_started(cfg, 'a', S3('AccessDenied'))
+
+    def test_an_unallocated_cancelled_attempt_costs_nothing(self):
+        from strl.budget import remaining_seconds
+        attempts = [{'job_id': 'j1', 'attempt': 'x', 'status': 'CANCELED', 'allocated_at': None, 'terminal_at': '2026-10-07T09:00:00Z',
+                     'gpu_fraction': 0.125, 'nodes': 1}]
+        self.assertEqual(remaining_seconds(attempts, 21600), 21600)
