@@ -23,14 +23,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 KEYS = ['optimizer_step', 'reward/avg_raw_reward', 'eval/task_metric', 'train/learning_signal_fraction', 'train/pass_at_1',
         'environment/infra_error', 'environment/masked_group_fraction', 'timing/step', 'timing/generate', 'policy/grad_norm',
-        'policy/policy_loss', 'budget/consumed_node_hours', 'critic/cost_usd', 'generate/avg_num_tokens', 'train/truncation_rate']
+        'policy/policy_loss', 'budget/consumed_node_hours', 'critic/cost_usd', 'generate/avg_num_tokens', 'train/truncation_rate',
+        'generate/num_seq_before_merge', 'generate/num_seq_after_merge']
 
 
 DOMAIN_MASKED_LIMIT = 0.15
 STEP_SLOW_FACTOR = 1.5
 MEM_LIMIT_GB = 76.0
 DOMAIN_KEY = re.compile(r'^(eval/([a-z]+)/task_metric|generate/([a-z]+)/pass_rate|environment/([a-z]+)/masked_group_fraction)$')
-ALERTED = ('DOMAIN_MASKED', 'STEP_SLOW', 'MEM')
+MERGE_RATIO_LIMIT = 0.8   # sequences after / before step-wise merging; a healthy multi-turn run is far below (Qwen3.8: ~0.26 per turn)
+ALERTED = ('DOMAIN_MASKED', 'STEP_SLOW', 'MEM', 'MERGE')
 
 
 def is_memory_key(key: str) -> bool:
@@ -105,6 +107,9 @@ def flags(rows: list[dict], progress: dict | None, heartbeat: dict | None, node_
             out.append(f"DOMAIN_MASKED({name}={fraction['masked_group_fraction']:.2f})")
     if plan_step_seconds and isinstance(seen.get('timing/step'), (int, float)) and seen['timing/step'] > STEP_SLOW_FACTOR * plan_step_seconds:
         out.append(f"STEP_SLOW({seen['timing/step']:.0f}s > {STEP_SLOW_FACTOR} x plan {plan_step_seconds:.0f}s)")
+    before, after = seen.get('generate/num_seq_before_merge'), seen.get('generate/num_seq_after_merge')
+    if isinstance(before, (int, float)) and isinstance(after, (int, float)) and before >= 40 and after / before > MERGE_RATIO_LIMIT:
+        out.append(f'MERGE({after:.0f}/{before:.0f} sequences kept: step-wise turns are not merging, several x more training tokens; strl check-template)')
     memory = {k: v for k, v in seen.items() if is_memory_key(k) and isinstance(v, (int, float))}
     if memory and max(memory.values()) > MEM_LIMIT_GB:
         key = max(memory, key=memory.get)

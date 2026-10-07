@@ -42,6 +42,16 @@
       "gpu_fraction": 0.125,
       "nodes": 1,
       "evidence": "cancelled while QUEUED; no worker-started.json in the attempt artifacts: the pod never started (not charged)"
+    },
+    {
+      "job_id": "job_db304m3mjdjg088ceet0",
+      "attempt": "can-mimo-b",
+      "status": "CANCELED",
+      "allocated_at": null,
+      "terminal_at": "2026-10-07T13:56:48Z",
+      "gpu_fraction": 0.125,
+      "nodes": 1,
+      "evidence": "cancelled while QUEUED; no worker-started.json in the attempt artifacts: the pod never started (not charged)"
     }
   ]
 }

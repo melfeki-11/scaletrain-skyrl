@@ -766,3 +766,13 @@ class DeadlineConsistency(unittest.TestCase):
         self.assertFalse(predictive_stop(100, [300, 300], 200, 900, pending_eval_seconds=0)[0])
         self.assertTrue(predictive_stop(100, [300, 300], 200, 900, pending_eval_seconds=200)[0])
         self.assertAlmostEqual(predictive_stop(100, [300, 300], 200, 900, pending_eval_seconds=200)[1], 965.0)
+
+
+class MergeFlag(unittest.TestCase):
+    def test_flags_unmerged_stepwise_training(self):
+        from strl.monitor.live import flags
+        def rows(before, after):
+            return [{'timing/step': 100.0, 'generate/num_seq_before_merge': before, 'generate/num_seq_after_merge': after}]
+        self.assertTrue(any(f.startswith('MERGE(') for f in flags(rows(362, 362), None, None, 99)))      # the Qwen3.5 canary: 362 -> 362
+        self.assertFalse(any(f.startswith('MERGE(') for f in flags(rows(811, 209), None, None, 99)))     # Qwen3.8 on real transcripts
+        self.assertFalse(any(f.startswith('MERGE(') for f in flags(rows(12, 12), None, None, 99)))       # too few sequences to judge
