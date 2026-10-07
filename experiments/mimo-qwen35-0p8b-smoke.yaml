@@ -19,13 +19,13 @@ environment:
   mimo:
     eval_repeats: 1
     canary: 1
-    step_deadline_sec: 900
+    step_deadline_sec: 600
     domains:
       music:   {train: 4, test: 2}
-      cyber:   {train: 4, test: 2, max_agent_sec: 420, max_verifier_sec: 240}
-      code:    {train: 4, test: 2, max_agent_sec: 420, max_verifier_sec: 240}
-      general: {train: 4, test: 2, max_agent_sec: 420, max_verifier_sec: 240}
-      webdev:  {train: 4, test: 2, max_agent_sec: 420, max_verifier_sec: 240}
+      cyber:   {train: 4, test: 2, max_agent_sec: 240, max_verifier_sec: 120}
+      code:    {train: 4, test: 2, max_agent_sec: 240, max_verifier_sec: 120}
+      general: {train: 4, test: 2, max_agent_sec: 240, max_verifier_sec: 120}
+      webdev:  {train: 4, test: 2, max_agent_sec: 240, max_verifier_sec: 120}
 
 compute:
   nodes: 1
@@ -53,7 +53,7 @@ budget:
   total_seconds: 21600
   attempt_max_seconds: 3600
   stall_seconds: 1800
-  canary_max_seconds: 2400
+  canary_max_seconds: 3000
 
 limits:
   max_nodes: 1

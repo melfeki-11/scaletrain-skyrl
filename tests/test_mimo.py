@@ -637,6 +637,28 @@ class Generator(unittest.TestCase):
             out, summary = env.go()
             self.assertEqual((out['reward'], out['stop_reason'], summary['stop']), (0.0, 'context_length', 'context_length'))
 
+    def test_policy_failures_are_scored_in_eval_and_never_retried(self):
+        """canary can-mimo-d: a 0.8B policy that ran out of time (webdev) or of output budget (music) was masked, so the held-out eval
+        silently dropped exactly the tasks it failed. Evaluation scores those as 0; training still cannot use a trial without tokens."""
+        with tempfile.TemporaryDirectory() as temp:
+            for exc in ('AgentTimeoutError', 'OutputLengthExceededError'):
+                env = Env(temp + f'/{exc}-eval')
+                env.queue = [fake_results(exc=exc, reward=None, rollout=False), fake_results(reward=1.0)]
+                out, summary = env.go(phase='eval')
+                self.assertEqual((len(env.configs), summary['masked'], summary['metric'], summary['reward']), (1, False, 0.0, 0.0), exc)
+                self.assertEqual(summary['stop'], {'AgentTimeoutError': 'agent_timeout', 'OutputLengthExceededError': 'output_length'}[exc])
+            env = Env(temp + '/train')
+            env.queue = [fake_results(exc='AgentTimeoutError', reward=0.0, rollout=False, trial_dir=env_dir(env))]
+            summary = env.go(phase='train')[1]
+            self.assertEqual((summary['masked'], summary['mask_reason']), (True, 'agent_timeout'))
+            env = Env(temp + '/out-train')      # an overflowing reply that did leave tokens is a scored 0 for training too
+            env.queue = [fake_results(exc='OutputLengthExceededError', reward=None, trial_dir=env_dir(env))]
+            out, summary = env.go(phase='train')
+            self.assertEqual((out['reward'], out['stop_reason'], summary['masked'], summary['stop']), (0.0, 'output_length', False, 'output_length'))
+            env = Env(temp + '/mask-eval', settings={'timeout_policy': 'mask'})   # the user asked to mask timeouts: still masked in eval
+            env.queue = [fake_results(exc='AgentTimeoutError', reward=None, rollout=False)]
+            self.assertTrue(env.go(phase='eval')[1]['masked'])
+
     def test_infra_error_and_empty_rollout_are_masked(self):
         with tempfile.TemporaryDirectory() as temp:
             env = Env(temp)

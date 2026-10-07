@@ -1,0 +1,70 @@
+# G4 multi-node smoke: Qwen3.5-0.8B, LoRA r16, 2 x p5.48xlarge (16 H100), TWO mimo domains (music single-shot, cyber Terminus-2), 2 updates.
+# It proves what the 27B run depends on and a 1-GPU canary cannot: 16-rank NCCL, HSDP within a node, per-host LoRA adapter sync, the
+# Harbor router reaching the PEER node's engines, step-wise multi-turn batches padded across 16 ranks, per-domain eval at 16 GPUs, adapter export.
+# Data: `strl prepare experiments/mimo-qwen35-0p8b-2node-smoke.yaml` writes assets/mimo/data-2node (16 train + 4 held-out per domain).
+name: mimo-qwen35-0p8b-2node-smoke
+description: MiMo music+cyber smoke, Qwen3.5-0.8B, LoRA r16, 2 nodes x 8 H100
+extends: base/mimo.yaml
+
+model:
+  id: Qwen/Qwen3.5-0.8B
+  revision: 2fc06364715b967f1860aea9cf38778875588b17
+  local_path: assets/model
+
+finetune:
+  mode: lora
+  lora: {rank: 16, alpha: 32, dropout: 0.0, target_modules: all-linear}
+
+environment:
+  harbor: {max_seq_len: 16384, max_concurrency: 64, max_turns: 12}
+  mimo:
+    eval_repeats: 1
+    canary: 2
+    step_deadline_sec: 480
+    domains:                        # the subset is chosen by `train > 0`: code, general and webdev are off in this smoke
+      music:   {train: 16, test: 4, max_agent_sec: 120, max_verifier_sec: 60}
+      cyber:   {train: 16, test: 4, max_agent_sec: 180, max_verifier_sec: 90}
+      code:    {train: 0, test: 0}
+      general: {train: 0, test: 0}
+      webdev:  {train: 0, test: 0}
+
+compute:
+  nodes: 2
+  gpus_per_node: 8
+  training: {fsdp_size: 8}          # HSDP: shard the frozen base within a node, replicate across the 2 nodes
+
+inference:
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.5
+
+algorithm:
+  prompts_per_step: 16              # 8 per domain; x n_samples 4 = 64 trajectories = 4 per rank
+  minibatch_prompts: 16
+  n_samples: 4
+  micro_train_per_gpu: 1
+  micro_forward_per_gpu: 1
+  lr: 1.0e-05
+  max_steps: 2
+
+evaluation:
+  interval_steps: 2
+  checkpoint_interval_steps: 2
+  fixed_qualitative_samples: 8
+
+budget:
+  total_seconds: 21600
+  attempt_max_seconds: 2400         # 2 x 2400 node-s ceiling; the plan expects ~1800 s
+  stall_seconds: 1500
+  canary_max_seconds: 1800
+  ledger: evidence/ledgers/mimo-27b.json
+
+limits:
+  max_nodes: 2
+  max_attempt_seconds: 2400
+
+tracking:
+  group: mimo-2node-smoke
+  tags: ['nodes:2', 'finetune:lora', 'smoke']
+
+run:
+  data_dir: assets/mimo/data-2node

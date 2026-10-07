@@ -193,6 +193,8 @@ class MimoSpec(CodingHarborSpec):
         epochs = max(1, math.ceil(a['max_steps'] / steps_per_epoch(cfg))) if steps_per_epoch(cfg) else 1
         out.update({'trainer.eval_batch_size': max(1, self.canary_size(cfg) if stage == 'canary' else self.validation_size(cfg)),
                     'trainer.epochs': max(20, epochs), 'generator.eval_n_samples_per_prompt': 1})
+        if stage == 'canary':    # one eval per generation costs ~8 min at smoke size: eval at step 0 (base) and after the 2nd update only
+            out['trainer.eval_interval'] = 2
         return out
 
     def build_dataset(self, experiment: dict, cfg: Any, split: str) -> Any:
@@ -313,6 +315,10 @@ class MimoSpec(CodingHarborSpec):
 
     def eval_metrics(self, records: list[dict]) -> dict[str, float]:
         out = metrics.domain_metrics(records, 'eval')
+        for domain in data.DOMAINS:   # eval/invalid_answer_rate is the all-domain version of this: a trial that left no artifact for the verifier
+            rows = [r for r in records if r.get('domain') == domain and not r.get('masked')]
+            if rows:
+                out[f'eval/{domain}/no_artifact_rate'] = sum(not r.get('artifact') for r in rows) / len(rows)
         if 'eval/macro_task_metric' in out:
             out['eval/task_metric'] = out['eval/macro_task_metric']
         return out

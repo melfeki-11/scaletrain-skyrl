@@ -52,6 +52,26 @@
       "gpu_fraction": 0.125,
       "nodes": 1,
       "evidence": "cancelled while QUEUED; no worker-started.json in the attempt artifacts: the pod never started (not charged)"
+    },
+    {
+      "job_id": "job_db34vd4f8c4g07jrodi0",
+      "attempt": "can-mimo-c",
+      "status": "FAILED",
+      "allocated_at": "2026-10-07T13:57:08Z",
+      "terminal_at": "2026-10-07T17:17:47Z",
+      "gpu_fraction": 0.125,
+      "nodes": 1,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db37uccf8c4g07jrodk0",
+      "attempt": "can-mimo-d",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-07T17:19:45Z",
+      "terminal_at": "2026-10-07T17:59:29Z",
+      "gpu_fraction": 0.125,
+      "nodes": 1,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
     }
   ]
 }

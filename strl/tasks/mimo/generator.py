@@ -176,15 +176,23 @@ def exception_type(results: Any) -> str | None:
     return getattr(info, 'exception_type', None) if info else None
 
 
+# The policy's own failures: the trial counts (reward 0) instead of being retried or masked. Hiding them would make a policy that
+# rambles or runs out of time look better (survivorship) and would drop its negative training signal.
+POLICY_LIMIT = ('ContextLengthExceededError', 'OutputLengthExceededError')
+ZERO_EXC = POLICY_LIMIT + ('VerifierTimeoutError',)
+STOP_NAME = {'ContextLengthExceededError': 'context_length', 'OutputLengthExceededError': 'output_length',
+             'AgentTimeoutError': 'agent_timeout', 'VerifierTimeoutError': 'verifier_timeout'}
+
+
 def decide(results: Any, *, attempt: int, attempts: int, policy: str) -> str:
     """What to do with one finished trial attempt:
       'use'    -> a verifier verdict exists and the trial counts (maybe with reward 0 for context overflow / timeouts)
       'retry'  -> transport or unknown error with attempts left
       'mask'   -> give up: infra or unrecoverable error (the group is masked)
-    Agent timeout, verifier timeout and ContextLengthExceeded are never retried."""
+    Agent timeout, verifier timeout, context- and output-length overflow are never retried."""
     exc = exception_type(results)
     has_verdict = bool(getattr(results, 'verifier_result', None) and getattr(results.verifier_result, 'rewards', None))
-    if exc == 'ContextLengthExceededError':
+    if exc in POLICY_LIMIT:
         return 'use'
     if exc in ('AgentTimeoutError', 'VerifierTimeoutError'):
         return 'use' if policy == 'score' and (has_verdict or exc == 'VerifierTimeoutError') else 'mask'
@@ -206,6 +214,14 @@ def completion_tokens(rollout: Any) -> int:
 
 
 # ------------------------------------------------------------------------------------------------------------ one trajectory
+def _warn(message: str) -> None:
+    try:
+        from loguru import logger
+        logger.warning(message)
+    except Exception:
+        print(message, flush=True)
+
+
 def masked_summary(domain: str, task: str, rep: int | None, reason: str, **extra: Any) -> dict:
     return {'domain': domain, 'task': task, 'rep': rep, 'reward': 0.0, 'metric': None, 'passed': False, 'masked': True, 'mask_reason': reason,
             'stop': reason, 'components': {}, 'judge': None, 'artifact': None, 'screenshot': None, 'turns': 0, 'tokens': 0, **extra}
@@ -246,17 +262,23 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
     seconds = time.monotonic() - started
     if verdict == 'mask' or results is None:
         reason = {'AgentTimeoutError': 'agent_timeout', 'VerifierTimeoutError': 'verifier_timeout'}.get(exception_type(results), 'error') if results is not None else 'error'
+        if phase == 'eval' and reason in ('agent_timeout', 'verifier_timeout') and settings['timeout_policy'] == 'score':
+            # evaluation needs no tokens: a policy that ran out of time failed the task, it is not an infrastructure loss
+            return _masked(trajectory_id, seconds), {**masked_summary(domain, name, rep, reason, seconds=round(seconds, 1)), 'masked': False, 'mask_reason': None, 'metric': 0.0}
+        _warn(f'mimo masked {domain}/{name} rep={rep}: {reason} ({exception_type(results) if results is not None else "trial raised"})')
         return _masked(trajectory_id, seconds), masked_summary(domain, name, rep, reason, seconds=round(seconds, 1))
     exc = exception_type(results)
     rollout = getattr(getattr(results, 'agent_result', None), 'rollout_details', None) if has_rollout(results) else None
-    if rollout is None:
-        return _masked(trajectory_id, seconds), masked_summary(domain, name, rep, 'no_rollout', seconds=round(seconds, 1))
+    if rollout is None and phase != 'eval':   # training needs the tokens; evaluation only needs the verdict
+        reason = 'agent_timeout' if exc == 'AgentTimeoutError' else 'no_rollout'
+        _warn(f'mimo masked {domain}/{name} rep={rep}: {reason} (exception {exc})')
+        return _masked(trajectory_id, seconds), masked_summary(domain, name, rep, reason, seconds=round(seconds, 1))
     files = read_verifier(trial_dir_of(trial, results))
     details = files['details']
     summary = {'domain': domain, 'task': name, 'rep': rep, 'masked': False, 'mask_reason': None, 'components': details.get('components') or {},
-               'turns': int((getattr(getattr(results, 'agent_result', None), 'metadata', None) or {}).get('n_episodes', 0) or 0), 'tokens': completion_tokens(rollout),
+               'turns': int((getattr(getattr(results, 'agent_result', None), 'metadata', None) or {}).get('n_episodes', 0) or 0), 'tokens': completion_tokens(rollout) if rollout else 0,
                'seconds': round(seconds, 1), 'judge': None,
-               'stop': {'ContextLengthExceededError': 'context_length', 'AgentTimeoutError': 'agent_timeout', 'VerifierTimeoutError': 'verifier_timeout'}.get(exc, 'complete')}
+               'stop': STOP_NAME.get(exc, 'complete')}
     summary['artifact'], summary['screenshot'] = read_artifacts(files['dir'], meta.get('artifacts') or [], int(settings['summary_chars']))
     if not details and exc is None:   # only a trial that finished cleanly: timeouts/context errors keep their own policy
         # The shared verifier entrypoint always leaves a non-empty details.json. Its absence means the verifier did not run (the
@@ -264,9 +286,10 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
         details = {'infra_error': True, 'error': 'verifier_no_details'}
         summary['mask_detail'] = 'verifier produced no details.json'
     if details.get('infra_error'):
+        _warn(f'mimo masked {domain}/{name} rep={rep}: infra_error ({str(details.get("error"))[:160]})')
         return _masked(trajectory_id, seconds), {**summary, **masked_summary(domain, name, rep, 'infra_error', seconds=round(seconds, 1)),
                                                  'artifact': summary['artifact'], 'screenshot': summary['screenshot']}
-    if exc in ('ContextLengthExceededError', 'VerifierTimeoutError'):
+    if exc in ZERO_EXC:
         reward = 0.0
     else:
         verifier = getattr(results, 'verifier_result', None)
@@ -274,11 +297,11 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
     metric = details.get('metric')
     metric = reward if metric is None else float(metric)
     request = files['judge_request']
-    if request is not None and request.get('force_zero') and exc not in ('ContextLengthExceededError', 'VerifierTimeoutError'):
+    if request is not None and request.get('force_zero') and exc not in ZERO_EXC:
         reward = metric = 0.0   # a gate failed in the sandbox: reward 0 without spending a judge call (and never masked)
         summary['judge'] = {'final': 0.0, 'scores': {}, 'rationale': 'force_zero: verifier gate failed', 'meta': {'skipped': True, 'latency_s': 0.0, 'cost_usd': 0.0, 'calls': 0}}
         request = None
-    if request is not None and exc not in ('ContextLengthExceededError', 'VerifierTimeoutError'):
+    if request is not None and exc not in ZERO_EXC:
         if deps.judge is None:
             return _masked(trajectory_id, seconds), masked_summary(domain, name, rep, 'judge', error='no judge configured', seconds=round(seconds, 1))
         try:
@@ -291,7 +314,8 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
         summary['judge'] = {'final': judged['final'], 'scores': judged['scores'], 'rationale': judged['rationale'], 'meta': judged['meta']}
     summary.update(reward=reward, metric=metric, passed=bool(details.get('passed', metric >= 0.999)))
     return {'rollout_details': rollout, 'reward': float(reward), 'num_turns': summary['turns'],
-            'stop_reason': 'context_length' if exc == 'ContextLengthExceededError' else 'complete', 'e2e_time': seconds, 'trajectory_id': trajectory_id}, summary
+            'stop_reason': ('context_length' if exc == 'ContextLengthExceededError' else 'output_length' if exc == 'OutputLengthExceededError'
+                                    else 'complete') if rollout else 'error', 'e2e_time': seconds, 'trajectory_id': trajectory_id}, summary
 
 
 def _masked(trajectory_id: Any, seconds: float) -> dict:
