@@ -29,3 +29,4 @@ assets/coding/
 !evidence/results/*.json
 !evidence/results/*.md
 assets/mimo/
+.claude/worktrees/
