@@ -1,22 +1,19 @@
 {
   "domain": "code",
   "nop": {
-    "all_zero_no_infra": false,
-    "bad": [
-      "assets/mimo/data-smoke/tasks/test/code-format-code-task-000588",
-      "assets/mimo/data-smoke/tasks/test/code-format-code-task-001404"
-    ],
+    "all_zero_no_infra": true,
+    "bad": [],
     "n": 2,
     "results": [
       {
-        "exception": "ConflictError",
-        "reward": null,
-        "seconds": 126.8
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 68.7
       },
       {
-        "exception": "ConflictError",
-        "reward": null,
-        "seconds": 324.8
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 174.2
       }
     ]
   },
