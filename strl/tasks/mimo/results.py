@@ -174,8 +174,8 @@ def regrade_music(cfg: dict, rows: list[dict], limit: int = 40, grade: Callable 
     """Re-run the vendored music scorer on the saved ABC (record ``extra.artifact_full`` else ``artifact``). ``grade`` is injectable."""
     if grade is None:
         try:
-            from .graders import music   # lazily: Track B's vendored scorer may be absent in this checkout
-            grade = music.grade
+            import importlib
+            grade = importlib.import_module('strl.tasks.mimo.graders.music').grade   # lazily (needs abc2midi); import_module honors sys.modules[...]=None
         except Exception as error:
             return {'skipped': f'graders.music unavailable ({type(error).__name__}: {error})'[:200]}
     mine = [r for r in rows if r.get('domain') == 'music' and not r.get('masked')]
