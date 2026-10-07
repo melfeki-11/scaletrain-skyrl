@@ -167,3 +167,27 @@ class EnvironmentSpec:
 
     def display_prompt(self, prompt: Any) -> str:
         return str(prompt)
+
+    # ------------------------------------------------------------------ in-loop result (final_eval: false) and fail-fast
+    def paired_result(self, base_rows: list[dict], trained_rows: list[dict], cfg: dict) -> dict:
+        """Paired statistics from two in-loop eval record lists (step-0 base vs last-step trained, same sample ids).
+
+        Default: paired bootstrap on ``correct`` over the shared ids, ``flips``, and how many ids were unpaired. Environments with
+        per-domain structure (mimo) override this and add ``domains`` / ``macro`` / ``dropped`` / ``by_source``."""
+        from ..finalize import flips
+        from ..stats import paired_bootstrap
+        b, c = {r['sample_id']: r for r in base_rows}, {r['sample_id']: r for r in trained_rows}
+        ids = sorted(set(b) & set(c))
+        if not ids:
+            raise ValueError('base and trained evaluations share no sample ids')
+        e = cfg['evaluation']
+        test = paired_bootstrap([bool(b[i]['correct']) for i in ids], [bool(c[i]['correct']) for i in ids], samples=e['bootstrap_samples'],
+                                seed=e['bootstrap_seed'], level=e['ci_level'])
+        union = set(b) | set(c)
+        return {'test': test, 'flips': flips([b[i] for i in ids], [c[i] for i in ids]),
+                'dropped': {'total': len(union) - len(ids), 'of': len(union), 'by_domain': {}, 'ids': sorted(union - set(ids))[:50]}}
+
+    def failfast_defaults(self, cfg: dict) -> dict:
+        """Default ``budget.failfast`` rules this environment opts into ({} = none): keys mem_gb, domain_masked, step_slow_factor, min_steps."""
+        return {}
+

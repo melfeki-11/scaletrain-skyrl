@@ -284,7 +284,7 @@ class MimoSpec(CodingHarborSpec):
                 'masked': masked, 'mask_reason': mimo.get('mask_reason'), 'stop': mimo.get('stop'), 'judge_rationale': judged.get('rationale'),
                 'judge_variance': None, 'verifier_components': json.dumps(mimo.get('components') or {}, sort_keys=True)[:1000],
                 'artifact': (mimo.get('artifact') or '')[:metrics.ARTIFACT_CHARS], 'screenshot': mimo.get('screenshot'), 'turns': 1,
-                'extra': {'artifact_full': mimo.get('artifact')}}   # 'extra' is never a table column (EvidenceCallback.on_eval_end)
+                'extra': {'artifact_full': mimo.get('artifact'), **({'judge_request': mimo['judge_request']} if mimo.get('judge_request') else {})}}   # 'extra' is never a table column (EvidenceCallback.on_eval_end)
 
     def collapse_eval_records(self, records: list[dict]) -> list[dict]:
         """One record per (task, rep): per-turn rows are contiguous; the verifier reward sits on the last turn."""
@@ -319,6 +319,15 @@ class MimoSpec(CodingHarborSpec):
             bm, tm = (sum(v['base_task_metric'] for v in out.values()) / len(out), sum(v['trained_task_metric'] for v in out.values()) / len(out))
             out['macro'] = {'examples': sum(v['examples'] for v in out.values()), 'base_task_metric': bm, 'trained_task_metric': tm, 'delta': tm - bm}
         return out
+
+    def paired_result(self, base_rows: list[dict], trained_rows: list[dict], cfg: dict) -> dict:
+        """In-loop base (step-0 eval) vs trained (last eval): honest_power per domain + macro, dropped ids, masked rates (see results.py)."""
+        from .results import paired_result
+        return paired_result(self, base_rows, trained_rows, cfg)
+
+    def failfast_defaults(self, cfg: dict) -> dict:
+        """budget.failfast rules mimo opts into: per-GPU memory (GB) at step 1, masked-group fraction per domain, step time vs the plan estimate."""
+        return {'mem_gb': 76, 'domain_masked': 0.15, 'step_slow_factor': 1.5, 'min_steps': 1}
 
     def failure_mode(self, row: dict) -> str:
         if row.get('masked'):

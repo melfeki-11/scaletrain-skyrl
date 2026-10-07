@@ -258,6 +258,8 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
         except judge_mod.JudgeUnavailable as error:
             return _masked(trajectory_id, seconds), masked_summary(domain, name, rep, 'judge', error=str(error)[:200], seconds=round(seconds, 1))
         reward = metric = judged['final']
+        if phase == 'eval' and request.get('kind') == 'rubric':   # persisted so `strl verify` can re-score a sample of judged records offline
+            summary['judge_request'] = request
         summary['judge'] = {'final': judged['final'], 'scores': judged['scores'], 'rationale': judged['rationale'], 'meta': judged['meta']}
     summary.update(reward=reward, metric=metric, passed=bool(details.get('passed', metric >= 0.999)))
     return {'rollout_details': rollout, 'reward': float(reward), 'num_turns': summary['turns'],

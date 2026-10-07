@@ -196,6 +196,36 @@ def evaluate_test_split(cfg, env_spec, base_model, trained_model, eval_dir, dead
     return {label: merge_shards([read_jsonl(eval_dir / f'{label}-{s}.jsonl') for s in range(n)], ids) for label in ('base', 'candidate')}
 
 
+def in_loop_finish(cfg, runtime, env_spec, root, steps):
+    """final_eval: false environments (mimo): base = step-0 in-loop eval, trained = last in-loop eval (no checkpoint selection).
+    Writes artifacts/final_eval/*, prints a one-screen table, logs test/* to the training W&B run. Never raises: a failure is recorded
+    as ``paired: null`` with the reason (the run's training evidence is already complete)."""
+    from .inloop import in_loop_result, summary_markdown, wandb_scalars
+    eval_dir = Path('artifacts/final_eval')
+    try:
+        result = in_loop_result(cfg, env_spec, root / 'exports/evaluation_samples.jsonl', eval_dir, optimizer_steps=steps)
+    except Exception as error:
+        traceback.print_exc()
+        return {'paired': None, 'reason': f'in-loop result failed: {type(error).__name__}: {error}'[:300], 'selected_step': None}
+    print(summary_markdown(result), flush=True)
+    try:
+        scalars = wandb_scalars(result)
+        if scalars and os.environ.get('WANDB_API_KEY'):
+            import wandb
+            run = wandb.init(project=cfg['tracking']['project'], entity=cfg['tracking']['entity'], id=runtime['wandb_run_id'], resume='allow', reinit=True)
+            run.log({'optimizer_step': steps, **scalars})
+            run.summary.update({**scalars, 'test/trained_step': result['trained_step'], 'test/selection': result['selection']})
+            artifact = wandb.Artifact(runtime['run_name'] + '-evidence', type='evaluation')
+            for name in ('result.json', 'README.md', 'base.jsonl', 'candidate.jsonl'):
+                if (eval_dir / name).is_file():
+                    artifact.add_file(str(eval_dir / name))
+            run.log_artifact(artifact)
+            run.finish()
+    except Exception as error:   # the S3 copy is the source of truth; W&B is a view
+        print(f'in-loop W&B logging skipped: {type(error).__name__}: {error}', flush=True)
+    return result
+
+
 def run_probe(nodes, gpus, cpu, deadline):
     """Cluster probe in a child process (bounded; CUDA/NCCL state never leaks into the worker). Returns the network summary."""
     child([sys.executable, '-m', 'strl.probe', '--nodes', str(nodes), '--gpus-per-node', str(gpus), *(['--cpu'] if cpu else [])],
@@ -265,6 +295,12 @@ def main():
             STRL_ENVIRONMENT=env_spec.name, STRL_STAGE='canary' if mode == 'canary' else 'train',
             STRL_ALERTS='1' if cfg['tracking'].get('alerts', True) else '0', STRL_TOKENIZER=cfg['model']['local_path'],
             STRL_METRICS_JSONL=str((Path('artifacts') / runtime['run_name'] / 'metrics.jsonl').resolve()))
+        from .tracking import failfast_config   # budget.failfast (+ the environment's opt-in defaults); renders nothing when empty
+        rules = failfast_config(cfg, env_spec)
+        if rules:
+            os.environ['STRL_FAILFAST'] = json.dumps(rules)
+        if runtime.get('plan_step_seconds'):
+            os.environ['STRL_PLAN_STEP_SECONDS'] = str(runtime['plan_step_seconds'])
         interface = os.environ['NETWORK_INTERFACE_NAME']
         port = os.environ.get('LEADER_PORT', '6379')
         if multi:
@@ -359,6 +395,9 @@ def main():
         if mode == 'canary' or not cfg['evaluation']['final_eval']:
             final = dict(status='completed', mode=mode, optimizer_steps=steps, stalled=stalled, phases=phases,
                          elapsed_seconds=time.time() - begin['started_at'], gpus=gpus, experiment_sha=cfg['_meta']['sha'], **extra)
+            if mode == 'train':   # no offline final eval: pair the first (step-0) and last in-loop evals
+                final['paired_result'] = in_loop_finish(cfg, runtime, env_spec, root, steps)
+                final['selected_step'] = final['paired_result'].get('selected_step')
             sync_local('artifacts', prefix, exclude=SYNC_EXCLUDE)
             put_json(prefix + '/completion.json', final)
             print(json.dumps(final), flush=True)
