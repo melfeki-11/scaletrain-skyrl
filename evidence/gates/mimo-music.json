@@ -1,0 +1,26 @@
+{
+  "domain": "music",
+  "nop": {
+    "n": 3,
+    "all_zero_no_infra": true,
+    "bad": [],
+    "results": [
+      {"reward": 0.0, "exception": null, "seconds": 37.6},
+      {"reward": 0.0, "exception": null, "seconds": 38.4},
+      {"reward": 0.0, "exception": null, "seconds": 37.6}
+    ],
+    "note": "Real Harbor Trial path (strl.tasks.coding.harbor.run_trial, agent=nop) against 3 real exported music tasks (music.parquet rows 0-2) in Modal, 2026-10-06. nop writes nothing to /app/answer.abc; grader correctly scores 0.0 with no infra_error."
+  },
+  "positive_control": {
+    "method": "abc2midi smoke test inside the real built image (not a full agent run: no model_name/LLM call was made)",
+    "result": "abc2midi 5.02 ran against a valid ABC tune inside the exact built music task image and wrote a 223-byte MIDI file (MIDI_OK).",
+    "offline_grader_proof": "tests/test_mimo_graders.py::MusicGrader.test_valid_abc_scores_positive runs the SAME vendored scorer (graders/_vendor/mimo_music_scorer) against the same abc2midi family locally and asserts reward > 0 (observed 0.214 for the fixture tune).",
+    "not_run": "A full Harbor Trial with SingleShotAgent writing a valid ABC through a real LiteLLM call was NOT executed (needs a live model endpoint, which the task budget did not call for on this domain); the agent contract itself IS unit-tested with a fake LLM (tests/test_mimo_graders.py::SingleShotAgentTest)."
+  },
+  "tamper": {
+    "not_run": "No tamper trial was executed for music in Modal (SingleShotAgent never gets a shell, so the usual tamper vectors -- editing tests/, binary/, planting files -- do not apply to this domain the way they do to cyber/code)."
+  },
+  "concurrency": {
+    "not_run": "64-trial concurrency check not executed in this session (time/scope); tools/gate_mimo.py --concurrency-nop implements it and was validated structurally against the 3-task nop run above."
+  }
+}

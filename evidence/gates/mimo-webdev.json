@@ -1,0 +1,14 @@
+{
+  "domain": "webdev",
+  "image_build": {
+    "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:webdev-rl-opensource",
+    "ok": true,
+    "seconds": 201.0,
+    "tmux_version": "tmux 3.4",
+    "note": "The published image already ships node 20 + a working playwright + a launchable chromium (confirmed: `sync_playwright().start().chromium.launch()` succeeds with no extra install). export.py's playwright-install Dockerfile line was changed to probe-then-skip instead of a forced pinned reinstall, to avoid risking a python-package / already-downloaded-browser version mismatch on an image that already works."
+  },
+  "render_pipeline": {
+    "not_run_in_modal": "The in-sandbox render (graders/webdev.py::render, which shells out to the vendored shot.py playwright script) was NOT executed inside a real sandbox in this session -- only `grade_from_shot()` (the pure post-processing: judge_request construction, render_failed/infra_error classification) is unit-tested offline against canned render() outputs. The underlying chromium launch capability needed for a real render WAS confirmed working in the image (see image_build above)."
+  },
+  "nop_tamper_harbor_trial": {"not_run": "No webdev task was run through a full Harbor Trial in this session."}
+}
