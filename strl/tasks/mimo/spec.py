@@ -102,12 +102,20 @@ class MimoSpec(CodingHarborSpec):
             if deadline + 600 > stall:
                 problems.append(f'environment.mimo.step_deadline_sec={deadline} + 600 s (logprobs + training) exceeds budget.stall_seconds={stall}: '
                                 'the watchdog would kill a healthy step')
-            for name, d in m['domains'].items():
-                if d['max_agent_sec'] and d['max_agent_sec'] + (d['max_verifier_sec'] or 0) + 120 > deadline:
-                    problems.append(f'environment.mimo.domains.{name}: max_agent_sec + max_verifier_sec + 120 exceeds step_deadline_sec={deadline} '
-                                    '(its trials could never finish inside the step)')
+            from .export import DOMAIN_SPECS   # the effective timeouts are the exporter's defaults unless a cap is configured
+            for name in data.selected_domains(m):
+                d = m['domains'][name]
+                agent = d['max_agent_sec'] or DOMAIN_SPECS[name].agent_timeout_sec
+                verifier = d['max_verifier_sec'] or DOMAIN_SPECS[name].verifier_timeout_sec
+                if agent + verifier + 120 > deadline:
+                    problems.append(f'environment.mimo.domains.{name}: agent {agent:g} s + verifier {verifier:g} s + 120 exceeds step_deadline_sec={deadline}: '
+                                    'long but healthy trials would be cancelled and masked as "deadline" instead of scored (timeout_policy). Lower '
+                                    f'domains.{name}.max_agent_sec / max_verifier_sec or raise step_deadline_sec (and budget.stall_seconds)')
         elif int(hb.get('agent_timeout_sec', 600)) * 2 + 300 > stall:
             problems.append(f'budget.stall_seconds={stall} is below 2 x environment.harbor.agent_timeout_sec + 300; set environment.mimo.step_deadline_sec')
+        if int(m_raw(cfg).get('eval_repeats', 1)) > 1 and float(a.get('eval_temperature') or 0.0) == 0.0:
+            problems.append('environment.mimo.eval_repeats > 1 with algorithm.eval_temperature 0: greedy repeats are near-identical (the extra eval cost buys '
+                            'nothing; small models also loop when greedy). Set algorithm.eval_temperature (e.g. 1.0, the training temperature) or eval_repeats: 1')
         if m_raw(cfg).get('timeout_policy', 'score') not in ('score', 'mask'):
             problems.append("environment.mimo.timeout_policy must be 'score' or 'mask'")
         sel = data.selected_domains(m)

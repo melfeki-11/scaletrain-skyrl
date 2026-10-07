@@ -8,12 +8,18 @@
       {
         "exception": null,
         "reward": 0.0,
-        "seconds": 81.2
+        "seconds": 18.2,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/cyber/cyber-arvo_19175__HATLQ8Z",
+        "verifier_note": "",
+        "verifier_ran": true
       },
       {
         "exception": null,
         "reward": 0.0,
-        "seconds": 82.1
+        "seconds": 9.1,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/cyber/cyber-arvo_42479691__i2erQ6h",
+        "verifier_note": "",
+        "verifier_ran": true
       }
     ]
   },

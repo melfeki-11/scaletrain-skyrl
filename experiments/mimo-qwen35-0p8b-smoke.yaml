@@ -22,10 +22,10 @@ environment:
     step_deadline_sec: 900
     domains:
       music:   {train: 4, test: 2}
-      cyber:   {train: 4, test: 2}
-      code:    {train: 4, test: 2}
-      general: {train: 4, test: 2}
-      webdev:  {train: 4, test: 2}
+      cyber:   {train: 4, test: 2, max_agent_sec: 420, max_verifier_sec: 240}
+      code:    {train: 4, test: 2, max_agent_sec: 420, max_verifier_sec: 240}
+      general: {train: 4, test: 2, max_agent_sec: 420, max_verifier_sec: 240}
+      webdev:  {train: 4, test: 2, max_agent_sec: 420, max_verifier_sec: 240}
 
 compute:
   nodes: 1

@@ -8,14 +8,90 @@
       {
         "exception": null,
         "reward": 0.0,
-        "seconds": 115.1
+        "seconds": 12.6,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/general/general-s3k_0084_accounting_audi__vxbTb5o",
+        "verifier_note": "",
+        "verifier_ran": true
       },
       {
         "exception": null,
         "reward": 0.0,
-        "seconds": 110.4
+        "seconds": 9.8,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/general/general-s3k_1374_healthcare_ops__b4M2dQe",
+        "verifier_note": "",
+        "verifier_ran": true
       }
     ]
+  },
+  "positive": {
+    "details": {
+      "base_score": 0.0,
+      "base_weight": 3.0,
+      "components": {},
+      "domain": "general",
+      "gate_failed": false,
+      "gate_failed_ids": [],
+      "gate_results": {},
+      "infra_error": false,
+      "items": [
+        {
+          "detail": "rule check_target_annotation produced no output:      ^^^^^^^^^^^\n  File \"/tmp/tmpg1wmmpzo.py\", line 633, in _query_one\n    con = sqlite3.connect(str(path))\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^\nsqlite3.OperationalError: unable to open database file\n",
+          "id": "target_annotation_applied",
+          "method": "rule",
+          "score": 0.0,
+          "weight": 1.0
+        },
+        {
+          "detail": "rule check_target_document_preserved produced no output:      ^^^^^^^^^^^\n  File \"/tmp/tmpgnk62o5r.py\", line 633, in _query_one\n    con = sqlite3.connect(str(path))\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^\nsqlite3.OperationalError: unable to open database file\n",
+          "id": "target_document_preserved",
+          "method": "rule",
+          "score": 0.0,
+          "weight": 1.0
+        },
+        {
+          "detail": "rule check_other_receipts_unchanged produced no output: e 714, in check_other_receipts_unchanged\n    con = sqlite3.connect(str(_db_path(workspace)))\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nsqlite3.OperationalError: unable to open database file\n",
+          "id": "other_receipts_unchanged",
+          "method": "rule",
+          "score": 0.0,
+          "weight": 1.0
+        },
+        {
+          "id": "status_anomaly_and_audit_treatment",
+          "method": "llm",
+          "weight": 1.0
+        },
+        {
+          "id": "material_identity",
+          "method": "llm",
+          "weight": 1.0
+        },
+        {
+          "id": "recognized_september_receipts",
+          "method": "llm",
+          "weight": 1.0
+        },
+        {
+          "id": "clause_330_requirement",
+          "method": "llm",
+          "weight": 1.0
+        },
+        {
+          "id": "operation_summary",
+          "method": "llm",
+          "weight": 1.0
+        }
+      ],
+      "metric": 0.0,
+      "passed": false,
+      "sub_kind": "general_agent",
+      "total_weight": 8.0
+    },
+    "exception": null,
+    "judge_items": 5,
+    "ok": true,
+    "reward": 0.0,
+    "verifier_note": "",
+    "verifier_ran": true
   },
   "task_dirs": [
     "assets/mimo/data-smoke/tasks/test/general-s3k_0084_accounting_audit_tax_en_t3_rl_006",

@@ -8,12 +8,18 @@
       {
         "exception": null,
         "reward": 0.0,
-        "seconds": 68.7
+        "seconds": 16.6,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/code/code-format-code-task-000588__Xd4aVzv",
+        "verifier_note": "",
+        "verifier_ran": true
       },
       {
         "exception": null,
         "reward": 0.0,
-        "seconds": 174.2
+        "seconds": 43.5,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/code/code-format-code-task-001404__ZGXZQti",
+        "verifier_note": "",
+        "verifier_ran": true
       }
     ]
   },

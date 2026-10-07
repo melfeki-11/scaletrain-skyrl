@@ -1128,7 +1128,7 @@ class Spec(DataCase):
             ('environment.mimo.domains.music.weight=0',): 'weight must be > 0',
             ('environment.mimo.domains.music.train=-1',): 'integer >= 0',
             ('environment.mimo.step_deadline_sec=3000',): 'exceeds budget.stall_seconds',
-            ('environment.mimo.domains.code.max_agent_sec=1700', 'environment.mimo.domains.code.max_verifier_sec=300'): 'could never finish',
+            ('environment.mimo.domains.code.max_agent_sec=1700', 'environment.mimo.domains.code.max_verifier_sec=300'): 'healthy trials would be cancelled and masked',
             ('algorithm.prompts_per_step=4', 'algorithm.minibatch_prompts=4'): 'below the 5 selected domains',
             ('environment.mimo.domains.code.train=1',): 'fewer train tasks than their per-step quota',
             ('environment.harbor.max_seq_len=4000',): 'max_seq_len',
@@ -1570,3 +1570,25 @@ class VerifierRanCheck(unittest.TestCase):
             self.assertTrue(generator.verifier_ran(trial('{"infra_error": true, "error": "boom"}'))[1].startswith('infra_error'))
             self.assertIn('unreadable', generator.verifier_ran(trial('{nope'))[1])
             self.assertEqual(generator.verifier_ran(None), (False, 'no trial dir'))
+
+
+class DeadlineAndEvalValidation(unittest.TestCase):
+    def load(self, *overrides):
+        from strl import experiment
+        return experiment.load('experiments/mimo-qwen38-27b-lora.yaml', overrides=list(overrides))
+
+    def test_uncapped_domains_must_fit_the_step_deadline_using_the_exporters_defaults(self):
+        """Review finding 7: only configured caps were checked, so code's real 1200 s + 900 s verifier (> 1800) went unnoticed and healthy long
+        trials would have been cancelled and masked as 'deadline'."""
+        from strl import experiment
+        with self.assertRaises(experiment.ExperimentError) as caught:
+            self.load('environment.mimo.domains.code.max_agent_sec=null', 'environment.mimo.domains.code.max_verifier_sec=null')
+        self.assertIn('domains.code: agent 1200 s + verifier 900 s', str(caught.exception))
+        self.load()   # the shipped config caps code (900 + 600) and passes
+
+    def test_eval_repeats_need_a_stochastic_eval(self):
+        from strl import experiment
+        with self.assertRaises(experiment.ExperimentError) as caught:
+            self.load('algorithm.eval_temperature=0.0')
+        self.assertIn('eval_repeats > 1', str(caught.exception))
+        self.load('algorithm.eval_temperature=0.0', 'environment.mimo.eval_repeats=1')   # a single greedy eval is fine

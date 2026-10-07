@@ -744,3 +744,25 @@ class PredictiveDeadline(FailFastBase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DeadlineConsistency(unittest.TestCase):
+    """Review finding 5: the soft stop (GRPO_TRAIN_DEADLINE) was deadline-120 while the child was hard-killed at deadline-480."""
+
+    def test_in_loop_final_eval_leaves_room_before_the_child_is_killed(self):
+        from strl import worker
+        cfg = {'evaluation': {'final_eval': False}, 'budget': {'final_eval_reserve_seconds': 900}}
+        self.assertEqual(worker.train_reserve_seconds(cfg, 'train'), worker.CHILD_HARD_STOP_SECONDS + 120)
+        self.assertGreater(worker.train_reserve_seconds(cfg, 'train'), worker.CHILD_HARD_STOP_SECONDS)
+        self.assertEqual(worker.train_reserve_seconds(dict(cfg, evaluation={'final_eval': True}), 'train'), 900)   # offline final eval: unchanged
+        self.assertEqual(worker.train_reserve_seconds(cfg, 'canary'), 120)
+
+    def test_predictive_stop_reserves_the_interval_eval_that_still_runs(self):
+        from strl.tracking import predictive_stop
+        # 1000 s left; steps take 300 s (x1.15 = 345), eval 200, export 120: continuing needs 665 < 1000 -> go on
+        self.assertFalse(predictive_stop(0, [300, 300], 200, 1000)[0])
+        # at t=100 with a 900 s deadline: continuing projects 100 + 345 + 200 + 120 = 765 (fits) ... but on an eval step this step's own interval
+        # eval (200 s) still has to run first: 965 > 900, so the run must stop now. Without the reserve it would overshoot by one eval.
+        self.assertFalse(predictive_stop(100, [300, 300], 200, 900, pending_eval_seconds=0)[0])
+        self.assertTrue(predictive_stop(100, [300, 300], 200, 900, pending_eval_seconds=200)[0])
+        self.assertAlmostEqual(predictive_stop(100, [300, 300], 200, 900, pending_eval_seconds=200)[1], 965.0)

@@ -37,6 +37,21 @@ RAY = '/opt/skyrl-venv/bin/ray'
 SYNC_EXCLUDE = ('checkpoints/',)  # optimizer shards stay on the node; exports/metrics/evals go to S3
 
 
+CHILD_HARD_STOP_SECONDS = 480   # the training child is killed this long before the attempt deadline (train mode)
+
+
+def train_reserve_seconds(cfg: dict, mode: str) -> int:
+    """Seconds before the attempt deadline at which training must have FINISHED (GRPO_TRAIN_DEADLINE = deadline - this). With an offline final
+    eval it is that eval's reserve. With the in-loop final eval (agentic environments) the forced eval + export run inside the training child,
+    which is hard-killed at deadline - 480: the soft stop must leave room for them before that (it was 120 s: a run ending on its deadline
+    was killed mid-export, the attempt failed and the paired result was never written)."""
+    if mode != 'train':
+        return 120
+    if cfg['evaluation']['final_eval']:
+        return int(cfg['budget']['final_eval_reserve_seconds'])
+    return CHILD_HARD_STOP_SECONDS + 120
+
+
 class Stalled(RuntimeError):
     pass
 
@@ -282,7 +297,7 @@ def main():
             raise RuntimeError('Incorrect worker allocation: expected exactly ' + ('one node' if nodes == 1 else f'{nodes} nodes'))
         begin = budget(runtime, cfg)
         identity['budget'] = begin
-        reserve = int(cfg['budget']['final_eval_reserve_seconds']) if mode == 'train' and cfg['evaluation']['final_eval'] else 120
+        reserve = train_reserve_seconds(cfg, mode)
         os.environ.update(
             GRPO_WORKER_BEGAN_EPOCH=str(begin['started_at']), STRL_GPU_FRACTION=str(begin['gpu_fraction']),
             GRPO_TRAIN_DEADLINE=str(begin['deadline'] - reserve), GRPO_FINAL_EVAL_RESERVE_SECONDS=str(reserve),
@@ -373,7 +388,7 @@ def main():
             watcher = multinode.Watcher(multinode.cluster_check(nodes))
             watcher.start()
         try:
-            child([sys.executable, '-m', 'strl.train'], 'artifacts/training.log', begin['deadline'] - (480 if mode == 'train' else 60),
+            child([sys.executable, '-m', 'strl.train'], 'artifacts/training.log', begin['deadline'] - (CHILD_HARD_STOP_SECONDS if mode == 'train' else 60),
                   root / 'canary.json', cfg['budget']['canary_max_seconds'], progress=root / 'progress.json',
                   stall_seconds=int(cfg['budget']['stall_seconds']), abort=watcher)
         except Stalled as error:

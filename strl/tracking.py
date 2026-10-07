@@ -323,14 +323,16 @@ class MemorySampler:
         self._stop.set()
 
 
-def predictive_stop(now: float, step_times: list[float], eval_seconds: float, deadline: float, *, export_seconds: float = EXPORT_ESTIMATE_SECONDS) -> tuple[bool, float | None]:
+def predictive_stop(now: float, step_times: list[float], eval_seconds: float, deadline: float, *, export_seconds: float = EXPORT_ESTIMATE_SECONDS,
+                    pending_eval_seconds: float = 0.0) -> tuple[bool, float | None]:
     """(stop, projected_finish). One more step can start only if it, the final eval and the export still fit before ``deadline``:
     stop after this step when now + 1.15 x mean(last two step times) + eval + export >= deadline. With fewer than two step times
-    known (the first step: one cold-start time is not an estimate) it is the plain ``now >= deadline`` check."""
+    known (the first step: one cold-start time is not an estimate) it is the plain ``now >= deadline`` check. ``pending_eval_seconds``:
+    on_step_end fires BEFORE this step's interval eval, so on an eval step that eval (about ``eval_seconds``) still has to run first."""
     if len(step_times) < 2:
         return now >= deadline, None
     recent = step_times[-2:]
-    projected = now + STEP_TIME_MARGIN * sum(recent) / len(recent) + eval_seconds + export_seconds
+    projected = now + pending_eval_seconds + STEP_TIME_MARGIN * sum(recent) / len(recent) + eval_seconds + export_seconds
     return projected >= deadline, projected
 
 
@@ -479,7 +481,10 @@ def make_callback_class():
             deadline = float(os.environ['GRPO_TRAIN_DEADLINE'])
             if self.stop_reason is None:
                 now = time.time()
-                stop, projected = predictive_stop(now, self.step_times, self.eval_estimate(trainer), deadline)
+                interval = int(getattr(trainer.cfg.trainer, 'eval_interval', 0) or 0)
+                eval_estimate = self.eval_estimate(trainer)
+                stop, projected = predictive_stop(now, self.step_times, eval_estimate, deadline,
+                                                  pending_eval_seconds=eval_estimate if interval > 0 and step % interval == 0 else 0.0)
                 if stop:   # once: the forced final eval + export happen at this step, then training ends
                     self.stop_reason = 'deadline' if now >= deadline or projected is None else 'predictive_deadline'
                     trainer.cfg.trainer.max_training_steps = step

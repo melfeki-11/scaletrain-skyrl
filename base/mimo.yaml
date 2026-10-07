@@ -31,7 +31,7 @@ environment:
     domains:                        # train: tasks drawn for training; test: fixed grouped held-out tasks; weight: share of each step
       music:   {train: 24, weight: 1.0, test: 24, max_prompt_tokens: 4096}
       cyber:   {train: 24, weight: 1.0, test: 24, max_prompt_tokens: 4096}
-      code:    {train: 24, weight: 1.0, test: 24, max_prompt_tokens: 4096}
+      code:    {train: 24, weight: 1.0, test: 24, max_prompt_tokens: 4096, max_agent_sec: 900, max_verifier_sec: 600}   # defaults 1200 + 900 do not fit the step deadline
       general: {train: 24, weight: 1.0, test: 24, max_prompt_tokens: 4096}
       webdev:  {train: 24, weight: 1.0, test: 24, max_prompt_tokens: 4096}
 
@@ -50,6 +50,7 @@ algorithm:
   grpo_norm_by_std: false           # continuous judged rewards: std normalisation would amplify tiny group variance
   temperature: 1.0
   max_prompt_tokens: 4096
+  eval_temperature: 1.0
   max_generate_length: 2048         # per agent turn
   max_steps: 100
 
