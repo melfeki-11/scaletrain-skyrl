@@ -78,12 +78,16 @@ def write_key_file(path: str | Path, name: str = KEY_NAME) -> Path:
 
 
 def chat(messages: list[dict], *, model: str = 'openai/gpt-6-luna', max_completion_tokens: int = 1024, project_id: str = PROJECT_ID,
-         base_url: str = BASE_URL, timeout: float = 60.0, json_mode: bool = True, key: str | None = None) -> dict:
-    """One chat completion. Returns {'text', 'cost_usd' (proxy-reported when available), 'usage'}. No retries."""
+         base_url: str = BASE_URL, timeout: float = 60.0, json_mode: bool = True, key: str | None = None,
+         temperature: float | None = None, tag: str = 'strl-critic') -> dict:
+    """One chat completion. Returns {'text', 'cost_usd' (proxy-reported when available), 'usage'}. No retries.
+    ``temperature`` is sent only when given (some reasoning models reject it); ``tag`` labels the request in the proxy metadata."""
     if not PROJECT_RE.fullmatch(project_id):
         raise LiteLLMError('project_id must be a 24-character hex ObjectId')
     body = {'model': model, 'messages': messages, 'max_completion_tokens': max_completion_tokens, 'user': project_id,
-            'metadata': {'tags': [f'project:{project_id}', 'strl-critic']}}
+            'metadata': {'tags': [f'project:{project_id}', tag]}}
+    if temperature is not None:
+        body['temperature'] = temperature
     if json_mode:
         body['response_format'] = {'type': 'json_object'}
     request = urllib.request.Request(base_url.rstrip('/') + '/v1/chat/completions', data=json.dumps(body).encode(), method='POST',

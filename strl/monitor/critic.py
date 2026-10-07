@@ -23,22 +23,27 @@ MODES = ('misread_task', 'wrong_algorithm', 'edge_case', 'syntax_or_runtime_erro
 DEFAULTS = {'enabled': False, 'model': 'openai/gpt-6-luna', 'every_n_steps': 5, 'max_rows': 8, 'budget_usd': 5.0,
             'project_id': '696011502a26dc4a64b24f55', 'max_completion_tokens': 1024, 'timeout_seconds': 60,
             'usd_per_mtok_in': 2.0, 'usd_per_mtok_out': 8.0}
-SYSTEM = ('You analyse failed attempts of a small language model being trained with reinforcement learning. Classify the PRIMARY '
-          'reason the attempt failed. Respond with a JSON object only: {"failure_mode": one of ' + json.dumps(list(MODES)) +
-          ', "rationale": "<= 40 words", "fix_hint": "<= 25 words"}.')
+def system_prompt(modes: tuple[str, ...] = MODES) -> str:
+    return ('You analyse failed attempts of a small language model being trained with reinforcement learning. Classify the PRIMARY '
+            'reason the attempt failed. Respond with a JSON object only: {"failure_mode": one of ' + json.dumps(list(modes)) +
+            ', "rationale": "<= 40 words", "fix_hint": "<= 25 words"}.')
+
+
+SYSTEM = system_prompt()
 
 _S: dict[str, Any] = {}
 _LOCK = threading.Lock()
 
 
-def configure(settings: dict | None) -> bool:
-    """Start the critic thread if enabled. Idempotent. Returns whether it is active."""
+def configure(settings: dict | None, modes: tuple[str, ...] | None = None) -> bool:
+    """Start the critic thread if enabled. Idempotent. Returns whether it is active. ``modes``: the environment's failure taxonomy
+    (EnvironmentSpec.critic_modes); None keeps the default MODES."""
     cfg = {**DEFAULTS, **(settings or {})}
     with _LOCK:
         if _S.get('thread') or not cfg['enabled']:
             return bool(_S.get('thread'))
         _S.update(cfg=cfg, q=queue.Queue(maxsize=32), results=[], modes=Counter(), cost=0.0, calls=0, errors=0, dropped=0,
-                  disabled=None)
+                  disabled=None, taxonomy=tuple(modes or MODES))
         thread = threading.Thread(target=_loop, name='strl-critic', daemon=True)
         _S['thread'] = thread
         thread.start()
@@ -55,8 +60,12 @@ def submit_failures(step: int, prompts: list, completions: list[str], rewards: l
         return 0
     failed = []
     for index, completion in enumerate(completions):
-        metric = (env_metrics[index] or {}).get('task_metric') if env_metrics and index < len(env_metrics) else None
-        if (metric == 0.0) if metric is not None else (rewards[index] <= 0.0):
+        row = (env_metrics[index] or {}) if env_metrics and index < len(env_metrics) else {}
+        metric = row.get('task_metric')
+        if 'failed' in row:      # environments with graded (non-binary) metrics say themselves what counts as a failure
+            if row['failed']:
+                failed.append(index)
+        elif (metric == 0.0) if metric is not None else (rewards[index] <= 0.0):
             failed.append(index)
     queued = 0
     for index in failed[: int(_S['cfg']['max_rows'])]:
@@ -64,6 +73,8 @@ def submit_failures(step: int, prompts: list, completions: list[str], rewards: l
         item = {'source_step': step, 'idx': index, 'prompt': (env.display_prompt(prompts[index]) if env else str(prompts[index]))[:3000],
                 'completion': completions[index][-3000:], 'env_failure': next((k.split('/', 1)[1] for k, v in info.items()
                                                                                if k.startswith('failure/') and v), None)}
+        if info.get('domain'):   # multi-domain environments: the critic sees which domain failed (and the judge's reason, if any)
+            item['domain'], item['judge'] = info['domain'], info.get('judge_rationale')
         try:
             _S['q'].put_nowait(item)
             queued += 1
@@ -82,13 +93,15 @@ def analyse(item: dict, call=None) -> dict:
     from ..services import litellm
     cfg = _S.get('cfg', DEFAULTS)
     call = call or litellm.chat
-    user = (f'Environment verdict: {item.get("env_failure") or "failed"}\n\nTASK:\n{item["prompt"]}\n\n'
+    taxonomy = _S.get('taxonomy') or MODES
+    context = (f'Domain: {item["domain"]}\n' if item.get('domain') else '') + (f'Grader/judge note: {item["judge"]}\n' if item.get('judge') else '')
+    user = (f'Environment verdict: {item.get("env_failure") or "failed"}\n{context}\nTASK:\n{item["prompt"]}\n\n'
             f'MODEL ATTEMPT (tail):\n{item["completion"]}')
-    response = call([{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': user}], model=cfg['model'],
-                    max_completion_tokens=int(cfg['max_completion_tokens']), project_id=cfg['project_id'],
+    response = call([{'role': 'system', 'content': system_prompt(taxonomy) if taxonomy is not MODES else SYSTEM}, {'role': 'user', 'content': user}],
+                    model=cfg['model'], max_completion_tokens=int(cfg['max_completion_tokens']), project_id=cfg['project_id'],
                     timeout=float(cfg['timeout_seconds']))
     parsed = litellm.parse_json_object(response['text']) or {}
-    mode = parsed.get('failure_mode') if parsed.get('failure_mode') in MODES else 'other'
+    mode = parsed.get('failure_mode') if parsed.get('failure_mode') in taxonomy else 'other'
     cost = response['cost_usd'] if response.get('cost_usd') is not None else _estimate_cost(response.get('usage') or {})
     return {'source_step': item['source_step'], 'idx': item['idx'], 'env_failure': item.get('env_failure'), 'critic_mode': mode,
             'rationale': str(parsed.get('rationale', ''))[:400], 'fix_hint': str(parsed.get('fix_hint', ''))[:300],
@@ -126,7 +139,7 @@ def drain() -> tuple[dict[str, float], list[dict]]:
     with _LOCK:
         rows, _S['results'] = _S['results'], []
         total = sum(_S['modes'].values())
-        scalars = {f'critic/{mode}_frac': _S['modes'][mode] / total for mode in MODES} if total else {}
+        scalars = {f'critic/{mode}_frac': _S['modes'][mode] / total for mode in _S.get('taxonomy') or MODES} if total else {}
         scalars.update({'critic/cost_usd': _S['cost'], 'critic/analyses': float(_S['calls']), 'critic/errors': float(_S['errors']),
                         'critic/dropped': float(_S['dropped']), 'critic/disabled': float(bool(_S.get('disabled')))})
     return scalars, rows

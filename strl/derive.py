@@ -49,6 +49,9 @@ def estimate_step_seconds(cfg: dict, params_b: float) -> dict[str, float]:
     if cfg['environment']['name'] == 'coding_harbor' and p['environment'] != 'coding_harbor':
         hb = cfg['environment'].get('harbor') or {}
         gen = max(gen * int(hb.get('max_turns', 8)) * 0.5, 60.0)                  # multi-turn agent + sandbox startup (uncalibrated)
+    if cfg['environment']['name'] == 'mimo' and p['environment'] != 'mimo':
+        deadline = float((cfg['environment'].get('mimo') or {}).get('step_deadline_sec') or 1200)
+        gen = max(gen, 0.6 * deadline)                                            # a step waits for its slowest agent episodes (uncalibrated)
     calibrated = p['environment'] == cfg['environment']['name'] and p['model'] == cfg['model']['id'] and cfg['compute']['nodes'] == 1
     return {'generate_s': round(gen, 1), 'train_s': round(train, 1), 'other_s': round(other, 1),
             'step_s': round(gen + train + other, 1), 'profile': p['name'],
@@ -206,6 +209,7 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
         elif merge['ok'] is False:
             out.append(f"HARBOR: {merge['model']}'s chat template breaks step-wise prefix merging ({merge['detail']}): one sequence per turn, "
                        'several times more training tokens. Use a template that keeps the generation prompt in history (e.g. Qwen3.8\'s).')
+    out += env.plan_warnings(cfg)
     if params_b is None:
         out.append('MEMORY: parameter count unknown (config.json unavailable); set model.params_b for memory/step estimates.')
     if memory and memory['training_phase_gb'] > MEMORY_LIMIT_GB:

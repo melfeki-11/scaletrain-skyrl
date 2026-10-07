@@ -146,6 +146,14 @@ def make_tracking_class():
                 table.add_data(*row)
             self.logger.log({key: table, AXIS: int(step)})
 
+        def log_media_table(self, key, columns, rows, step):
+            """A small table with wandb.Image cells, re-created at every call (images are not worth an incremental history)."""
+            if self.backend != 'wandb':
+                return
+            import wandb
+            table = wandb.Table(columns=list(columns), data=[list(r) for r in rows])
+            self.logger.log({key: table, AXIS: int(step)})
+
     return AxisTracking
 
 
@@ -170,16 +178,24 @@ def make_trajectory_logger_class():
             response_ids = generator_output.get('response_ids') or []
             rewards = generator_output.get('rewards') or []
             stop_reasons = generator_output.get('stop_reasons') or [None] * len(response_ids)
-            env_metrics = generator_output.get('env_metrics')
             scalar_rewards = [float(sum(value)) if isinstance(value, list) else float(value) for value in rewards]
             is_training = kwargs.get('wandb_key') == 'trajectories/train'
+            env_metrics = generator_output.get('env_metrics')
+            if env_metrics is None and self.env is not None:   # e.g. Harbor: SkyRL's step merge drops per-row metrics; the spec rebuilds them
+                env_metrics = self.env.env_metrics_from(generator_output, 'train' if is_training else 'eval')
             group_size = int(os.environ.get('GRPO_SAMPLES_PER_PROMPT', '8')) if is_training else 1
             decoded = [tokenizer.decode(tokens, skip_special_tokens=True) for tokens in response_ids]
             step = 0 if global_step is None else int(global_step)
             if is_training:
                 prompts_t, decoded_t, rewards_t, stops_t = per_trajectory(generator_output.get('is_last_step'), list(prompts), decoded,
                                                                          scalar_rewards, list(stop_reasons))
-                env_metrics_t = env_metrics if decoded_t is decoded else None   # step-wise: per-turn env metrics do not align
+                is_last = generator_output.get('is_last_step')
+                if decoded_t is decoded:
+                    env_metrics_t = env_metrics
+                elif env_metrics is not None and is_last and len(env_metrics) == len(is_last):   # step-wise: the last turn carries the trajectory
+                    env_metrics_t = [m for m, last in zip(env_metrics, is_last) if last]
+                else:
+                    env_metrics_t = None
                 metrics = rollout_diagnostics(decoded_t, rewards_t, stops_t, group_size)
                 SIGNAL[step] = metrics['train/learning_signal_fraction']
                 if self.env is not None:
@@ -359,6 +375,8 @@ def make_callback_class():
             complete.sort(key=lambda item: str(item.get('sample_id')))
             correct = sum(bool(item['correct']) for item in complete)
             accuracy = correct / len(complete) if complete else 0.0
+            extra_metrics = self.env.eval_metrics(complete) if self.env is not None else {}   # e.g. mimo: per-domain + macro task metric
+            accuracy = extra_metrics.get('eval/task_metric', accuracy)
             if self.baseline_accuracy is None:
                 self.baseline_accuracy = accuracy
             metric = self.env.metric if self.env is not None else 'accuracy'
@@ -369,12 +387,19 @@ def make_callback_class():
                 'eval/invalid_answer_rate': sum(item['parsed_answer'] is None for item in complete) / len(complete) if complete else 0.0,
                 'eval/truncation_rate': sum(item['finish_reason'] != 'stop' for item in complete) / len(complete) if complete else 0.0,
             }
+            payload.update(extra_metrics)
             trainer.tracker.log(payload, step=step, commit=False)
             columns = self.eval_columns + tuple(k for k in (complete[0] if complete else {}) if k not in self.eval_columns and k != 'extra')
             rows = [[item.get(key) for key in columns] for item in complete[:int(os.environ.get('GRPO_FIXED_QUALITATIVE', '16'))]]
             if rows:
                 trainer.tracker.log_samples_to_table(key='qualitative/fixed_validation', columns=list(columns), samples=rows, step=step)
                 trainer.tracker.log({'qualitative_rows': len(rows)}, step=step, commit=False)
+            media = self.env.media_table(complete) if self.env is not None else None
+            if media:   # images (webdev screenshots, music piano rolls): a fresh, small table per eval (not INCREMENTAL)
+                try:
+                    trainer.tracker.log_media_table('qualitative/media', media[0], media[1], step)
+                except Exception as error:   # media must never affect training
+                    print(f'media table skipped: {type(error).__name__}: {error}', flush=True)
             output = Path(trainer.cfg.trainer.export_path) / 'evaluation_samples.jsonl'
             with output.open('a', encoding='utf-8') as handle:
                 for item in complete:

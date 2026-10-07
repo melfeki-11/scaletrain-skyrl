@@ -9,6 +9,7 @@ _REGISTRY: dict[str, str] = {
     'gsm8k': 'strl.tasks.gsm8k.spec:Gsm8kSpec',
     'coding_exec': 'strl.tasks.coding.spec:CodingExecSpec',
     'coding_harbor': 'strl.tasks.coding.spec:CodingHarborSpec',
+    'mimo': 'strl.tasks.mimo.spec:MimoSpec',
 }
 _CACHE: dict[str, EnvironmentSpec] = {}
 

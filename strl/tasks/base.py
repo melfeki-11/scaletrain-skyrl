@@ -25,6 +25,8 @@ class EnvironmentSpec:
     failure_classes: tuple[str, ...] = ()
     preflight_imports: tuple[str, ...] = ()   # extra modules the CPU preflight must import in the training image
     expected_base_reward: float | None = None # base-model pass rate used for group-signal warnings in `strl plan` (None = unknown)
+    needs_litellm: bool = False               # the environment itself calls LiteLLM (judge): the worker writes the key file even without the critic
+    uses_coding_executor: bool = True         # `strl prepare` deploys the coding Modal executor and loads a tokenizer for Modal environments
 
     # ------------------------------------------------------------------ validation / planning
     def validate_experiment(self, cfg: dict) -> list[str]:
@@ -117,6 +119,15 @@ class EnvironmentSpec:
         """Return a SkyRL generator instance, or None for SkyRL's default SkyRLGymGenerator. Runs in the Ray driver task."""
         return None
 
+    def train_batch_sampler(self, experiment: dict, dataset: Any, cfg: Any) -> Any:
+        """A batch sampler (iterable of index lists with ``__len__``) for the train dataloader, or None for SkyRL's uniform shuffle.
+        When set, strl/entrypoint.py swaps the trainer's ``_build_train_dataloader_and_compute_training_steps`` (see tasks/mimo/sampler.py)."""
+        return None
+
+    def plan_warnings(self, cfg: dict) -> list[str]:
+        """Environment-specific lines for `strl plan` warnings."""
+        return []
+
     # ------------------------------------------------------------------ monitoring hooks
     def train_diagnostics(self, completions: list[str], rewards: list[float], stop_reasons: list, group_size: int,
                           env_metrics: list | None = None) -> dict[str, float]:
@@ -128,6 +139,22 @@ class EnvironmentSpec:
 
     def extra_values(self, index: int, env_metrics: list | None) -> tuple:
         return ()
+
+    def env_metrics_from(self, generator_output: dict, phase: str) -> list | None:
+        """Per-row env metric dicts for a generator output that carries none (e.g. Harbor: SkyRL's step merge drops them), or None."""
+        return None
+
+    def eval_metrics(self, records: list[dict]) -> dict[str, float]:
+        """Extra eval scalars from the collapsed validation records. ``eval/task_metric`` here replaces the default mean of ``correct``."""
+        return {}
+
+    def media_table(self, records: list[dict]) -> tuple[list[str], list[list]] | None:
+        """(columns, rows) for the `qualitative/media` table (wandb.Image cells), or None."""
+        return None
+
+    def critic_modes(self, cfg: dict) -> tuple[str, ...] | None:
+        """Failure taxonomy for the LLM critic; None keeps the default (strl.monitor.critic.MODES)."""
+        return None
 
     def eval_record(self, item: dict, trainer: Any, step: int) -> dict:
         """Build one validation record from a SkyRL ``dumped_evals`` row."""

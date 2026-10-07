@@ -139,17 +139,20 @@ def setup_services(cfg, runtime, env_spec, mode):
         receipt['modal'] = modal_service.check(modal_cfg.get('environment', 'main'), modal_cfg.get('sandbox_secret'))
         receipt['modal']['profile_mode'] = oct(path.stat().st_mode & 0o777)
     critic = (cfg['tracking'].get('critic') or {})
-    if critic.get('enabled'):
+    if critic.get('enabled') or env_spec.needs_litellm:
         from .services import litellm
         try:
             key_file = litellm.write_key_file(Path('artifacts').resolve().parent / '.litellm-key',
                                               (services.get('litellm') or {}).get('key_name', litellm.KEY_NAME))
             os.environ['STRL_LITELLM_KEY_FILE'] = str(key_file)
-            os.environ['STRL_CRITIC'] = json.dumps(critic)
-            receipt['critic'] = 'enabled'
+            if critic.get('enabled'):
+                os.environ['STRL_CRITIC'] = json.dumps(critic)
+                receipt['critic'] = 'enabled'
+            if env_spec.needs_litellm:
+                receipt['litellm'] = 'key file written (environment judge)'
         except Exception as error:  # the critic is optional: never fail a training run because of it (dry runs report it)
             receipt['critic'] = f'disabled: {type(error).__name__}: {error}'[:200]
-            if mode == 'dry':
+            if mode == 'dry' or env_spec.needs_litellm:   # an environment that needs the key (judge) cannot run without it
                 raise
     return receipt
 

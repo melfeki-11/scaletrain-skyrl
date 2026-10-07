@@ -96,8 +96,16 @@ def main() -> None:
             custom = env_spec.build_generator(experiment, cfg, tokenizer, inference_engine_client)
             return custom if custom is not None else super().get_generator(cfg, tokenizer, inference_engine_client)
 
-        def get_trainer(self, *args, **kwargs):
-            trainer = super().get_trainer(*args, **kwargs)
+        def get_trainer(self, cfg, tracker, tokenizer, train_dataset, eval_dataset, inference_engine_client, generator, colocate_pg):
+            sampler = env_spec.train_batch_sampler(experiment, train_dataset, cfg) if train_dataset is not None else None
+            if sampler is None:   # every environment without a custom sampler: SkyRL's trainer, untouched
+                trainer = super().get_trainer(cfg, tracker, tokenizer, train_dataset, eval_dataset, inference_engine_client, generator, colocate_pg)
+            else:
+                from skyrl.train.trainer import RayPPOTrainer
+                from .tasks.mimo.sampler import make_trainer_class
+                trainer = make_trainer_class(RayPPOTrainer, sampler)(
+                    cfg=cfg, tracker=tracker, tokenizer=tokenizer, train_dataset=train_dataset, eval_dataset=eval_dataset,
+                    inference_engine_client=inference_engine_client, generator=generator, colocate_pg=colocate_pg)
             trainer.add_callback(EvidenceCallback(float(os.getenv('GRPO_CHECKPOINT_MINUTES', '15'))))
             return trainer
 
@@ -105,7 +113,7 @@ def main() -> None:
     def run(cfg):
         from .monitor import critic
         env_spec.register(experiment)            # e.g. strl_env for the generic reward path
-        critic.configure(critic.settings_from_env())
+        critic.configure(critic.settings_from_env(), modes=env_spec.critic_modes(experiment))
         StrlExp(cfg).run()
 
     cfg = env_spec.skyrl_config_class().from_cli_overrides(sys.argv[1:])
