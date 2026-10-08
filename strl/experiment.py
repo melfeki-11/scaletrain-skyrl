@@ -57,7 +57,7 @@ SCHEMA: dict[str, Any] = {
     'evaluation': {
         'interval_steps': int, 'checkpoint_interval_steps': int, 'max_checkpoints': int, 'eval_batch_size': int,
         'fixed_qualitative_samples': int, 'training_groups_to_log': int, 'bootstrap_samples': int, 'bootstrap_seed': int,
-        'ci_level': (int, float), 'eval_shards_per_model': int, 'final_eval': bool,
+        'ci_level': (int, float), 'eval_shards_per_model': int, 'final_eval': bool, 'durable_checkpoints': bool,
     },
     'compute': {'nodes': int, 'gpus_per_node': int, 'instance_type': str, 'team': str, 'product': str, 'priority': str,
                 'allow_borrowing': bool, 'image': str, 'training': dict},
@@ -69,7 +69,7 @@ SCHEMA: dict[str, Any] = {
                  'alerts': bool},
     'storage': {'bucket': str, 'prefix': str, 'profile': str, 'region': str},
     'limits': {'max_nodes': int, 'gpus_per_node': list, 'max_attempt_seconds': int, 'models': list},
-    'run': {'data_dir': str, 'artifact_dir': str},
+    'run': {'data_dir': str, 'artifact_dir': str, 'resume_from': str},
     'services': {'modal': None, 'litellm': None},
 }
 # Scaling knobs. Defaults live here (not in the resolved config), so experiments that do not set them keep their sha and
@@ -239,6 +239,8 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
         problems.append('budget.attempt_max_seconds cannot exceed budget.total_seconds')
     if b['final_eval_reserve_seconds'] + 900 >= b['attempt_max_seconds'] and e.get('final_eval', True):
         problems.append('budget leaves no training time: attempt_max_seconds must exceed final_eval_reserve_seconds + 900')
+    if (e.get('durable_checkpoints') or (cfg.get('run') or {}).get('resume_from')) and not b.get('save_optimizer_state', True):
+        problems.append('evaluation.durable_checkpoints / run.resume_from need budget.save_optimizer_state: true (a resumable checkpoint carries the optimizer)')
     if e.get('final_eval', True) and b['final_eval_reserve_seconds'] < MIN_FINAL_EVAL_RESERVE:
         problems.append(f'budget.final_eval_reserve_seconds={b["final_eval_reserve_seconds"]} < {MIN_FINAL_EVAL_RESERVE}: the training child is hard-killed '
                         '480 s before the deadline, so a smaller reserve kills a run that reaches its deadline before its final eval')

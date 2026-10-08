@@ -237,6 +237,19 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
         if s3.get_object(Bucket=bucket, Key=ledger_key)['Body'].read() != ledger_bytes:
             raise RuntimeError(f'attempt {attempt} was already staged against a different budget ledger; use a new attempt name') from None
 
+    previous = (cfg.get('run') or {}).get('resume_from')
+    if previous:   # SkyRL can only load a checkpoint written with the same world size; the earlier attempt must have one
+        receipt_path = REPO_ROOT / 'evidence' / previous / 'stage.json'
+        if not receipt_path.is_file():
+            raise RuntimeError(f'run.resume_from={previous}: no evidence/{previous}/stage.json (was it staged from this checkout?)')
+        old = json.loads(receipt_path.read_text())
+        if (old.get('nodes'), old.get('gpu_fraction')) != (nodes, gpu_fraction):
+            raise RuntimeError(f"run.resume_from={previous}: it ran on {old.get('nodes')} node(s) x {old.get('gpu_fraction')} of 8 GPUs, this attempt "
+                               f'on {nodes} x {gpu_fraction}: a checkpoint resumes only at the same world size')
+        try:
+            s3.head_object(Bucket=bucket, Key=f'{base_prefix}/attempts/{previous}/artifacts/checkpoints/latest_ckpt_global_step.txt')
+        except Exception as error:
+            raise RuntimeError(f'run.resume_from={previous}: no durable checkpoint in S3 (run it with evaluation.durable_checkpoints: true)') from error
     model_dir = Path(cfg['model']['local_path'])
     mprefix = model_prefix(base_prefix, cfg)
     from .models import snapshot_identity

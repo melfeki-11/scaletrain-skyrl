@@ -677,3 +677,32 @@ class AutoLayout(unittest.TestCase):
         self.assertIsNone(training({**base, 'finetune': {'mode': 'full'}})['fsdp_size'])          # full: full shard unless set
         self.assertIsNone(training({**base, 'compute': {'nodes': 1, 'gpus_per_node': 8}})['fsdp_size'])
         self.assertEqual(training({**base, 'compute': {'nodes': 2, 'gpus_per_node': 8, 'training': {'fsdp_size': 16}}})['fsdp_size'], 16)
+
+
+class Resume(unittest.TestCase):
+    """A preempted attempt (borrowed capacity was reclaimed twice) can be continued by a new attempt from its durable checkpoint."""
+
+    def test_overrides_point_skyrl_at_s3_and_the_resume_checkpoint(self):
+        import os
+        from strl.overrides import durability_values
+        cfg = {'evaluation': {'durable_checkpoints': True, 'checkpoint_interval_steps': 2}, 'run': {}}
+        self.assertEqual(durability_values({'evaluation': {}, 'run': {}}, 'train'), {})
+        old = {k: os.environ.get(k) for k in ('GRPO_ARTIFACT_URI', 'STRL_RESUME_PATH')}
+        try:
+            os.environ['GRPO_ARTIFACT_URI'] = 's3://b/p/attempts/run1-p1-fb/artifacts'
+            os.environ.pop('STRL_RESUME_PATH', None)
+            self.assertEqual(durability_values(cfg, 'train'), {'trainer.ckpt_interval': 2, 'trainer.ckpt_path': 's3://b/p/attempts/run1-p1-fb/artifacts/checkpoints'})
+            os.environ['STRL_RESUME_PATH'] = 's3://b/p/attempts/run1-fb/artifacts/checkpoints/global_step_2'
+            out = durability_values({**cfg, 'run': {'resume_from': 'run1-fb'}}, 'train')
+            self.assertEqual((out['trainer.resume_mode'], out['trainer.eval_before_train']), ('from_path', False))
+            self.assertTrue(out['trainer.resume_path'].endswith('run1-fb/artifacts/checkpoints/global_step_2'))
+        finally:
+            for k, v in old.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+    def test_previous_prefix_and_validation(self):
+        from strl.worker import previous_prefix
+        self.assertEqual(previous_prefix('s3://b/p/attempts/run1-p1-fb/artifacts', 'run1-fb'), 's3://b/p/attempts/run1-fb/artifacts')
+        with self.assertRaises(ExperimentError) as error:
+            load(SMOKE, overrides=['evaluation.durable_checkpoints=true', 'budget.save_optimizer_state=false'])
+        self.assertIn('save_optimizer_state', str(error.exception))

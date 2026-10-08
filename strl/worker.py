@@ -61,6 +61,41 @@ def _progress_mtime(progress: Path | None) -> float | None:
     return progress.stat().st_mtime if progress is not None and progress.is_file() else None
 
 
+def previous_prefix(prefix: str, previous: str) -> str:
+    """s3://b/<p>/attempts/<this>/artifacts -> s3://b/<p>/attempts/<previous>/artifacts"""
+    head, sep, _ = prefix.rpartition('/attempts/')
+    if not sep:
+        raise RuntimeError(f'cannot derive the previous attempt prefix from {prefix}')
+    return f'{head}/attempts/{previous}/artifacts'
+
+
+def prepare_resume(prefix: str, run_name: str, previous: str, root: Path) -> dict:
+    """Continue ``previous`` (a preempted/stopped attempt with durable checkpoints): point SkyRL at its latest checkpoint (STRL_RESUME_PATH,
+    read by strl.overrides in the training child), and carry over its in-loop eval records (the step-0 eval stays the base of the paired
+    result) and its canary record (the canary rule ran in the earlier attempt)."""
+    import boto3
+    old = previous_prefix(prefix, run_name)
+    bucket, key = split_uri(f'{old}/checkpoints/latest_ckpt_global_step.txt')
+    s3 = boto3.client('s3')
+    try:
+        step = int(s3.get_object(Bucket=bucket, Key=key)['Body'].read().decode().strip())
+    except Exception as error:
+        raise RuntimeError(f'run.resume_from={previous}: no durable checkpoint at {old}/checkpoints ({type(error).__name__}); '
+                           'only attempts run with evaluation.durable_checkpoints: true can be resumed') from error
+    os.environ['STRL_RESUME_PATH'] = f'{old}/checkpoints/global_step_{step}'
+    carried = []
+    for rel, target in ((f'{previous}/exports/evaluation_samples.jsonl', root / 'exports' / 'evaluation_samples.jsonl'),
+                        (f'{previous}/canary.json', root / 'canary.json')):
+        b, k = split_uri(f'{old}/{rel}')
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            s3.download_file(b, k, str(target))
+            carried.append(rel)
+        except Exception:
+            pass
+    return {'attempt': previous, 'step': step, 'checkpoint': os.environ['STRL_RESUME_PATH'], 'carried': carried}
+
+
 def gather_exports(root, prefix):
     """Multi-node: SkyRL writes HF exports from FSDP rank 0, which is on a random node (bundles are ordered by Ray NodeID). Upload every
     node's exports to S3, then fetch onto the head whatever the head lacks, so selection, merge, final eval and the S3 copy of the trained
@@ -427,6 +462,9 @@ def main():
             print(json.dumps(dry, default=str), flush=True)
             return
         root = Path('artifacts') / runtime['run_name']
+        if (cfg.get('run') or {}).get('resume_from'):
+            identity['resumed_from'] = prepare_resume(prefix, runtime['run_name'], cfg['run']['resume_from'], root)
+            put_json(prefix + '/worker-started.json', identity)
         stalled = None
         if multi:   # head-side liveness: a lost peer aborts training instead of hanging in NCCL until the deadline
             ray.init(address=address)

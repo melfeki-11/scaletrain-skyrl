@@ -372,6 +372,7 @@ def main(argv=None):
     s.add_argument('--poll', type=float, default=15.0); s.add_argument('--max-wait-hours', type=float, default=None)
     s.add_argument('--watch', action='store_true', help='follow the winner to its end, record it, detect preemption')
     s.add_argument('--relaunch-on-preempt', type=int, default=0); s.add_argument('--user-id', default=USER)
+    s.add_argument('--fallback-set', action='append', default=[], help='after --max-wait-hours with no capacity, race again with these overrides (e.g. compute.nodes=1)')
     s = sub.add_parser('stage'); s.add_argument('experiment'); s.add_argument('--attempt', required=True)
     s.add_argument('--mode', choices=['dry', 'canary', 'train'], required=True); s.add_argument('--team'); s.add_argument('--allow-borrowing', action='store_true'); s.add_argument('--no-borrowing', action='store_true', help='own-quota route only (not reclaimable): sets compute.allow_borrowing=false')
     s.add_argument('--output'); s.add_argument('--ledger', help='program budget ledger (default: budget.ledger of the experiment)')

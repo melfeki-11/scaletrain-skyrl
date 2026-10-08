@@ -168,11 +168,13 @@ def watch(experiment: str, attempt: str, job_id: str, api: Api, *, poll: float =
 
 
 def launch(experiment: str, attempt: str, mode: str, api: Api, *, overrides: list[str] | None = None, routes: str | None = None,
-           poll: float = 15.0, max_wait_seconds: float | None = None, follow: bool = False, relaunch_on_preempt: int = 0) -> list[dict]:
-    """race (+ watch, + relaunch after preemption). Returns one receipt per race."""
-    history, name = [], attempt
+           poll: float = 15.0, max_wait_seconds: float | None = None, follow: bool = False, relaunch_on_preempt: int = 0,
+           resume_on_preempt: bool = False) -> list[dict]:
+    """race (+ watch, + relaunch after preemption; with resume_on_preempt, which needs evaluation.durable_checkpoints, the relaunch continues
+    the preempted attempt from its latest checkpoint instead of starting over). Returns one receipt per race."""
+    history, name, extra = [], attempt, []
     for k in range(relaunch_on_preempt + 1):
-        result = race(experiment, name, mode, api, overrides=overrides, routes=routes, poll=poll, max_wait_seconds=max_wait_seconds)
+        result = race(experiment, name, mode, api, overrides=[*(overrides or []), *extra], routes=routes, poll=poll, max_wait_seconds=max_wait_seconds)
         history.append(result)
         if not result.get('winner') or not follow:
             break
@@ -181,6 +183,7 @@ def launch(experiment: str, attempt: str, mode: str, api: Api, *, overrides: lis
         if outcome['outcome'] != 'preempted':
             break
         name = f'{attempt}-p{k + 1}'
+        extra = [f"run.resume_from={result['winner']}"] if resume_on_preempt else []
         if k < relaunch_on_preempt:
             api.log(f'relaunching as {name} (preemption {k + 1} of {relaunch_on_preempt} allowed)')
     receipt_dir = Path('evidence') / attempt
@@ -234,9 +237,16 @@ def real_api(user_id: str) -> Api:
 
 def main_launch(a) -> int:
     api = real_api(a.user_id)
+    from . import cli
+    from .overrides import durable
+    resumable = durable(cli._load(a.experiment, a.set))
     history = launch(a.experiment, a.attempt, a.mode, api, overrides=a.set, routes=a.routes, poll=a.poll,
                      max_wait_seconds=a.max_wait_hours * 3600 if a.max_wait_hours else None, follow=a.watch,
-                     relaunch_on_preempt=a.relaunch_on_preempt)
+                     relaunch_on_preempt=a.relaunch_on_preempt, resume_on_preempt=resumable)
+    if a.max_wait_hours and not history[-1].get('winner') and a.fallback_set:   # e.g. 2 nodes never came: fall back to a smaller shape
+        api.log(f'no capacity within {a.max_wait_hours} h: falling back with {a.fallback_set}')
+        history += launch(a.experiment, f'{a.attempt}-fb1'[:MAX_BASE_NAME], a.mode, api, overrides=[*a.set, *a.fallback_set], routes=a.routes,
+                          poll=a.poll, follow=a.watch, relaunch_on_preempt=a.relaunch_on_preempt, resume_on_preempt=resumable)
     print(json.dumps([{k: v for k, v in h.items() if k != 'receipt'} for h in history], indent=1, default=str))
     last = history[-1]
     if not last.get('winner'):

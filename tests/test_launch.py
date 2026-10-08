@@ -121,12 +121,14 @@ class Race(unittest.TestCase):
             return original_get(job_id)
         api = fake.api()
         api.get = get
-        history = L.launch('exp.yaml', 'run1', 'train', api, poll=1, follow=True, relaunch_on_preempt=1)
+        history = L.launch('exp.yaml', 'run1', 'train', api, poll=1, follow=True, relaunch_on_preempt=1, resume_on_preempt=True)
         self.assertEqual([h['winner'] for h in history], ['run1-fb', 'run1-p1-fb'])
         self.assertEqual(history[0]['outcome']['outcome'], 'preempted')
         self.assertEqual(history[1]['outcome']['outcome'], 'terminal')
         self.assertIn(('run1-fb', False), fake.recorded)               # the preempted attempt is charged (its pod ran)
         self.assertTrue(Path('evidence/run1/launch.json').is_file())
+        relaunched = [x for x in fake.staged if x['attempt'].startswith('run1-p1-')]
+        self.assertTrue(all('run.resume_from=run1-fb' in x['overrides'] for x in relaunched))   # continues the preempted attempt
 
 
 if __name__ == '__main__':
