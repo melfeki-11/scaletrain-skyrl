@@ -178,7 +178,11 @@ def cmd_stage(a):
 def cmd_check_template(a):
     from .models import template_check
     cfg = _load(a.experiment, a.set)
-    result = template_check.check(cfg, online=True)
+    try:
+        result = template_check.check(cfg, online=True)
+    except RuntimeError as error:
+        print(f'cannot check {a.experiment}:\n- {error}', file=sys.stderr)
+        raise SystemExit(2)
     print(json.dumps(result or {'ok': None, 'detail': 'tokenizer unavailable'}, indent=1))
 
 

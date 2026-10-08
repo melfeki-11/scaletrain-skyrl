@@ -23,11 +23,25 @@ def normalize_number(value: str) -> str | None:
     return "0" if normalized in {"-0", "+0", ""} else normalized
 
 
-def parse_final_answer(text: str) -> str | None:
-    # The generator may decode the real terminal EOS marker into the reward text.
+# Terminal end-of-turn / end-of-sequence markers the generator may decode into the reward text, for the common OSS families
+# (Qwen, Llama 3, Mistral/Llama 2, Gemma, Phi, DeepSeek, OLMo/GPT-NeoX). Only a TRAILING run of them is removed.
+TERMINAL_TOKENS = ("<|endoftext|>", "<|im_end|>", "<|eot_id|>", "<|end_of_text|>", "</s>", "<end_of_turn>", "<eos>", "<|end|>",
+                   "<\uff5cend\u2581of\u2581sentence\uff5c>", "<|eom_id|>")
+
+
+def strip_terminal_tokens(text: str) -> str:
     text = text.rstrip()
-    for token in ("<|endoftext|>", "<|im_end|>"):
-        if text.endswith(token):text = text[:-len(token)].rstrip()
+    changed = True
+    while changed:
+        changed = False
+        for token in TERMINAL_TOKENS:
+            if text.endswith(token):
+                text, changed = text[:-len(token)].rstrip(), True
+    return text
+
+
+def parse_final_answer(text: str) -> str | None:
+    text = strip_terminal_tokens(text)
     if len(MARKER_RE.findall(text)) != 1:
         return None
     matches = FINAL_RE.findall(text)

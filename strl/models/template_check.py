@@ -26,12 +26,30 @@ def prefix_property(tokenizer: Any, chat_kwargs: dict | None = None) -> dict:
         p2 = tokenizer.apply_chat_template(follow, tokenize=False, add_generation_prompt=True, **kw)
     except Exception as error:   # templates that reject the conversation shape (tool-only, system required, ...)
         return {'ok': None, 'detail': f'template could not render the probe conversation: {type(error).__name__}: {str(error)[:120]}'}
-    expected = p1 + reply + (getattr(tokenizer, 'eos_token', None) or '')
-    if p2.startswith(expected):
-        return {'ok': True, 'detail': 'history keeps the generation prompt and reply verbatim: turns can merge'}
+    # the generated reply ends with the model's END-OF-TURN token, which is not always tokenizer.eos_token (Gemma <end_of_turn>, Phi <|end|>,
+    # Llama 3 <|eot_id|>): any terminator the model can stop on that makes the history a verbatim extension means turns merge
+    enders = list(dict.fromkeys([e for e in (getattr(tokenizer, 'eos_token', None), *end_of_turn_tokens(tokenizer),
+                                             '<|im_end|>', '<|eot_id|>', '<end_of_turn>', '<|end|>', '</s>') if e]))
+    for ender in enders:
+        if p2.startswith(p1 + reply + ender):
+            return {'ok': True, 'detail': f'history keeps the generation prompt and reply verbatim (ending {ender!r}): turns can merge'}
+    expected = p1 + reply + (enders[0] if enders else '')
     k = next((i for i, (a, b) in enumerate(zip(expected, p2)) if a != b), min(len(expected), len(p2)))
     return {'ok': False, 'detail': f'history diverges from the generated prefix at char {k}: generated {expected[max(0, k - 24):k + 12]!r} '
                                    f'vs rendered {p2[max(0, k - 24):k + 12]!r}'}
+
+
+def end_of_turn_tokens(tokenizer: Any) -> list[str]:
+    """Strings of the ids generation stops on (generation_config.eos_token_id may be a list: Llama 3 stops on <|eot_id|> and <|end_of_text|>)."""
+    out = []
+    try:
+        from transformers import GenerationConfig
+        ids = GenerationConfig.from_pretrained(getattr(tokenizer, 'name_or_path', '')).eos_token_id
+        for i in (ids if isinstance(ids, list) else [ids] if ids is not None else []):
+            out.append(tokenizer.convert_ids_to_tokens(int(i)))
+    except Exception:
+        pass
+    return [t for t in out if isinstance(t, str)]
 
 
 def load_tokenizer(model_cfg: dict, *, online: bool = False) -> Any | None:

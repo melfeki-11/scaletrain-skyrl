@@ -221,6 +221,9 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
         if merge is None:
             out.append('HARBOR: chat-template merge check skipped (tokenizer not local): run `strl check-template <exp>`. Without prefix merging '
                        'every agent turn re-trains its growing prefix (correct, but several times more training tokens).')
+        elif merge['ok'] is None:
+            out.append(f"HARBOR: {merge['model']}'s chat template could not be checked ({merge['detail']}): run `strl check-template <exp>` and a canary; "
+                       'watch generate/num_seq_before_merge vs after (the MERGE monitor flag)')
         elif merge['ok'] is False:
             out.append(f"HARBOR: {merge['model']}'s chat template breaks step-wise prefix merging ({merge['detail']}): one sequence per turn, "
                        'several times more training tokens. Use a template that keeps the generation prompt in history (e.g. Qwen3.8\'s).')
