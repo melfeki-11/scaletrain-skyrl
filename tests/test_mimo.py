@@ -456,6 +456,9 @@ class Judge(unittest.TestCase):
         result = run(judge.Judge(fast(votes=3, eval_votes=3), chat=chat).score({**RUBRIC, 'items': RUBRIC['items'][:1], 'total_weight': 0.7}, votes=3))
         self.assertEqual(result['scores']['a'], 1.0)                              # median(1, 0, 1); the garbage reply was retried
         self.assertEqual(len(chat.calls), 4)
+        self.assertAlmostEqual(result['meta']['vote_variance'], 2 / 9, places=4)   # the judge noise eval/<d>/judge_variance reports
+        single = run(judge.Judge(fast(), chat=FakeChat([verdict('a', 1), verdict('b', 0)])).score(RUBRIC))
+        self.assertIsNone(single['meta']['vote_variance'])                         # one vote: no noise estimate
 
     def test_failures_raise_judge_unavailable(self):
         for replies in (['x', 'y', 'z'], [judge.litellm.LiteLLMError('LiteLLM HTTP 500')] * 3,

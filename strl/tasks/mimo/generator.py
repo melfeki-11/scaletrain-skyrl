@@ -499,7 +499,8 @@ def public_summary(summary: dict) -> dict:
     judge = summary.get('judge')
     return {**{k: v for k, v in summary.items() if k != 'judge'},
             'judge': judge and {'final': judge['final'], 'scores': judge['scores'], 'rationale': judge['rationale'][:600],
-                                'cost_usd': judge['meta']['cost_usd'], 'latency_s': judge['meta']['latency_s']}}
+                                'cost_usd': judge['meta']['cost_usd'], 'latency_s': judge['meta']['latency_s'],
+                                'vote_variance': judge['meta'].get('vote_variance')}}
 
 
 def remember(phase: str, trajectory_id: Any, summary: dict, env_extra: dict | None = None) -> None:

@@ -263,10 +263,13 @@ class Judge:
             messages = [{'role': 'user', 'content': RUBRIC_PROMPT.replace('{evidence}', evidence).replace('{items}', line)}]
             verdicts = await asyncio.gather(*[self._ask(messages, self.cfg['model'], int(self.cfg['max_completion_tokens']),
                                                         lambda text, i=item['id']: parse_rubric_verdict(text, i), meta) for _ in range(votes)])
-            return item['id'], round(statistics.median(v[0] for v in verdicts), 4), verdicts[0][1]
+            spread = statistics.pvariance([v[0] for v in verdicts]) if len(verdicts) > 1 else None
+            return item['id'], round(statistics.median(v[0] for v in verdicts), 4), verdicts[0][1], spread
 
         rows = await asyncio.gather(*[one(it) for it in items])
-        return {'scores': {i: s for i, s, _ in rows}, 'rationale': '; '.join(f'{i}: {why}' for i, _, why in rows)[:1500], 'dims': None, 'meta': meta}
+        spreads = [x for *_, x in rows if x is not None]
+        meta['vote_variance'] = round(sum(spreads) / len(spreads), 6) if spreads else None   # judge noise across votes (eval: eval_votes)
+        return {'scores': {i: s for i, s, _, _ in rows}, 'rationale': '; '.join(f'{i}: {why}' for i, _, why, _ in rows)[:1500], 'dims': None, 'meta': meta}
 
     async def _score_vision(self, request: dict, votes: int, workdir: Path | None) -> dict:
         model = self.cfg['vision_model'] or self.cfg['model']
@@ -287,6 +290,7 @@ class Judge:
         verdicts = await asyncio.gather(*[self._ask(messages, model, int(self.cfg['vision_max_completion_tokens']), parse_vision_verdict, meta)
                                           for _ in range(votes)])
         scores = {k: round(statistics.median(v[k] for v in verdicts), 4) for k in VISION_KEYS}
+        meta['vote_variance'] = round(sum(statistics.pvariance([v[k] for v in verdicts]) for k in VISION_KEYS) / len(VISION_KEYS), 6) if len(verdicts) > 1 else None
         dims = {k: round(statistics.median(v['dims'][k] for v in verdicts), 4) for k in rubric_prompts.ALL_KEYS}
         return {'scores': scores, 'rationale': verdicts[0]['reason'], 'dims': dims, 'meta': meta}
 

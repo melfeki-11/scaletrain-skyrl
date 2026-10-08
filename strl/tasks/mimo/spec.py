@@ -304,7 +304,7 @@ class MimoSpec(CodingHarborSpec):
                 'token_count': mimo.get('tokens'), 'finish_reason': item.get('stop_reason'), 'domain': domain, 'rep': rep, 'task': task,
                 'task_metric': (reward if metric is None and not masked else metric), 'passed': bool(mimo.get('passed')) if mimo else reward >= 1.0,
                 'masked': masked, 'mask_reason': mimo.get('mask_reason'), 'stop': mimo.get('stop'), 'judge_rationale': judged.get('rationale'),
-                'judge_variance': None, 'verifier_components': json.dumps(mimo.get('components') or {}, sort_keys=True)[:1000],
+                'judge_variance': judged.get('vote_variance'), 'verifier_components': json.dumps(mimo.get('components') or {}, sort_keys=True)[:1000],
                 'artifact': (mimo.get('artifact') or '')[:metrics.ARTIFACT_CHARS], 'screenshot': mimo.get('screenshot'), 'turns': 1,
                 'extra': {'artifact_full': mimo.get('artifact'), **({'judge_request': mimo['judge_request']} if mimo.get('judge_request') else {})}}   # 'extra' is never a table column (EvidenceCallback.on_eval_end)
 
