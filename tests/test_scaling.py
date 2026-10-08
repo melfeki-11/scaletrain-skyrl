@@ -713,16 +713,16 @@ class Retention(unittest.TestCase):
 
     def test_retention_config_uses_the_experiment_model(self):
         from strl.experiment import retention_config
-        cfg = load('experiments/mimo-qwen35-0p8b-2node-smoke.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml, limit: 300}'])
+        cfg = load('experiments/mimo-qwen38-27b-lora.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml, limit: 300}'])
         rcfg = retention_config(cfg)
         self.assertEqual(rcfg['environment']['name'], 'gsm8k')
         self.assertEqual(rcfg['model'], cfg['model'])
         self.assertEqual((rcfg['_retention_limit'], rcfg['evaluation']['eval_shards_per_model']), (300, 1))
-        self.assertIsNone(retention_config(load('experiments/mimo-qwen35-0p8b-2node-smoke.yaml')))
+        self.assertIsNone(retention_config(load('experiments/mimo-qwen38-27b-lora.yaml')))
 
     def test_retention_needs_two_gpus_and_reserves_time(self):
         from strl.worker import train_reserve_seconds
         with self.assertRaises(ExperimentError):
             load('experiments/mimo-qwen35-0p8b-smoke.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])   # 1 GPU
-        cfg = load('experiments/mimo-qwen35-0p8b-2node-smoke.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])
-        self.assertEqual(train_reserve_seconds(cfg, 'train') - train_reserve_seconds(load('experiments/mimo-qwen35-0p8b-2node-smoke.yaml'), 'train'), 900)
+        cfg = load('experiments/mimo-qwen38-27b-lora.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])
+        self.assertEqual(train_reserve_seconds(cfg, 'train') - train_reserve_seconds(load('experiments/mimo-qwen38-27b-lora.yaml'), 'train'), 900)
