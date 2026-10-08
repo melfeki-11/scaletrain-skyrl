@@ -33,7 +33,7 @@ STEP_SLOW_FACTOR = 1.5
 MEM_LIMIT_GB = 76.0
 DOMAIN_KEY = re.compile(r'^(eval/([a-z]+)/task_metric|generate/([a-z]+)/pass_rate|environment/([a-z]+)/masked_group_fraction|environment/([a-z]+)/timeout_group_fraction)$')
 MERGE_RATIO_LIMIT = 0.8   # sequences after / before step-wise merging; a healthy multi-turn run is far below (Qwen3.8: ~0.26 per turn)
-ALERTED = ('DOMAIN_MASKED', 'TIMEOUTS', 'STEP_SLOW', 'MEM', 'MERGE')
+ALERTED = ('DOMAIN_MASKED', 'TIMEOUTS', 'STEP_SLOW', 'MEM', 'MERGE', 'NETWORK', 'PEER_STALE')
 
 
 def is_memory_key(key: str) -> bool:
@@ -168,11 +168,13 @@ def snapshot(cfg: dict, attempt: str, job_id: str | None) -> dict:
         latest.update({k: v for k, v in r.items() if (k in KEYS or DOMAIN_KEY.match(k) or is_memory_key(k)) and v is not None})
     allowance = cfg['compute']['nodes'] * cfg['budget']['attempt_max_seconds'] / 3600 * (cfg['compute']['gpus_per_node'] / 8)
     found = flags(rows, progress, heartbeat, allowance, runtime.get('plan_step_seconds') or stage_plan_estimate(runtime))
+    peers: list = []
     if cfg['compute']['nodes'] > 1:
-        found += cluster_flags(s3_json(session, f'{base}/network.json'),
-                               [s3_json(session, f'{base}/peer-{r}-heartbeat.json') for r in range(1, cfg['compute']['nodes'])])
+        peers = [s3_json(session, f'{base}/peer-{r}-heartbeat.json') for r in range(1, cfg['compute']['nodes'])]
+        found += cluster_flags(s3_json(session, f'{base}/network.json'), peers)
     return {'at': time.strftime('%H:%M:%S'), 'job': job_state(job_id), 'completion': (completion or {}).get('status'),
             'heartbeat_age_s': round(time.time() - heartbeat['at']) if heartbeat else None, 'latest': latest,
+            'peer_ages_s': [round(time.time() - float(p['at'])) if p and p.get('at') else None for p in peers],
             'flags': found, 'wandb_run_id': runtime.get('wandb_run_id')}
 
 
@@ -209,7 +211,9 @@ def line(snap: dict) -> str:
             f"task_metric={fmt('eval/task_metric')} signal={fmt('train/learning_signal_fraction')} step_s={fmt('timing/step', '{:.0f}')} "
             f"gen_s={fmt('timing/generate', '{:.0f}')} infra={fmt('environment/infra_error')} masked={fmt('environment/masked_group_fraction')} "
             f"node_h={fmt('budget/consumed_node_hours', '{:.2f}')} critic$={fmt('critic/cost_usd', '{:.4f}')} hb={snap['heartbeat_age_s']}s "
-            f"{(domains + ' ') if domains else ''}{' '.join(snap['flags'])} {('[' + snap['completion'] + ']') if snap['completion'] else ''}")
+            + (f"nodes=head:{snap['heartbeat_age_s']}s," + ','.join(f'rank{r}:{a if a is not None else "-"}s' for r, a in enumerate(snap['peer_ages_s'], 1)) + ' '
+               if snap.get('peer_ages_s') else '')
+            + f"{(domains + ' ') if domains else ''}{' '.join(snap['flags'])} {('[' + snap['completion'] + ']') if snap['completion'] else ''}")
 
 
 def watch(cfg: dict, attempt: str, job_id: str | None, interval: float = 60, once: bool = False, notify=None) -> dict:

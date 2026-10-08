@@ -237,6 +237,17 @@ def make_trajectory_logger_class():
     return GroupTrajectoryLogger
 
 
+def infra_metrics(network: dict) -> dict:
+    """network.json (strl/probe.py) -> W&B infra/* scalars."""
+    bw = network.get('bandwidth_gbps') or {}
+    out = {'infra/nodes': float(network.get('nodes') or 0), 'infra/efa_available': float(bool(network.get('efa_available'))),
+           'infra/nccl_socket_transport': float(network.get('transport') == 'socket'), 'infra/probe_passed': float(bool(network.get('passed')))}
+    for k in ('intra_node', 'cross_node', 'global'):
+        if isinstance(bw.get(k), (int, float)):
+            out[f'infra/{k}_busbw_GBps'] = float(bw[k])
+    return out
+
+
 def env_failure_fraction(metrics: dict, prompts_per_step: int) -> float | None:
     """Share of GRPO groups masked because the environment failed (not the model): coding_exec logs it directly; Harbor's
     generator reports masked instances (any failed trial masks its whole group)."""
@@ -433,6 +444,12 @@ def make_callback_class():
         def on_step_end(self, trainer, callback_input, control) -> None:
             step = int(callback_input.global_step)
             metrics = callback_input.metrics or {}
+            if not getattr(self, 'infra_logged', False):   # the worker's network probe -> W&B infra/* once (multi-node runs)
+                self.infra_logged = True
+                try:
+                    trainer.tracker.log(infra_metrics(json.loads(Path('artifacts/network.json').read_text())), step=step, commit=False)
+                except Exception:
+                    pass
             for key, value in metrics.items():
                 if isinstance(value, Real) and not math.isfinite(float(value)):
                     alert('Non-finite metric', f'{key}={value} at step {step} ({os.environ.get("GRPO_RUN_NAME")})')

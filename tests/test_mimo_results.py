@@ -782,3 +782,23 @@ class MergeFlag(unittest.TestCase):
         self.assertTrue(any(f.startswith('MERGE(') for f in flags(rows(362, 362), None, None, 99)))      # the Qwen3.5 canary: 362 -> 362
         self.assertFalse(any(f.startswith('MERGE(') for f in flags(rows(811, 209), None, None, 99)))     # Qwen3.8 on real transcripts
         self.assertFalse(any(f.startswith('MERGE(') for f in flags(rows(12, 12), None, None, 99)))       # too few sequences to judge
+
+
+class MultiNodeMonitoring(unittest.TestCase):
+    """Compliance audit: no infra/* in W&B, no per-node line, NETWORK / PEER_STALE never alerted."""
+
+    def test_infra_metrics_from_the_probe(self):
+        from strl.tracking import infra_metrics
+        out = infra_metrics({'nodes': 2, 'efa_available': False, 'transport': 'socket', 'passed': True,
+                             'bandwidth_gbps': {'intra_node': 343.7, 'cross_node': 0.69, 'global': 2.39}})
+        self.assertEqual((out['infra/nodes'], out['infra/efa_available'], out['infra/nccl_socket_transport']), (2.0, 0.0, 1.0))
+        self.assertEqual(out['infra/cross_node_busbw_GBps'], 0.69)
+
+    def test_per_node_line_and_alerted_flags(self):
+        snap = {'at': '00:00:00', 'job': 'IN_PROGRESS', 'latest': {}, 'heartbeat_age_s': 12, 'peer_ages_s': [30, None],
+                'flags': ['PEER_STALE(rank 2, 400s)'], 'completion': None}
+        text = live.line(snap)
+        self.assertIn('nodes=head:12s,rank1:30s,rank2:-s', text)
+        sent, calls = set(), []
+        live.alert_once({'tracking': {}}, 'run', ['PEER_STALE(rank 2, 400s)', 'NETWORK(transport=socket)'], sent, lambda *a: calls.append(a[2]))
+        self.assertEqual(sorted(calls), ['NETWORK', 'PEER_STALE'])
