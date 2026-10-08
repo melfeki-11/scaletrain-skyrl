@@ -28,11 +28,12 @@ KEYS = ['optimizer_step', 'reward/avg_raw_reward', 'eval/task_metric', 'train/le
 
 
 DOMAIN_MASKED_LIMIT = 0.15
+TIMEOUT_LIMIT = 0.30                 # informational: a policy that is out of time is not an environment failure
 STEP_SLOW_FACTOR = 1.5
 MEM_LIMIT_GB = 76.0
-DOMAIN_KEY = re.compile(r'^(eval/([a-z]+)/task_metric|generate/([a-z]+)/pass_rate|environment/([a-z]+)/masked_group_fraction)$')
+DOMAIN_KEY = re.compile(r'^(eval/([a-z]+)/task_metric|generate/([a-z]+)/pass_rate|environment/([a-z]+)/masked_group_fraction|environment/([a-z]+)/timeout_group_fraction)$')
 MERGE_RATIO_LIMIT = 0.8   # sequences after / before step-wise merging; a healthy multi-turn run is far below (Qwen3.8: ~0.26 per turn)
-ALERTED = ('DOMAIN_MASKED', 'STEP_SLOW', 'MEM', 'MERGE')
+ALERTED = ('DOMAIN_MASKED', 'TIMEOUTS', 'STEP_SLOW', 'MEM', 'MERGE')
 
 
 def is_memory_key(key: str) -> bool:
@@ -105,6 +106,8 @@ def flags(rows: list[dict], progress: dict | None, heartbeat: dict | None, node_
     for name, fraction in sorted(domain_status(seen).items()):
         if (fraction.get('masked_group_fraction') or 0) > DOMAIN_MASKED_LIMIT:
             out.append(f"DOMAIN_MASKED({name}={fraction['masked_group_fraction']:.2f})")
+        if (fraction.get('timeout_group_fraction') or 0) > TIMEOUT_LIMIT:
+            out.append(f"TIMEOUTS({name}={fraction['timeout_group_fraction']:.2f}: trials out of time leave no tokens and are dropped from training; raise the caps or shorten turns)")
     if plan_step_seconds and isinstance(seen.get('timing/step'), (int, float)) and seen['timing/step'] > STEP_SLOW_FACTOR * plan_step_seconds:
         out.append(f"STEP_SLOW({seen['timing/step']:.0f}s > {STEP_SLOW_FACTOR} x plan {plan_step_seconds:.0f}s)")
     before, after = seen.get('generate/num_seq_before_merge'), seen.get('generate/num_seq_after_merge')

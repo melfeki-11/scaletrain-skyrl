@@ -460,6 +460,12 @@ class LiveDomainFlags(unittest.TestCase):
         self.assertEqual(quiet, [])                                 # thresholds are strict: 0.15, 76 GB and 1.5 x are not exceeded
         self.assertFalse(any(f.startswith('STEP_SLOW') for f in live.flags(rows, {'updated_at': time.time()}, None, 10.0)))   # no plan estimate: silent
 
+    def test_timeouts_are_flagged_not_called_environment_failures(self):
+        rows = [{'environment/music/timeout_group_fraction': 1.0, 'environment/music/masked_group_fraction': 0.0}]
+        out = live.flags(rows, None, None, 10.0)
+        self.assertTrue(any(f.startswith('TIMEOUTS(music=1.00') for f in out))
+        self.assertFalse(any(f.startswith('DOMAIN_MASKED') for f in out))
+
     def test_per_domain_values_come_from_different_rows(self):
         rows = [{'eval/music/task_metric': 0.42}, {'environment/music/masked_group_fraction': 0.3}, {'timing/step': 10.0}]
         self.assertTrue(any(f.startswith('DOMAIN_MASKED') for f in live.flags(rows, None, None, 10.0)))

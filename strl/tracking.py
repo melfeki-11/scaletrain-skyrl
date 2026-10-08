@@ -247,6 +247,7 @@ def env_failure_fraction(metrics: dict, prompts_per_step: int) -> float | None:
     return None
 
 
+CANARY_MAX_DROPPED = 0.9       # groups dropped for ANY reason: with nearly none usable, a run only burns budget
 CANARY_MAX_ENV_FAILURE = 0.5   # a canary whose groups are mostly masked never exercised the environment: fail it
 EXPORT_ESTIMATE_SECONDS = 120.0     # HF export + checkpoint after the forced final eval (predictive deadline)
 STEP_TIME_MARGIN = 1.15             # slack on the mean of the last two step times (predictive deadline)
@@ -350,6 +351,7 @@ def make_callback_class():
             self.baseline_accuracy = None
             self.max_grad = 0.0
             self.env_failures: dict[int, float] = {}
+            self.dropped: dict[int, float] = {}
             self.env = _env()
             self.clock: Callable[[], float] = time.monotonic     # injectable (unit tests)
             self.step_times: list[float] = []                   # generation + training seconds of each step (on_step_start -> on_step_end)
@@ -443,7 +445,15 @@ def make_callback_class():
                 if failure > 0.05 and not any(v > 0.05 for s, v in self.env_failures.items() if s < step):
                     alert('Environment failures', f'{failure:.0%} of GRPO groups masked by environment errors at step {step} '
                           f'({os.environ.get("GRPO_RUN_NAME")}); see environment/* and generate/num_error_trajectories', 'WARN')
+            dropped = (getattr(trainer, 'all_metrics', None) or {}).get('environment/dropped_group_fraction')
+            if isinstance(dropped, Real):
+                self.dropped[step] = float(dropped)
             if step == 2:
+                nothing = max([self.dropped.get(s, 0.0) for s in (1, 2)])
+                if nothing >= CANARY_MAX_DROPPED:
+                    alert('Canary failed', f'{nothing:.0%} of GRPO groups were dropped (timeouts or masks) in steps 1-2: nothing to train on')
+                    raise RuntimeError(f'Canary: {nothing:.0%} of GRPO groups were dropped in steps 1-2 (agent timeouts leave no tokens): '
+                                       'raise the per-domain caps or lower max_generate_length / max_turns; see environment/*/timeout_group_fraction')
                 worst = max([self.env_failures.get(s, 0.0) for s in (1, 2)])
                 if worst >= CANARY_MAX_ENV_FAILURE:
                     alert('Canary failed', f'{worst:.0%} of GRPO groups were masked by environment failures in steps 1-2')

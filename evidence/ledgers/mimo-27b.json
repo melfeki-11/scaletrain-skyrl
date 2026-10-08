@@ -92,6 +92,16 @@
       "gpu_fraction": 1.0,
       "nodes": 2,
       "evidence": "worker budget.json started_at - 180 s (pods up) to the terminal observation; queue time (created_at 2026-10-07T18:07:45Z) is not charged"
+    },
+    {
+      "job_id": "job_db3c5mbmjdjg088cefr0",
+      "attempt": "g4-mimo-b",
+      "status": "FAILED",
+      "allocated_at": "2026-10-07T23:48:05Z",
+      "terminal_at": "2026-10-08T00:14:33Z",
+      "gpu_fraction": 1.0,
+      "nodes": 2,
+      "evidence": "worker budget.json started_at - 180 s (pods up) to the terminal observation; queue time (created_at 2026-10-07T22:08:25Z) is not charged"
     }
   ]
 }

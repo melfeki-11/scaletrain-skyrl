@@ -90,6 +90,24 @@ def fake_exporter(row, dest, *, split):
     return {'task_dir': str(dest), 'domain': row['domain'], 'instance_id': row['instance_id'], 'group': row['group'], 'image': 'img', 'tree_sha256': 'x'}
 
 
+class TimeoutMasksAreNotEnvironmentFailures(unittest.TestCase):
+    def test_group_fraction_kinds(self):
+        """g4-mimo-b: 38 music agent timeouts (a 120 s cap vs ~20 tokens/s decode) read as 'the environment failed' and the canary rule killed
+        a healthy 2 x 8 run. Timeouts leave no tokens (dropped from training) but are counted apart from infrastructure masks."""
+        def s(domain, reason=None):
+            masked = reason is not None
+            return {'domain': domain, 'masked': masked, 'mask_reason': reason, 'stop': reason or 'complete', 'reward': 0.0, 'passed': False,
+                    'turns': 1, 'tokens': 1, 'judge': None}
+        summaries = [s('music', 'agent_timeout'), s('music', 'agent_timeout'), s('cyber'), s('cyber', 'infra_error'), s('code')]
+        groups = ['m1', 'm2', 'c1', 'c2', 'k1']
+        out = generator.rollout_metrics(summaries, groups)
+        self.assertEqual((out['environment/music/masked_group_fraction'], out['environment/music/timeout_group_fraction']), (0.0, 1.0))
+        self.assertEqual((out['environment/cyber/masked_group_fraction'], out['environment/cyber/dropped_group_fraction']), (0.5, 0.5))
+        self.assertAlmostEqual(out['environment/masked_group_fraction'], 1 / 5)
+        self.assertAlmostEqual(out['environment/timeout_group_fraction'], 2 / 5)
+        self.assertAlmostEqual(out['environment/dropped_group_fraction'], 3 / 5)
+
+
 class DataCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -729,6 +747,9 @@ class Generator(unittest.TestCase):
         self.assertEqual(out['environment/code/masked_group_fraction'], 0.0)
         self.assertAlmostEqual(out['environment/masked_group_fraction'], 2 / 4)
         self.assertEqual(out['generate/code/tokens'], 100.0)
+        for key in ('environment/timeout_group_fraction', 'environment/dropped_group_fraction'):
+            self.assertIn(key, out)
+        self.assertGreaterEqual(out['environment/dropped_group_fraction'], out['environment/masked_group_fraction'])
 
     def test_summary_store_is_bounded_and_dump_safe(self):
         generator.SUMMARIES.clear()

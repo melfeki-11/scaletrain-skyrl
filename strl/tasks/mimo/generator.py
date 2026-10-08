@@ -345,9 +345,20 @@ async def gather_with_deadline(factories: list[Callable[[], Any]], deadline_sec:
 
 
 # ------------------------------------------------------------------------------------------------------------ metrics
+# A trial that timed out leaves Harbor no tokens, so training cannot use it: the group is dropped. That is the POLICY's behaviour (too slow
+# or too long for the caps), not an environment failure, and the fail-fast rules must not call it one (g4-mimo-b: 38 music timeouts at a
+# 120 s cap read as "the environment failed", killing a healthy run). Three views: infrastructure masks (what the rules read), timeouts, all drops.
+TIMEOUT_REASONS = ('agent_timeout', 'verifier_timeout')
+GROUP_KINDS: dict[str, Callable[[dict], bool]] = {
+    'masked_group_fraction': lambda s: bool(s['masked']) and s.get('mask_reason') not in TIMEOUT_REASONS,
+    'timeout_group_fraction': lambda s: bool(s['masked']) and s.get('mask_reason') in TIMEOUT_REASONS,
+    'dropped_group_fraction': lambda s: bool(s['masked']),
+}
+
+
 def rollout_metrics(summaries: list[dict], group_ids: list[str] | None = None, *, phase: str = 'train') -> dict[str, float]:
-    """Per-domain generate/<d>/* scalars plus environment/<d>/masked_group_fraction and the overall masked_group_fraction.
-    ``group_ids[i]`` is trajectory i's prompt id (a group is masked when any of its trials is masked)."""
+    """Per-domain generate/<d>/* scalars plus environment/<d>/{masked,timeout,dropped}_group_fraction and the overall ones (see GROUP_KINDS).
+    ``group_ids[i]`` is trajectory i's prompt id (a group is counted when any of its trials is)."""
     out: dict[str, float] = {}
     groups = group_ids or [str(i) for i in range(len(summaries))]
     for domain in [d for d in DOMAINS if any(s['domain'] == d for s in summaries)]:
@@ -371,10 +382,12 @@ def rollout_metrics(summaries: list[dict], group_ids: list[str] | None = None, *
             out[f'{p}/judge_latency_s'] = sum(j['meta']['latency_s'] for j in judged) / len(judged)
             out[f'{p}/judge_cost_usd'] = sum(j['meta']['cost_usd'] for j in judged)
         gids = {groups[i] for i in idx}
-        masked = {groups[i] for i in idx if summaries[i]['masked']}
-        out[f'environment/{domain}/masked_group_fraction'] = len(masked) / len(gids) if gids else 0.0
+        for name, pick in GROUP_KINDS.items():
+            hit = {groups[i] for i in idx if pick(summaries[i])}
+            out[f'environment/{domain}/{name}'] = len(hit) / len(gids) if gids else 0.0
     all_groups = set(groups)
-    out['environment/masked_group_fraction'] = len({g for g, s in zip(groups, summaries) if s['masked']}) / len(all_groups) if all_groups else 0.0
+    for name, pick in GROUP_KINDS.items():
+        out[f'environment/{name}'] = len({g for g, s in zip(groups, summaries) if pick(s)}) / len(all_groups) if all_groups else 0.0
     return out
 
 
