@@ -97,6 +97,8 @@ def build_trial_config(template: dict, task_dir: str | Path, *, session_id: str,
     if cache_salt is not None:
         llm.setdefault('extra_body', {})['cache_salt'] = cache_salt
     caps = caps or {}
+    if caps.get('max_turns') and kwargs.get('max_turns') is not None:   # a run-level bound on top of the task's own (never raises it)
+        kwargs['max_turns'] = min(int(kwargs['max_turns']), int(caps['max_turns']))
     if caps.get('max_agent_sec'):
         agent['override_timeout_sec'] = min(float((toml.get('agent') or {}).get('timeout_sec', caps['max_agent_sec'])), float(caps['max_agent_sec']))
     if caps.get('max_verifier_sec'):
@@ -269,15 +271,20 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
         return _masked(trajectory_id, seconds), masked_summary(domain, name, rep, reason, seconds=round(seconds, 1))
     exc = exception_type(results)
     rollout = getattr(getattr(results, 'agent_result', None), 'rollout_details', None) if has_rollout(results) else None
+    placeholder = False
     if rollout is None and phase != 'eval':   # training needs the tokens; evaluation only needs the verdict
-        reason = 'agent_timeout' if exc == 'AgentTimeoutError' else 'no_rollout'
-        _warn(f'mimo masked {domain}/{name} rep={rep}: {reason} (exception {exc})')
-        return _masked(trajectory_id, seconds), masked_summary(domain, name, rep, reason, seconds=round(seconds, 1))
+        if exc == 'AgentTimeoutError':
+            # A trial that ran out of time left Harbor no tokens, but it IS a scored failure (the verifier ran): keep it in its group as a
+            # tokenless placeholder (reward in the GRPO baseline, loss mask 0) instead of masking every sibling (SkyRL's default).
+            placeholder = True
+        else:
+            _warn(f'mimo masked {domain}/{name} rep={rep}: no_rollout (exception {exc})')
+            return _masked(trajectory_id, seconds), masked_summary(domain, name, rep, 'no_rollout', seconds=round(seconds, 1))
     files = read_verifier(trial_dir_of(trial, results))
     details = files['details']
     summary = {'domain': domain, 'task': name, 'rep': rep, 'masked': False, 'mask_reason': None, 'components': details.get('components') or {},
                'turns': int((getattr(getattr(results, 'agent_result', None), 'metadata', None) or {}).get('n_episodes', 0) or 0), 'tokens': completion_tokens(rollout) if rollout else 0,
-               'seconds': round(seconds, 1), 'judge': None,
+               'seconds': round(seconds, 1), 'judge': None, 'placeholder': placeholder,
                'stop': STOP_NAME.get(exc, 'complete')}
     summary['artifact'], summary['screenshot'] = read_artifacts(files['dir'], meta.get('artifacts') or [], int(settings['summary_chars']))
     if not details and exc is None:   # only a trial that finished cleanly: timeouts/context errors keep their own policy
@@ -318,6 +325,20 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
                                     else 'complete') if rollout else 'error', 'e2e_time': seconds, 'trajectory_id': trajectory_id}, summary
 
 
+PLACEHOLDER_DETAIL = {'prompt_token_ids': [[0]], 'completion_token_ids': [[0]], 'logprobs': [[0.0]]}
+
+
+def zero_placeholder_masks(output: dict, placeholder_ids: set[str]) -> int:
+    """Zero the loss mask of the one-token placeholder step of every timed-out trial (they carry their reward into the group baseline
+    and nothing else). ``output`` is a SkyRL GeneratorOutput dict; returns the number of steps zeroed."""
+    n = 0
+    for i, tid in enumerate(output.get('trajectory_ids') or []):
+        if tid.to_string() in placeholder_ids:
+            output['loss_masks'][i] = [0] * len(output['response_ids'][i])
+            n += 1
+    return n
+
+
 def _masked(trajectory_id: Any, seconds: float) -> dict:
     return {'rollout_details': None, 'reward': 0.0, 'num_turns': 0, 'stop_reason': 'error', 'e2e_time': seconds, 'trajectory_id': trajectory_id}
 
@@ -345,13 +366,14 @@ async def gather_with_deadline(factories: list[Callable[[], Any]], deadline_sec:
 
 
 # ------------------------------------------------------------------------------------------------------------ metrics
-# A trial that timed out leaves Harbor no tokens, so training cannot use it: the group is dropped. That is the POLICY's behaviour (too slow
-# or too long for the caps), not an environment failure, and the fail-fast rules must not call it one (g4-mimo-b: 38 music timeouts at a
-# 120 s cap read as "the environment failed", killing a healthy run). Three views: infrastructure masks (what the rules read), timeouts, all drops.
+# A trial that timed out leaves Harbor no tokens, so training cannot learn from it. That is the POLICY's behaviour (too slow or too long for
+# the caps), not an environment failure, and the fail-fast rules must not call it one (g4-mimo-b: 38 music timeouts at a 120 s cap read as
+# "the environment failed", killing a healthy run). It stays in its group as a tokenless placeholder (see PLACEHOLDER_DETAIL). Three views:
+# infrastructure masks (what the rules read), groups with a timed-out trial, all dropped groups.
 TIMEOUT_REASONS = ('agent_timeout', 'verifier_timeout')
 GROUP_KINDS: dict[str, Callable[[dict], bool]] = {
     'masked_group_fraction': lambda s: bool(s['masked']) and s.get('mask_reason') not in TIMEOUT_REASONS,
-    'timeout_group_fraction': lambda s: bool(s['masked']) and s.get('mask_reason') in TIMEOUT_REASONS,
+    'timeout_group_fraction': lambda s: bool(s.get('placeholder')) or (bool(s['masked']) and s.get('mask_reason') in TIMEOUT_REASONS),
     'dropped_group_fraction': lambda s: bool(s['masked']),
 }
 
@@ -440,6 +462,8 @@ def make_generator_class():
             out, summary = await run_trajectory(self._deps(), prompt, trajectory_id, cache_salt=cache_salt, temperature=temperature,
                                                 env_extra=env_extra, phase=phase)
             remember(phase, trajectory_id, summary, env_extra)
+            if summary.get('placeholder'):   # not 'error'/'agent_timeout': either would make SkyRL mask the whole prompt group
+                out = {**out, 'rollout_details': [dict(PLACEHOLDER_DETAIL)], 'stop_reason': 'complete'}
             output = HarborTrajectoryOutput(**out)
             output.mimo_summary = summary
             return output
@@ -485,6 +509,7 @@ def make_generator_class():
                 outputs.append(HarborTrajectoryOutput(trajectory_id=trajectory_ids[i], rollout_details=None, stop_reason='error', e2e_time=time.monotonic() - started))
                 summaries.append(summary)
             output = build_step_wise_generator_output(outputs, overlong_filtering=self.generator_cfg.apply_overlong_filtering)
+            zero_placeholder_masks(output, {o.trajectory_id.to_string() for o, m in zip(outputs, summaries) if m.get('placeholder')})
             output['rollout_metrics'] = {**(output.get('rollout_metrics') or {}),
                                          **rollout_metrics(summaries, [t.instance_id for t in trajectory_ids], phase=phase)}
             return output

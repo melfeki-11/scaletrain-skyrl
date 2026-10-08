@@ -48,7 +48,7 @@ TEST_GROUP_CAP = 6               # held-out rows one group may contribute (the r
 DEFAULT_TEST = 24
 SPLITS = ('train', 'test', 'canary')
 SELECTION_KEYS = {'revision', 'seed', 'eval_repeats', 'canary', 'raw_dir', 'domains'}
-DOMAIN_KEYS = {'train', 'weight', 'test', 'filters', 'test_filters', 'max_prompt_tokens', 'max_agent_sec', 'max_verifier_sec'}
+DOMAIN_KEYS = {'train', 'weight', 'test', 'filters', 'test_filters', 'max_prompt_tokens', 'max_agent_sec', 'max_verifier_sec', 'max_turns'}
 RUNTIME_KEYS = {'judge', 'step_deadline_sec', 'timeout_policy', 'max_trial_attempts', 'summary_chars'}
 FILTER_KEYS = {
     'general': {'source', 'lang', 'category'}, 'code': {'test_kind', 'cwd'}, 'cyber': {'sanitizer', 'project'},
@@ -74,7 +74,7 @@ def mimo_config(cfg: dict) -> dict:
         out['domains'][name] = {'train': int(d.get('train', 0)), 'weight': float(d.get('weight', 1.0)), 'test': int(d.get('test', DEFAULT_TEST)),
                                 'filters': dict(d.get('filters') or {}), 'test_filters': dict(d.get('test_filters') or {}),
                                 'max_prompt_tokens': d.get('max_prompt_tokens'), 'max_agent_sec': d.get('max_agent_sec'),
-                                'max_verifier_sec': d.get('max_verifier_sec')}
+                                'max_verifier_sec': d.get('max_verifier_sec'), 'max_turns': d.get('max_turns')}
     return out
 
 
@@ -95,7 +95,7 @@ def config_problems(cfg: dict) -> list[str]:
         for key in ('train', 'test'):
             if key in d and (not isinstance(d[key], int) or isinstance(d[key], bool) or d[key] < 0):
                 problems.append(f'{where}.{key} must be an integer >= 0')
-        for key in ('max_agent_sec', 'max_verifier_sec', 'max_prompt_tokens'):
+        for key in ('max_agent_sec', 'max_verifier_sec', 'max_prompt_tokens', 'max_turns'):
             if d.get(key) is not None and (not isinstance(d[key], (int, float)) or isinstance(d[key], bool) or d[key] <= 0):
                 problems.append(f'{where}.{key} must be a positive number')
         if not isinstance(d.get('weight', 1.0), (int, float)) or d.get('weight', 1.0) <= 0:

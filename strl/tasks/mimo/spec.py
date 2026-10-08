@@ -217,7 +217,7 @@ class MimoSpec(CodingHarborSpec):
         from .generator import generator_settings, make_generator_class, mimo_template
         coding_harbor.install_compat()
         m = mcfg(experiment)
-        caps = {d: {k: v[k] for k in ('max_agent_sec', 'max_verifier_sec') if v.get(k)} for d, v in m['domains'].items()}
+        caps = {d: {k: v[k] for k in ('max_agent_sec', 'max_verifier_sec', 'max_turns') if v.get(k)} for d, v in m['domains'].items()}
         judged = any(d in m['domains'] for d in JUDGED)
         return make_generator_class()(
             generator_cfg=cfg.generator, harbor_cfg=mimo_template(experiment), inference_engine_client=inference_engine_client, tokenizer=tokenizer,

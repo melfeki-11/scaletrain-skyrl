@@ -90,6 +90,20 @@ def fake_exporter(row, dest, *, split):
     return {'task_dir': str(dest), 'domain': row['domain'], 'instance_id': row['instance_id'], 'group': row['group'], 'image': 'img', 'tree_sha256': 'x'}
 
 
+class PlaceholderMasks(unittest.TestCase):
+    def test_placeholder_steps_get_a_zero_loss_mask_and_keep_their_group(self):
+        class Tid:
+            def __init__(self, k):
+                self.k = k
+
+            def to_string(self):
+                return self.k
+        output = {'trajectory_ids': [Tid('a'), Tid('b'), Tid('b')], 'response_ids': [[5, 6], [0], [7]], 'loss_masks': [[1, 1], [1], [1]]}
+        self.assertEqual(generator.zero_placeholder_masks(output, {'b'}), 2)
+        self.assertEqual(output['loss_masks'], [[1, 1], [0], [0]])
+        self.assertEqual(generator.zero_placeholder_masks(output, set()), 0)
+
+
 class TimeoutMasksAreNotEnvironmentFailures(unittest.TestCase):
     def test_group_fraction_kinds(self):
         """g4-mimo-b: 38 music agent timeouts (a 120 s cap vs ~20 tokens/s decode) read as 'the environment failed' and the canary rule killed
@@ -98,14 +112,17 @@ class TimeoutMasksAreNotEnvironmentFailures(unittest.TestCase):
             masked = reason is not None
             return {'domain': domain, 'masked': masked, 'mask_reason': reason, 'stop': reason or 'complete', 'reward': 0.0, 'passed': False,
                     'turns': 1, 'tokens': 1, 'judge': None}
-        summaries = [s('music', 'agent_timeout'), s('music', 'agent_timeout'), s('cyber'), s('cyber', 'infra_error'), s('code')]
+
+        def timed_out(domain):    # training: kept in its group as a placeholder (not masked)
+            return {**s(domain), 'stop': 'agent_timeout', 'placeholder': True}
+        summaries = [timed_out('music'), timed_out('music'), s('cyber'), s('cyber', 'infra_error'), s('code')]
         groups = ['m1', 'm2', 'c1', 'c2', 'k1']
         out = generator.rollout_metrics(summaries, groups)
         self.assertEqual((out['environment/music/masked_group_fraction'], out['environment/music/timeout_group_fraction']), (0.0, 1.0))
         self.assertEqual((out['environment/cyber/masked_group_fraction'], out['environment/cyber/dropped_group_fraction']), (0.5, 0.5))
         self.assertAlmostEqual(out['environment/masked_group_fraction'], 1 / 5)
         self.assertAlmostEqual(out['environment/timeout_group_fraction'], 2 / 5)
-        self.assertAlmostEqual(out['environment/dropped_group_fraction'], 3 / 5)
+        self.assertAlmostEqual(out['environment/dropped_group_fraction'], 1 / 5)    # only the infrastructure mask drops a group
 
 
 class DataCase(unittest.TestCase):
@@ -581,6 +598,10 @@ class Generator(unittest.TestCase):
                                               caps={'max_agent_sec': 600, 'max_verifier_sec': 200})
         self.assertEqual((capped['agent']['override_timeout_sec'], capped['verifier']['override_timeout_sec']), (600.0, 100.0))
         self.assertNotIn('override_timeout_sec', plain['agent'])
+        turns = generator.build_trial_config(template, '/t/x', session_id='s', meta={'max_turns': 20}, caps={'max_turns': 12})
+        self.assertEqual(turns['agent']['kwargs']['max_turns'], 12)             # a run-level bound on the task's own turn limit...
+        raised = generator.build_trial_config(template, '/t/x', session_id='s', meta={'max_turns': 6}, caps={'max_turns': 12})
+        self.assertEqual(raised['agent']['kwargs']['max_turns'], 6)             # ...which can only lower it
 
     def test_template_has_no_global_overrides_and_validates_with_harbor(self):
         cfg = load(SMOKE)
@@ -665,10 +686,12 @@ class Generator(unittest.TestCase):
                 out, summary = env.go(phase='eval')
                 self.assertEqual((len(env.configs), summary['masked'], summary['metric'], summary['reward']), (1, False, 0.0, 0.0), exc)
                 self.assertEqual(summary['stop'], {'AgentTimeoutError': 'agent_timeout', 'OutputLengthExceededError': 'output_length'}[exc])
-            env = Env(temp + '/train')
-            env.queue = [fake_results(exc='AgentTimeoutError', reward=0.0, rollout=False, trial_dir=env_dir(env))]
-            summary = env.go(phase='train')[1]
-            self.assertEqual((summary['masked'], summary['mask_reason']), (True, 'agent_timeout'))
+            env = Env(temp + '/train')    # training: no tokens, but a scored failure that stays in its group (placeholder), not a masked group
+            trial = env.trial_dir(reward_txt='0.3', details={'metric': 0.3})
+            env.queue = [fake_results(exc='AgentTimeoutError', reward=0.3, rollout=False, trial_dir=trial)]
+            out, summary = env.go(phase='train')
+            self.assertEqual((summary['masked'], summary['placeholder'], summary['stop'], out['reward']), (False, True, 'agent_timeout', 0.3))
+            self.assertIsNone(out['rollout_details'])      # the generator swaps in PLACEHOLDER_DETAIL and zeroes its loss mask
             env = Env(temp + '/out-train')      # an overflowing reply that did leave tokens is a scored 0 for training too
             env.queue = [fake_results(exc='OutputLengthExceededError', reward=None, trial_dir=env_dir(env))]
             out, summary = env.go(phase='train')

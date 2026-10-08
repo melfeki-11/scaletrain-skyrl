@@ -1,0 +1,38 @@
+# Run 1 of the MiMo suite: Qwen3.8-27B LoRA on 2 x 8 H100, sized to the program budget that was left after the verification ladder
+# (6 node-hours authorized; 12,533 node-seconds remained, so one attempt of ~6,200 s on 2 nodes). Everything else is the LoRA experiment.
+# Measured on the 1-node 27B canary (can-27b-a): ~30 s per agentic turn, ~12 min startup, a 600-800 s step; Qwen3.8 merges step-wise
+# turns 6x. Timeouts therefore cost whole trajectories (no tokens), so the per-domain turn and time caps are set so a typical trajectory
+# ends by its turn limit (not the clock): turns x ~35 s < max_agent_sec. This is a deliberate budget deviation from the dataset's own
+# generous limits; it applies equally to the base (step 0) and trained (last step) evaluations, so the paired comparison stays fair.
+name: mimo-qwen38-27b-lora-run1
+description: MiMo five-domain agentic GRPO, Qwen3.8-27B LoRA r64, 2 nodes x 8 H100, budget-fitted caps
+extends: experiments/mimo-qwen38-27b-lora.yaml
+
+environment:
+  mimo:
+    eval_repeats: 2
+    step_deadline_sec: 1200            # >= max agent + verifier + 120 s of every domain (validated)
+    domains:
+      music:   {train: 24, test: 16, max_agent_sec: 300, max_verifier_sec: 120}
+      cyber:   {train: 24, test: 16, max_agent_sec: 600, max_verifier_sec: 300, max_turns: 14}
+      code:    {train: 24, test: 16, max_agent_sec: 600, max_verifier_sec: 400, max_turns: 14}
+      general: {train: 24, test: 16, max_agent_sec: 600, max_verifier_sec: 300, max_turns: 14}
+      webdev:  {train: 24, test: 16, max_agent_sec: 600, max_verifier_sec: 300, max_turns: 8}
+
+algorithm:
+  max_steps: 3                         # the predictive deadline stops earlier if the next step plus the final eval does not fit
+
+evaluation:
+  interval_steps: 3                    # base eval at step 0, trained eval at the last step (forced at a predictive stop)
+  checkpoint_interval_steps: 3
+
+budget:
+  attempt_max_seconds: 6200
+  stall_seconds: 3000
+
+limits:
+  max_attempt_seconds: 6200
+
+tracking:
+  group: mimo-27b-lora-run1
+  tags: ['nodes:2', 'finetune:lora', 'run1']
