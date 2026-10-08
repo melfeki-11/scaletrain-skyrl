@@ -706,3 +706,23 @@ class Resume(unittest.TestCase):
         with self.assertRaises(ExperimentError) as error:
             load(SMOKE, overrides=['evaluation.durable_checkpoints=true', 'budget.save_optimizer_state=false'])
         self.assertIn('save_optimizer_state', str(error.exception))
+
+
+class Retention(unittest.TestCase):
+    """Plan P15: base vs trained on another environment's held-out set, with THIS experiment's model."""
+
+    def test_retention_config_uses_the_experiment_model(self):
+        from strl.experiment import retention_config
+        cfg = load('experiments/mimo-qwen35-0p8b-2node-smoke.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml, limit: 300}'])
+        rcfg = retention_config(cfg)
+        self.assertEqual(rcfg['environment']['name'], 'gsm8k')
+        self.assertEqual(rcfg['model'], cfg['model'])
+        self.assertEqual((rcfg['_retention_limit'], rcfg['evaluation']['eval_shards_per_model']), (300, 1))
+        self.assertIsNone(retention_config(load('experiments/mimo-qwen35-0p8b-2node-smoke.yaml')))
+
+    def test_retention_needs_two_gpus_and_reserves_time(self):
+        from strl.worker import train_reserve_seconds
+        with self.assertRaises(ExperimentError):
+            load('experiments/mimo-qwen35-0p8b-smoke.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])   # 1 GPU
+        cfg = load('experiments/mimo-qwen35-0p8b-2node-smoke.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])
+        self.assertEqual(train_reserve_seconds(cfg, 'train') - train_reserve_seconds(load('experiments/mimo-qwen35-0p8b-2node-smoke.yaml'), 'train'), 900)

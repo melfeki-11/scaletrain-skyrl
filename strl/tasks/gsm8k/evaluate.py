@@ -25,12 +25,10 @@ def evaluate(model, output, limit=None, rank=0, world_size=1):
     data = data.select(range(rank, len(data), world_size))
     tokenizer = AutoTokenizer.from_pretrained(cfg['model']['local_path'])
     prompts = [tokenizer.apply_chat_template(row['prompt'], tokenize=False, add_generation_prompt=True, **profile.chat_kwargs(cfg)) for row in data]
-    engine = LLM(model=str(model), tokenizer=cfg['model']['local_path'], tensor_parallel_size=1, dtype=cfg['model']['dtype'],
-                 enforce_eager=cfg['inference']['enforce_eager'], gpu_memory_utilization=0.75,
-                 max_model_len=a['max_prompt_tokens'] + a['max_generate_length'], max_num_seqs=128, disable_log_stats=True,
-                 **profile.vllm_kwargs(cfg))
+    from ... import offline_engine
+    engine, lora = offline_engine.build(cfg, profile, model, max_model_len=a['max_prompt_tokens'] + a['max_generate_length'])
     params = SamplingParams(temperature=a['eval_temperature'], top_p=a['top_p'], max_tokens=a['max_generate_length'], seed=a['seed'])
-    results = engine.generate(prompts, params)
+    results = offline_engine.generate(engine, lora, prompts, params)
     rows = []
     for row, res in zip(data, results, strict=True):
         response = res.outputs[0]

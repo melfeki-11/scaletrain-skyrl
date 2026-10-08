@@ -300,6 +300,13 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
     entries = [(REPO_ROOT / 'strl', 'strl'), (staging / 'resolved.json', 'resolved.json'), (staging / 'runtime.json', 'runtime.json'),
                (Path(cfg['run']['data_dir']), relative(cfg['run']['data_dir'])), (REPO_ROOT / 'assets/runtime', 'assets/runtime'),
                (staging / 'model-manifest.json', 'assets/model-manifest.json')]
+    from .experiment import retention_config
+    rcfg = retention_config(cfg)
+    if rcfg is not None:   # the retention environment's held-out data and its resolved config travel with the payload
+        if not Path(rcfg['run']['data_dir']).exists():
+            raise RuntimeError(f"evaluation.retention: {rcfg['run']['data_dir']} is missing: run `strl prepare {cfg['evaluation']['retention']['experiment']}`")
+        save_resolved(rcfg, staging / 'retention-resolved.json', root=POD_ROOT)
+        entries += [(Path(rcfg['run']['data_dir']), relative(rcfg['run']['data_dir'])), (staging / 'retention-resolved.json', 'retention-resolved.json')]
     from .rewards import custom_payload_paths
     entries += [(REPO_ROOT / top, top) for top in custom_payload_paths(cfg['reward']['components'])]   # user 'module:function' code
     overlay_ref = None

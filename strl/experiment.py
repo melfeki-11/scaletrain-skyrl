@@ -58,6 +58,7 @@ SCHEMA: dict[str, Any] = {
         'interval_steps': int, 'checkpoint_interval_steps': int, 'max_checkpoints': int, 'eval_batch_size': int,
         'fixed_qualitative_samples': int, 'training_groups_to_log': int, 'bootstrap_samples': int, 'bootstrap_seed': int,
         'ci_level': (int, float), 'eval_shards_per_model': int, 'final_eval': bool, 'durable_checkpoints': bool,
+        'retention': dict,
     },
     'compute': {'nodes': int, 'gpus_per_node': int, 'instance_type': str, 'team': str, 'product': str, 'priority': str,
                 'allow_borrowing': bool, 'image': str, 'training': dict},
@@ -239,6 +240,14 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
         problems.append('budget.attempt_max_seconds cannot exceed budget.total_seconds')
     if b['final_eval_reserve_seconds'] + 900 >= b['attempt_max_seconds'] and e.get('final_eval', True):
         problems.append('budget leaves no training time: attempt_max_seconds must exceed final_eval_reserve_seconds + 900')
+    retention = e.get('retention')
+    if retention:
+        if not retention.get('experiment'):
+            problems.append('evaluation.retention.experiment: the experiment whose held-out set measures retention (e.g. base/gsm8k.yaml)')
+        if gpn < 2:
+            problems.append('evaluation.retention needs >= 2 GPUs per node (base and trained are evaluated concurrently, one GPU each)')
+        if retention.get('limit') is not None and (not isinstance(retention['limit'], int) or retention['limit'] < 1):
+            problems.append('evaluation.retention.limit must be a positive integer (number of held-out examples)')
     if (e.get('durable_checkpoints') or (cfg.get('run') or {}).get('resume_from')) and not b.get('save_optimizer_state', True):
         problems.append('evaluation.durable_checkpoints / run.resume_from need budget.save_optimizer_state: true (a resumable checkpoint carries the optimizer)')
     if e.get('final_eval', True) and b['final_eval_reserve_seconds'] < MIN_FINAL_EVAL_RESERVE:
@@ -352,6 +361,23 @@ def _scaling_problems(cfg: dict, gpus: int) -> list[str]:
     if 'max_num_batched_tokens' in inf and inf['max_num_batched_tokens'] < 1:
         problems.append('inference.max_num_batched_tokens must be positive')
     return problems
+
+
+RETENTION_RESERVE_SECONDS = 900   # vLLM startup x 2 models + a few hundred held-out examples
+
+
+def retention_config(cfg: dict) -> dict | None:
+    """evaluation.retention = {experiment, limit}: that experiment's held-out set, evaluated with THIS experiment's model (the base and the
+    trained weights), one GPU per model. None when not configured."""
+    spec = (cfg.get('evaluation') or {}).get('retention')
+    if not spec:
+        return None
+    rcfg = load(spec['experiment'])
+    rcfg['model'] = dict(cfg['model'])
+    rcfg['inference'] = {**rcfg['inference'], 'enforce_eager': cfg['inference'].get('enforce_eager', rcfg['inference'].get('enforce_eager'))}
+    rcfg['evaluation'] = {**rcfg['evaluation'], 'eval_shards_per_model': 1}
+    rcfg['_retention_limit'] = spec.get('limit')
+    return rcfg
 
 
 def load(path: str | Path, *, check_registries: bool = True, overrides: list[str] | None = None) -> dict:

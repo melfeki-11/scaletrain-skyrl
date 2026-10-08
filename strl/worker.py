@@ -48,9 +48,11 @@ def train_reserve_seconds(cfg: dict, mode: str) -> int:
     was killed mid-export, the attempt failed and the paired result was never written)."""
     if mode != 'train':
         return 120
+    from .experiment import RETENTION_RESERVE_SECONDS
+    retention = RETENTION_RESERVE_SECONDS if cfg['evaluation'].get('retention') else 0
     if cfg['evaluation']['final_eval']:
-        return int(cfg['budget']['final_eval_reserve_seconds'])
-    return CHILD_HARD_STOP_SECONDS + 120
+        return int(cfg['budget']['final_eval_reserve_seconds']) + retention
+    return CHILD_HARD_STOP_SECONDS + 120 + retention
 
 
 class Stalled(RuntimeError):
@@ -257,22 +259,69 @@ def dry_run_gates(cfg, runtime, env_spec, receipt):
     return gates
 
 
-def evaluate_test_split(cfg, env_spec, base_model, trained_model, eval_dir, deadline):
-    """Base on GPUs [0, n), trained on GPUs [n, 2n), n shards each, concurrently; reassemble in canonical id order."""
+def evaluate_test_split(cfg, env_spec, base_model, trained_model, eval_dir, deadline, limit=None, resolved=None):
+    """Base on GPUs [0, n), trained on GPUs [n, 2n), n shards each, concurrently; reassemble in canonical id order. ``resolved``: a
+    different resolved config for the eval processes (the retention environment); ``limit``: the first N held-out examples."""
     from .finalize import merge_shards, read_jsonl
     n = cfg['evaluation']['eval_shards_per_model']
+    Path(eval_dir).mkdir(parents=True, exist_ok=True)
     jobs = []
     for offset, (label, model) in enumerate([('base', base_model), ('candidate', trained_model)]):
         for shard in range(n):
             env = os.environ.copy()
             env.pop('RAY_ADDRESS', None)
             env['CUDA_VISIBLE_DEVICES'] = str(offset * n + shard)
+            if resolved:
+                env['STRL_RESOLVED'] = str(resolved)
             args = [sys.executable, '-m', env_spec.eval_module, '--model', str(model), '--output', str(eval_dir / f'{label}-{shard}.jsonl'),
-                    '--rank', str(shard), '--world-size', str(n)]
+                    '--rank', str(shard), '--world-size', str(n), *(['--limit', str(limit)] if limit else [])]
             jobs.append((args, eval_dir / f'{label}-{shard}.log', env))
     run_parallel(jobs, deadline)
     ids = env_spec.final_eval_ids(cfg)
+    ids = ids[:limit] if limit else ids
     return {label: merge_shards([read_jsonl(eval_dir / f'{label}-{s}.jsonl') for s in range(n)], ids) for label in ('base', 'candidate')}
+
+
+def latest_export(root: Path) -> Path | None:
+    steps = sorted((int(p.name.split('_')[-1]), p / 'policy') for p in (Path(root) / 'exports').glob('global_step_*') if (p / 'policy').is_dir())
+    return steps[-1][1] if steps else None
+
+
+def run_retention(cfg, runtime, root, trained, deadline):
+    """evaluation.retention: base vs trained on another environment's held-out set (e.g. GSM8K for a MiMo run). Never raises: the result
+    or the reason it is missing goes to artifacts/final_eval/retention/result.json and W&B retention/<env>/*."""
+    from .experiment import retention_config
+    from .tasks import get_environment
+    out_dir = Path('artifacts/final_eval/retention')
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        rcfg = retention_config(cfg)
+        if trained is None:
+            raise RuntimeError('no trained export to evaluate')
+        renv = get_environment(rcfg['environment']['name'])
+        rows = evaluate_test_split(rcfg, renv, cfg['model']['local_path'], trained, out_dir, deadline, limit=rcfg.get('_retention_limit'),
+                                   resolved=Path('retention-resolved.json').resolve())
+        stats = renv.paired_result(rows['base'], rows['candidate'], rcfg)
+        result = {'environment': renv.name, 'experiment': cfg['evaluation']['retention']['experiment'], 'trained': str(trained),
+                  'examples': len(rows['base']), 'test': stats.get('test'), 'flips': stats.get('flips')}
+    except Exception as error:
+        traceback.print_exc()
+        result = {'environment': None, 'error': f'{type(error).__name__}: {error}'[:400]}
+    (out_dir / 'result.json').write_text(json.dumps(result, indent=2, default=str))
+    try:
+        t = result.get('test') or {}
+        if t and os.environ.get('WANDB_API_KEY'):
+            import wandb
+            run = wandb.init(project=cfg['tracking']['project'], entity=cfg['tracking']['entity'], id=runtime['wandb_run_id'], resume='allow', reinit=True)
+            name = result['environment']
+            scalars = {f'retention/{name}/base': t.get('baseline_accuracy'), f'retention/{name}/trained': t.get('candidate_accuracy'),
+                       f'retention/{name}/delta': t.get('accuracy_delta'), f'retention/{name}/ci_lower': t.get('ci_lower'),
+                       f'retention/{name}/ci_upper': t.get('ci_upper'), f'retention/{name}/examples': result['examples']}
+            run.summary.update({k: v for k, v in scalars.items() if v is not None})
+            run.finish()
+    except Exception as error:
+        print(f'retention W&B logging skipped: {type(error).__name__}: {error}', flush=True)
+    return result
 
 
 def in_loop_finish(cfg, runtime, env_spec, root, steps):
@@ -497,6 +546,8 @@ def main():
             if mode == 'train':   # no offline final eval: pair the first (step-0) and last in-loop evals
                 final['paired_result'] = in_loop_finish(cfg, runtime, env_spec, root, steps)
                 final['selected_step'] = final['paired_result'].get('selected_step')
+                if cfg['evaluation'].get('retention'):
+                    final['retention'] = run_retention(cfg, runtime, root, latest_export(root), begin['deadline'] - 60)
             sync_local('artifacts', prefix, exclude=SYNC_EXCLUDE)
             put_json(prefix + '/completion.json', final)
             print(json.dumps(final), flush=True)
@@ -517,9 +568,8 @@ def main():
             extra['adapter'] = keep_adapter(export, root / 'reload' / f'global_step_{selected}', cfg['model']['id'], cfg['model']['revision'],
                                             cfg['model']['local_path'])
             change = verify_adapter_change(export)
-            merged = root / 'merged' / f'global_step_{selected}'
-            change['merge'] = merge_adapter(cfg['model']['local_path'], export, merged)
-            export = merged
+            # evaluate the ADAPTER (served by vLLM on the bf16 base, as in training): a bf16 merge rounds a small RL update away
+            change['served'] = 'vllm-lora'
         else:
             export = profile.prepare_export_for_vllm(cfg['model']['local_path'], export, root / 'reload' / f'global_step_{selected}')
             change = None
