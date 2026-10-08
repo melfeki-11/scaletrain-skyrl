@@ -68,8 +68,8 @@ def cmd_plan(a):
           f"({d['rollouts_per_gpu']}/GPU, {d['micro_batches_per_gpu']} micro-batches), max_model_len {d['max_model_len']}, env_class {d['skyrl_env_class']}")
     print(f"  estimates    step ~{e['step_s']}s (generate {e['generate_s']} + train {e['train_s']} + other {e['other_s']}), ~{e['steps_in_attempt']} steps/attempt, "
           f"{e['node_hours']:.2f} node-h; memory train {e['memory']['training_phase_gb']} GB / rollout {e['memory']['rollout_phase_gb']} GB "
-          + (f"[measured peak {e['memory']['measured_peak_gb']} GB in {e['memory']['measured_in']}] " if e['memory'].get('measured_peak_gb') else '') + "
-          f"(fits={e['memory']['fits']}); from profile {e['profile']}"
+          + (f"[measured peak {e['memory']['measured_peak_gb']} GB in {e['memory']['measured_in']}] " if e['memory'].get('measured_peak_gb') else '')
+          + f"(fits={e['memory']['fits']}); from profile {e['profile']}"
           + ("" if e.get('calibrated') else " (UNCALIBRATED: different environment/model; the canary measures the real step time)"))
     lay, mem = report['layout'], e['memory']
     print(f"  layout       {lay['mode']} | FSDP group {lay['fsdp_group']} x {lay['replicas']} replica(s), cpu_offload={lay['cpu_offload']} | "
