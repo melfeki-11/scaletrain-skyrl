@@ -22,7 +22,8 @@ TMP = ROOT / 'tests/.tmp'
 
 
 def norm_paths(values):
-    return [v.replace(str(REPO_ROOT), '<ROOT>') for v in values]
+    # intentional difference since 2026-10-08: one model directory per id@revision (assets/models/<name>@<rev12>), not a shared assets/model
+    return [re.sub(r'<ROOT>/assets/models/[^/@]+@[0-9a-f]{12}', '<ROOT>/assets/model', v.replace(str(REPO_ROOT), '<ROOT>')) for v in values]
 
 
 def norm_digest(text):

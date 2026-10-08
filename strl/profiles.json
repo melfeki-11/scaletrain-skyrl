@@ -108,6 +108,47 @@
    "startup_seconds": 600,
    "base_task_metric": 0.125,
    "source": "job_db2lrukf8c4g07jrocug can-hb-e step 1 (8 prompts x 4 samples, 8 turns median, 243 step-wise sequences padded to 8019 tokens; trials 90-230 s each; tokens/s counts every turn)"
+  },
+  {
+   "name": "mimo-qwen38-27b-lora-8gpu-run1",
+   "environment": "mimo",
+   "model": "Qwen/Qwen3.8-27B",
+   "params_b": 27.0,
+   "gpus": 8,
+   "rollouts_per_step": 240,
+   "max_generate_length": 2048,
+   "mean_response_tokens": 2048,
+   "median_step_seconds": 1396.9,
+   "median_generate_seconds": 822.5,
+   "median_policy_train_seconds": 364.0,
+   "tokens_per_second_per_gpu": 763.4,
+   "startup_seconds": 720,
+   "eval_seconds_per_256": 1269,
+   "final_eval_seconds": 0,
+   "base_task_metric": 0.0426,
+   "memory_peak_gb": 70.8,
+   "finetune": "lora r64",
+   "source": "job_db3verkf8c4g07jrog1g run1-n1-a (LoRA r64, TP2 x 4 engines, caps 8-14 turns / 600 s, 5 MiMo domains; RESULTS.md)",
+   "mean_prompt_tokens": 2048
+  },
+  {
+   "name": "mimo-qwen38-27b-lora-8gpu-canary",
+   "environment": "mimo",
+   "model": "Qwen/Qwen3.8-27B",
+   "params_b": 27.0,
+   "gpus": 8,
+   "rollouts_per_step": 32,
+   "max_generate_length": 2048,
+   "mean_response_tokens": 2048,
+   "median_step_seconds": 708.6,
+   "median_generate_seconds": 493.1,
+   "median_policy_train_seconds": 81.9,
+   "tokens_per_second_per_gpu": 0,
+   "startup_seconds": 700,
+   "base_task_metric": 0.0,
+   "memory_peak_gb": 62.1,
+   "source": "job_db3e2pcf8c4g08flber0 can-27b-a (canary, 300 s caps)",
+   "mean_prompt_tokens": 2048
   }
  ]
 }

@@ -41,7 +41,7 @@ def estimate_step_seconds(cfg: dict, params_b: float) -> dict[str, float]:
     gen = p['median_generate_seconds'] * (a['max_generate_length'] / p['max_generate_length']) * size ** 0.6 * per_gpu ** 0.5
     mean_resp = min(a['max_generate_length'], p['mean_response_tokens'])
     tokens_ratio = (cfg['derived']['rollouts_per_step'] * (mean_resp + a['max_prompt_tokens'] / 2)) / \
-                   (p['rollouts_per_step'] * (p['mean_response_tokens'] + 256))
+                   (p['rollouts_per_step'] * (p['mean_response_tokens'] + p.get('mean_prompt_tokens', 256)))
     train = p['median_policy_train_seconds'] * tokens_ratio * size * (p['gpus'] / gpus)
     other = (p['median_step_seconds'] - p['median_generate_seconds'] - p['median_policy_train_seconds']) * tokens_ratio * size * (p['gpus'] / gpus)
     if cfg['environment']['name'] == 'coding_exec':
@@ -59,8 +59,13 @@ def estimate_step_seconds(cfg: dict, params_b: float) -> dict[str, float]:
 
 
 def params_from_id(model_id: str) -> float | None:
+    """Total parameters (B) from the id: '27B' -> 27, MoE '8x7B' -> 56 (an upper bound; shared layers make it ~47)."""
     import re
-    match = re.search(r'(?<![\d.])(\d+(?:\.\d+)?)[bB](?![a-zA-Z])', model_id.split('/')[-1])
+    name = model_id.split('/')[-1]
+    moe = re.search(r'(?<![\d.])(\d+)x(\d+(?:\.\d+)?)[bB](?![a-zA-Z])', name)
+    if moe:
+        return float(moe.group(1)) * float(moe.group(2))
+    match = re.search(r'(?<![\d.])(\d+(?:\.\d+)?)[bB](?![a-zA-Z])', name)
     return float(match.group(1)) if match else None
 
 
@@ -115,14 +120,18 @@ def memory_estimate_gb(params_b: float, cfg: dict, hf: dict | None = None, *, wo
         state = (4 if tr['cpu_offload'] else 16) * p / group
         host = 12 * p / group if tr['cpu_offload'] else 0.0
     ref = 2 * p / group if a['use_kl_loss'] else 0.0
-    tokens = tr['max_tokens_per_microbatch'] or a['micro_train_per_gpu'] * (a['max_prompt_tokens'] + a['max_generate_length'])
+    seq = int(((cfg['environment'].get('harbor') or {}).get('max_seq_len')) or 0)   # agentic: a merged trajectory holds the whole chat
+    tokens = tr['max_tokens_per_microbatch'] or a['micro_train_per_gpu'] * (seq or (a['max_prompt_tokens'] + a['max_generate_length']))
     t = text_config(hf)
     if 'hidden_size' in t and 'num_hidden_layers' in t:
         hidden, layers, vocab = t['hidden_size'], t['num_hidden_layers'], t.get('vocab_size', 32000)
         per_layer = tokens * hidden * 2 * (1 if tr['gradient_checkpointing'] else 17)
         activations = per_layer * layers + tokens * hidden * 34 + tokens * vocab * 2
-    else:   # no config.json: the previous first-order rule (GB per 4k tokens per billion parameters)
-        activations = 6.0e9 * tokens / 4096 * max(1.0, params_b)
+    else:   # no config.json (gated or offline): activations cannot be estimated honestly
+        return {'training_phase_gb': None, 'rollout_phase_gb': round(H100_GB * inf['gpu_memory_utilization'], 1), 'engine_weights_gb': round(2 * p / tp / 1e9, 1),
+                'kv_room_gb': round(H100_GB * inf['gpu_memory_utilization'] - 2 * p / tp / 1e9, 1), 'host_offload_gb_per_gpu': None, 'fsdp_group': group,
+                'lora_params_m': None, 'fits': None, 'unknown': 'config.json unavailable (gated model: accept its license on huggingface.co and '
+                'export HF_TOKEN, or stage it); set model.params_b for at least the weight estimate'}
     train = (state + ref + activations) / 1e9
     weights = 2 * p / tp / 1e9
     reserved = H100_GB * inf['gpu_memory_utilization']
@@ -164,13 +173,19 @@ def layout(cfg: dict, memory: dict, network: dict | None = None) -> dict[str, An
 
 
 def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float | None, timing: dict,
-             memory: dict | None = None, network: dict | None = None) -> list[str]:
+             memory: dict | None = None, network: dict | None = None, hf: dict | None = None) -> list[str]:
     a, e, b = cfg['algorithm'], cfg['evaluation'], cfg['budget']
     nodes, lora = cfg['compute']['nodes'], finetune(cfg)['mode'] == 'lora'
     out = []
     if profile.verified != 'gpu':
         out.append(f'MODEL: profile {profile.name!r} is verified at level {profile.verified!r} only: stage --mode dry, then --mode canary, before a real run. '
                    f'{profile.notes}')
+    elif model_evidence(cfg['model']['id']) == 'never run here':
+        out.append(f"MODEL: {cfg['model']['id']} has never run on this platform (its family {profile.name!r} has): run --mode dry, then --mode canary "
+                   'first; the canary measures its memory, step time and base pass rate')
+    if getattr(profile, 'moe', False) or text_config(hf).get('num_experts') or text_config(hf).get('num_local_experts') or text_config(hf).get('n_routed_experts'):
+        out.append('MOE: mixture-of-experts model: experts are FSDP-sharded like dense weights (no expert parallelism is configured) and vLLM '
+                   'serves all experts; plan memory counts every expert. Unverified on this platform: dry run + canary first.')
     measured = [r for r in json.loads(PROFILES.read_text())['runs'] if r['environment'] == env.name and r['model'] == cfg['model']['id']]
     p0 = measured[-1]['base_task_metric'] if measured else env.expected_base_reward
     if p0 is not None and 0 < p0 < 1:
@@ -212,7 +227,9 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
     out += env.plan_warnings(cfg)
     if params_b is None:
         out.append('MEMORY: parameter count unknown (config.json unavailable); set model.params_b for memory/step estimates.')
-    if memory and memory['training_phase_gb'] > MEMORY_LIMIT_GB:
+    if memory and memory.get('unknown'):
+        out.append(f"MEMORY: {memory['unknown']}")
+    if memory and (memory['training_phase_gb'] or 0) > MEMORY_LIMIT_GB:
         out.append(f"MEMORY: estimated training peak {memory['training_phase_gb']} GB/GPU > {MEMORY_LIMIT_GB:g} GB: use finetune.mode lora, "
                    'compute.training.cpu_offload, more GPUs in the FSDP group, max_tokens_per_microbatch or shorter sequences.')
     if memory and memory['kv_room_gb'] <= 1.0:
@@ -228,9 +245,22 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
     return out
 
 
+def model_evidence(model_id: str) -> str:
+    """What strl/profiles.json (measured runs) says about this exact model id."""
+    runs = [r for r in json.loads(PROFILES.read_text())['runs'] if r['model'] == model_id]
+    if not runs:
+        return 'never run here'
+    full = [r for r in runs if (r.get('tokens_per_second_per_gpu') or 0) > 0]
+    return f"{len(full)} full run(s), {len(runs) - len(full)} canary run(s) measured" if full else f'{len(runs)} canary run(s) measured'
+
+
 def params_and_config(cfg: dict) -> tuple[models.ModelProfile, dict | None, float | None]:
     profile, hf = models.detect(cfg['model'])
-    params_b = cfg['model'].get('params_b') or params_from_id(cfg['model']['id']) or (profile.param_estimate_b(hf) if hf else None)
+    # the id names the size the calibration profiles use; for a MoE trust config.json (it counts every expert; '30B-A3B' ids are ambiguous)
+    t = text_config(hf)
+    moe = bool(t.get('num_experts') or t.get('num_local_experts') or t.get('n_routed_experts'))
+    estimate = profile.param_estimate_b(hf) if hf else None
+    params_b = cfg['model'].get('params_b') or (estimate if moe else None) or params_from_id(cfg['model']['id']) or estimate
     return profile, hf, params_b
 
 
@@ -240,13 +270,18 @@ def plan(cfg: dict, network: dict | None = None) -> dict:
     profile, hf, params_b = params_and_config(cfg)
     timing = estimate_step_seconds(cfg, params_b or 1.0)
     memory = memory_estimate_gb(params_b or 1.0, cfg, hf)
+    seen = [r for r in json.loads(PROFILES.read_text())['runs'] if r['model'] == cfg['model']['id'] and r['environment'] == env.name and r.get('memory_peak_gb')]
+    if seen:   # the estimate is first-order; a measured peak of this model in this environment is the number to trust
+        memory['measured_peak_gb'] = max(r['memory_peak_gb'] for r in seen)
+        memory['measured_in'] = seen[-1]['name']
     budget = cfg['budget']
     usable = budget['attempt_max_seconds'] - budget['bootstrap_margin_seconds'] - budget['final_eval_reserve_seconds'] - 550
     a = cfg['algorithm']
     per_gpu = cfg['derived']['rollouts_per_step'] // max(1, cfg['derived']['world_size'])
     out = {
         'experiment': cfg['name'], 'sha': cfg['_meta']['sha'], 'chain': cfg['_meta']['chain'],
-        'axes': {'model': f"{cfg['model']['id']}@{cfg['model']['revision'][:12]} (profile {profile.name}, verified: {profile.verified})",
+        'axes': {'model': f"{cfg['model']['id']}@{cfg['model']['revision'][:12]} (profile {profile.name}: family verified {profile.verified}; "
+                          f"this model: {model_evidence(cfg['model']['id'])})",
                  'environment': f"{env.name} ({env.generator_kind}; metric {env.metric}; {'Modal' if env.needs_modal else 'in-process'} scoring)",
                  'reward': ' + '.join(f"{c.get('weight', 1.0)}*{c['fn']}" for c in cfg['reward']['components']) +
                            ('  [sandbox verifier reward.txt via HarborGenerator]' if env.generator_kind == 'harbor' else
@@ -264,6 +299,6 @@ def plan(cfg: dict, network: dict | None = None) -> dict:
         'monitoring': {'wandb': f"{cfg['tracking']['base_url']}/{cfg['tracking']['entity']}/{cfg['tracking']['project']} group={cfg['tracking']['group']}",
                        'critic': cfg['tracking'].get('critic', {}).get('enabled', False)},
         'layout': layout(cfg, memory, network),
-        'warnings': warnings(cfg, env, profile, params_b, timing, memory, network),
+        'warnings': warnings(cfg, env, profile, params_b, timing, memory, network, hf=hf),
     }
     return out

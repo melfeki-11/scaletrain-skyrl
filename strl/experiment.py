@@ -29,6 +29,12 @@ class ExperimentError(ValueError):
         super().__init__('\n'.join(f'- {p}' for p in self.problems))
 
 
+def default_model_dir(model: dict) -> str:
+    """assets/models/<name>@<revision[:12]>: the same naming as the S3 model prefix, so a child experiment that only changes model.id can never
+    read (or upload!) the parent's snapshot."""
+    return f"assets/models/{str(model.get('id', 'model')).split('/')[-1]}@{str(model.get('revision', 'unpinned'))[:12]}"
+
+
 MIN_FINAL_EVAL_RESERVE = 600     # strl.worker.CHILD_HARD_STOP_SECONDS (480) + 120 s for the shortest final eval
 FAILFAST_KEYS = ('mem_gb', 'domain_masked', 'step_slow_factor', 'min_steps')   # budget.failfast rules (see strl/tracking.py failfast_config)
 
@@ -279,6 +285,10 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
                 problems.append(f'reward component {x["fn"]!r}: weight must be a number')
         if not any(isinstance(x.get('weight', 1.0), (int, float)) and x.get('weight', 1.0) != 0 for x in components):
             problems.append('reward.components: at least one component needs a non-zero weight')
+    from .models import snapshot_identity
+    state, message = snapshot_identity(cfg['model'])
+    if state == 'mismatch':
+        problems.append(f'model.local_path: {message}')
     if check_registries:
         from . import rewards
         from .tasks import EnvironmentNotFound, get_environment
@@ -351,7 +361,7 @@ def load(path: str | Path, *, check_registries: bool = True, overrides: list[str
         raise ExperimentError(problems)
     cfg['run'].setdefault('data_dir', 'assets/data')
     cfg['run'].setdefault('artifact_dir', 'artifacts')
-    cfg['model'].setdefault('local_path', 'assets/model')
+    cfg['model'].setdefault('local_path', default_model_dir(cfg['model']))   # one directory per id@revision: never another model's snapshot
     cfg['model'].setdefault('dtype', 'bfloat16')
     cfg['model'].setdefault('profile', 'auto')
     cfg['limits'].setdefault('models', ['*'])

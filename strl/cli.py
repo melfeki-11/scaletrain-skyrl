@@ -50,7 +50,11 @@ def cmd_plan(a):
     from .derive import plan
     from .experiment import diff
     cfg = _load(a.experiment, a.set)
-    report = plan(cfg, json.loads(Path(a.network).read_text()) if a.network else None)
+    try:
+        report = plan(cfg, json.loads(Path(a.network).read_text()) if a.network else None)
+    except RuntimeError as error:   # model detection (gated / offline config, contradicting profile, unmapped VLM wrapper)
+        print(f'experiment {a.experiment} cannot be planned:\n- {error}', file=sys.stderr)
+        raise SystemExit(2)
     if a.against:
         report['diff_vs'] = {a.against: [{'key': k, 'from': x, 'to': y} for k, x, y in diff(_load(a.against), cfg)]}
     if a.json:
@@ -64,6 +68,7 @@ def cmd_plan(a):
           f"({d['rollouts_per_gpu']}/GPU, {d['micro_batches_per_gpu']} micro-batches), max_model_len {d['max_model_len']}, env_class {d['skyrl_env_class']}")
     print(f"  estimates    step ~{e['step_s']}s (generate {e['generate_s']} + train {e['train_s']} + other {e['other_s']}), ~{e['steps_in_attempt']} steps/attempt, "
           f"{e['node_hours']:.2f} node-h; memory train {e['memory']['training_phase_gb']} GB / rollout {e['memory']['rollout_phase_gb']} GB "
+          + (f"[measured peak {e['memory']['measured_peak_gb']} GB in {e['memory']['measured_in']}] " if e['memory'].get('measured_peak_gb') else '') + "
           f"(fits={e['memory']['fits']}); from profile {e['profile']}"
           + ("" if e.get('calibrated') else " (UNCALIBRATED: different environment/model; the canary measures the real step time)"))
     lay, mem = report['layout'], e['memory']
@@ -96,7 +101,11 @@ def cmd_plan(a):
 def cmd_fetch(a):
     cfg = _load(a.experiment)
     from huggingface_hub import snapshot_download
+    from .models import snapshot_identity, write_identity
+    if snapshot_identity(cfg['model'])[0] == 'mismatch':
+        raise SystemExit(snapshot_identity(cfg['model'])[1])
     snapshot_download(cfg['model']['id'], revision=cfg['model']['revision'], local_dir=cfg['model']['local_path'])
+    write_identity(cfg['model'])
     from .runtime import ROUTER_SHA256, ROUTER_WHEEL
     import hashlib
     runtime = ROOT / 'assets/runtime'

@@ -239,6 +239,12 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
 
     model_dir = Path(cfg['model']['local_path'])
     mprefix = model_prefix(base_prefix, cfg)
+    from .models import snapshot_identity
+    identity, message = snapshot_identity(cfg['model'])
+    if identity == 'mismatch':   # never upload one model's weights under another model's S3 prefix
+        raise RuntimeError(message)
+    if identity == 'unknown':
+        print(f'WARNING: {message}', flush=True)
 
     def upload(path: Path) -> dict:
         digest = file_sha256(path)

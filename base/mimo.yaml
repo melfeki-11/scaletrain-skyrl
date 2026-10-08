@@ -10,8 +10,6 @@ extends: base/infra.yaml
 model:
   id: Qwen/Qwen3.8-27B
   revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
-  local_path: assets/models/Qwen3.8-27B
-  profile: qwen3_5                  # Qwen3_5ForConditionalGeneration (hybrid GDN): forced so `strl plan` works offline
 
 environment:
   name: mimo

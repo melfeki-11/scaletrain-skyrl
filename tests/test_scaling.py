@@ -611,3 +611,59 @@ class NeverStartedJobs(unittest.TestCase):
         self.assertEqual(outcome_status(SystemExit(15)), 'preempted')
         self.assertEqual(outcome_status(SystemExit(1)), 'failed')
         self.assertEqual(outcome_status(RuntimeError('x')), 'failed')
+
+
+class ModelIdentity(unittest.TestCase):
+    """Generality audit: a child that changed only model.id inherited assets/model (Qwen3.5-0.8B), planned it as Qwen3.5 and would have uploaded
+    and trained those weights under the new name. One directory per id@revision, an identity marker, and a forced-profile check close it."""
+
+    def test_default_directory_is_per_id_and_revision(self):
+        from strl.experiment import default_model_dir
+        self.assertEqual(default_model_dir({'id': 'meta-llama/Llama-3.1-8B-Instruct', 'revision': '0e9e39f249a16976918f6564b8830bc894c89659'}),
+                         'assets/models/Llama-3.1-8B-Instruct@0e9e39f249a1')
+
+    def test_identity_marker(self):
+        import json
+        import tempfile
+        from strl.models import snapshot_identity, write_identity
+        with tempfile.TemporaryDirectory() as temp:
+            model = {'id': 'org/a', 'revision': 'r1', 'local_path': temp}
+            self.assertEqual(snapshot_identity(model)[0], 'absent')
+            (Path(temp) / 'config.json').write_text('{}')
+            self.assertEqual(snapshot_identity(model)[0], 'unknown')
+            write_identity(model)
+            self.assertEqual(snapshot_identity(model)[0], 'match')
+            state, message = snapshot_identity({**model, 'id': 'org/b'})
+            self.assertEqual(state, 'mismatch')
+            self.assertIn('org/a', message)
+            self.assertEqual(json.loads((Path(temp) / 'strl-model.json').read_text())['id'], 'org/a')
+
+    def test_forced_profile_contradicting_the_architecture_is_rejected(self):
+        from strl.models import detect
+        with self.assertRaises(RuntimeError) as error:
+            detect({'id': 'meta-llama/x', 'profile': 'qwen3_5'}, hf_config={'architectures': ['LlamaForCausalLM']})
+        self.assertIn('auto-detect', str(error.exception))
+        self.assertEqual(detect({'id': 'q', 'profile': 'qwen3_5'}, hf_config={'architectures': ['Qwen3_5ForConditionalGeneration']})[0].name, 'qwen3_5')
+
+
+class ModelRegistry(unittest.TestCase):
+    def test_families_map_to_profiles(self):
+        from strl.models import detect
+        for arch, name in (('Qwen3MoeForCausalLM', 'qwen3_moe'), ('Qwen3_5MoeForConditionalGeneration', 'qwen3_5_moe'), ('MistralForCausalLM', 'dense'),
+                           ('Olmo2ForCausalLM', 'dense'), ('Phi3ForCausalLM', 'dense'), ('Qwen2ForCausalLM', 'dense'), ('SomethingNewForCausalLM', 'generic_causal_lm')):
+            self.assertEqual(detect({'id': 'x'}, hf_config={'architectures': [arch]})[0].name, name, arch)
+        self.assertTrue(detect({'id': 'x'}, hf_config={'architectures': ['Qwen3MoeForCausalLM']})[0].thinking_flag)   # thinking off like dense Qwen3
+
+    def test_unmapped_vision_language_wrapper_is_refused(self):
+        from strl.models import detect
+        with self.assertRaises(RuntimeError) as error:
+            detect({'id': 'google/gemma-3-12b-it'}, hf_config={'architectures': ['Gemma3ForConditionalGeneration']})
+        self.assertIn('vision-language', str(error.exception))
+
+    def test_moe_parameter_count_includes_every_expert(self):
+        from strl.derive import params_from_id
+        from strl.models import ModelProfile
+        qwen3_30b_a3b = {'num_hidden_layers': 48, 'hidden_size': 2048, 'vocab_size': 151936, 'intermediate_size': 6144, 'num_attention_heads': 32,
+                         'num_key_value_heads': 4, 'head_dim': 128, 'num_experts': 128, 'moe_intermediate_size': 768}
+        self.assertAlmostEqual(ModelProfile().param_estimate_b(qwen3_30b_a3b), 30.1, delta=0.5)
+        self.assertEqual(params_from_id('mistralai/Mixtral-8x7B-v0.1'), 56.0)

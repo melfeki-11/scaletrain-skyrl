@@ -43,3 +43,13 @@ class Qwen35Profile(ModelProfile):
         from .qwen3_5_export import adapt
         adapt(base_path, export_dir, target_dir)
         return target_dir
+
+
+class Qwen35MoeProfile(Qwen35Profile):
+    """Qwen3.5 mixture-of-experts: the same hybrid-GDN / VLM-wrapper handling as dense Qwen3.5; SkyRL picks the decoder class to wrap."""
+    name = 'qwen3_5_moe'
+    architectures = ('Qwen3_5MoeForConditionalGeneration', 'Qwen3_5MoeForCausalLM')
+    verified = 'none'
+    moe = True
+    decoder_layer_cls = None
+    notes = 'Qwen3.5 MoE: Qwen3.5 handling plus MoE; unverified on this platform (dry run + canary first).'

@@ -8,7 +8,6 @@ extends: base/mimo.yaml
 model:                                  # axis 1: the model (revision = the commit sha from https://huggingface.co/api/models/<id>)
   id: Qwen/Qwen3.5-2B
   revision: 15852e8c16360a2fea060d615a32b45270f8a8fc
-  local_path: assets/models/Qwen3.5-2B
 
 finetune:
   mode: full
