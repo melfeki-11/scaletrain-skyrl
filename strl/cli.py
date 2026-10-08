@@ -330,6 +330,9 @@ def cmd_eval_llm(a):
     from . import evals
     cfg = _load(a.experiment)
     project = ((cfg.get('services') or {}).get('litellm') or {}).get('project_id', '696011502a26dc4a64b24f55')
+    if cfg['environment']['name'] == 'mimo':   # the ceiling of a mimo selection: --split test|canary, --limit = tasks per domain
+        print(json.dumps(evals.mimo(cfg, a.split if a.split != 'validation' else 'test', a.limit, a.model, a.max_completion_tokens, project), indent=1))
+        return
     fn = evals.coding_harbor if cfg['environment']['name'] == 'coding_harbor' or a.harbor else evals.coding_exec
     if fn is evals.coding_exec:
         from .services.modal import local_profile

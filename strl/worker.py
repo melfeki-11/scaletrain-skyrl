@@ -503,6 +503,14 @@ def main():
             print(json.dumps({'probe': identity['network']}), flush=True)
         if mode == 'dry':  # CPU rehearsal of every gate the GPU run depends on; never starts training
             gates = dry_run_gates(cfg, runtime, env_spec, identity['services'])
+            per_domain = int((cfg.get('run') or {}).get('ceiling_per_domain') or 0)
+            if per_domain and env_spec.name == 'mimo':   # the reference agent's ceiling, run where the LiteLLM key already is (never the laptop)
+                from .evals import mimo as ceiling
+                try:
+                    gates['ceiling'] = ceiling(cfg, 'test', per_domain, (cfg.get('run') or {}).get('ceiling_model', 'openai/gpt-6-luna'), 8192,
+                                               ((cfg.get('services') or {}).get('litellm') or {}).get('project_id', '696011502a26dc4a64b24f55'))
+                except Exception as error:
+                    gates['ceiling'] = {'error': f'{type(error).__name__}: {error}'[:400]}
             dry = dict(identity, status='dry_run_passed', phases=phases, gates=gates, train_deadline=float(os.environ['GRPO_TRAIN_DEADLINE']),
                        skyrl_commit=cfg['runtime']['skyrl_commit'])
             put_json(prefix + '/dry-run.json', dry)

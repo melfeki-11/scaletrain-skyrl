@@ -216,6 +216,12 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
         worker_seconds = remaining - cfg['budget']['bootstrap_margin_seconds']
     else:   # multi-node dry runs also wait for every peer's preflight + Ray join and run the CPU probe
         dry_seconds = env_dry_seconds(env) + (600 if nodes > 1 else 0)
+        if (cfg.get('run') or {}).get('ceiling_per_domain'):   # the reference agent runs the held-out tasks within the experiment's caps
+            from .tasks.mimo.data import mimo_config
+            from .tasks.mimo.export import DOMAIN_SPECS
+            caps = [int(d.get('max_agent_sec') or DOMAIN_SPECS[n].agent_timeout_sec) + int(d.get('max_verifier_sec') or DOMAIN_SPECS[n].verifier_timeout_sec)
+                    for n, d in mimo_config(cfg)['domains'].items() if d.get('test')]
+            dry_seconds += max(caps or [0]) * int(cfg['run']['ceiling_per_domain']) + 600
         remaining, worker_seconds = dry_seconds, dry_seconds - 100
 
     st = cfg['storage']

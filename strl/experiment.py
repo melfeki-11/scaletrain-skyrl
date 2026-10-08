@@ -70,7 +70,7 @@ SCHEMA: dict[str, Any] = {
                  'alerts': bool},
     'storage': {'bucket': str, 'prefix': str, 'profile': str, 'region': str},
     'limits': {'max_nodes': int, 'gpus_per_node': list, 'max_attempt_seconds': int, 'models': list},
-    'run': {'data_dir': str, 'artifact_dir': str, 'resume_from': str},
+    'run': {'data_dir': str, 'artifact_dir': str, 'resume_from': str, 'ceiling_per_domain': int, 'ceiling_model': str},
     'services': {'modal': None, 'litellm': None},
 }
 # Scaling knobs. Defaults live here (not in the resolved config), so experiments that do not set them keep their sha and

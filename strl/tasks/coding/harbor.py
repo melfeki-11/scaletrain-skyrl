@@ -47,7 +47,8 @@ TEST_SH = '''#!/bin/bash
 # reward 0 first: a crashed or killed verifier can never leave a stale pass behind
 mkdir -p /logs/verifier
 echo 0 > /logs/verifier/reward.txt
-/usr/local/bin/python3 /tests/run_tests.py
+# -I -S: no site-packages (.pth files the agent could plant run at startup), no PYTHON* variables, no script dir on sys.path
+/usr/local/bin/python3 -I -S /tests/run_tests.py
 exit 0
 '''
 RUN_TESTS = '''import json, os, sys
