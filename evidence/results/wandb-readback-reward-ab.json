@@ -1,0 +1,119 @@
+{
+ "ab-binary-a1": {
+  "state": "finished",
+  "url": "https://scaleai.wandb.io/mohamed-elfeki/scaletrain-rl-envs/runs/ab-binary-a1-261006193758",
+  "group": "mbpp-reward-ab",
+  "tags": [
+   "coding",
+   "coding_exec",
+   "gen_ai.agent_training_foundation",
+   "grpo",
+   "reward:binary",
+   "scale-train"
+  ],
+  "tables": {
+   "qualitative/critic": {
+    "type": "incremental-table-file",
+    "rows": 104,
+    "increments": 12
+   },
+   "qualitative/fixed_by_training": {
+    "type": "table-file",
+    "rows": 50,
+    "increments": null
+   },
+   "qualitative/fixed_validation": {
+    "type": "incremental-table-file",
+    "rows": 240,
+    "increments": 14
+   },
+   "trajectories/eval": {
+    "type": "incremental-table-file",
+    "rows": 240,
+    "increments": 14
+   },
+   "trajectories/train": {
+    "type": "incremental-table-file",
+    "rows": 2112,
+    "increments": 65
+   }
+  },
+  "reward_component_keys": [
+   "environment/reward_components/pass_all_tests"
+  ],
+  "median_step_s": 27.7,
+  "median_generate_s": 16.6,
+  "mean_response_tokens": 130.6,
+  "evidence_artifacts": [
+   "ab-binary-a1-evidence:v0"
+  ],
+  "summary": {
+   "test/baseline_accuracy": 0.23378582202111614,
+   "test/candidate_accuracy": 0.36048265460030166,
+   "test/accuracy_delta": 0.12669683257918551,
+   "critic/analyses": 104,
+   "critic/cost_usd": 0.0117342,
+   "environment/infra_error": 0,
+   "environment/masked_group_fraction": 0
+  }
+ },
+ "ab-partial-a1": {
+  "state": "finished",
+  "url": "https://scaleai.wandb.io/mohamed-elfeki/scaletrain-rl-envs/runs/ab-partial-a1-261006193811",
+  "group": "mbpp-reward-ab",
+  "tags": [
+   "coding",
+   "coding_exec",
+   "gen_ai.agent_training_foundation",
+   "grpo",
+   "reward:partial",
+   "scale-train"
+  ],
+  "tables": {
+   "qualitative/critic": {
+    "type": "incremental-table-file",
+    "rows": 104,
+    "increments": 13
+   },
+   "qualitative/fixed_by_training": {
+    "type": "table-file",
+    "rows": 50,
+    "increments": null
+   },
+   "qualitative/fixed_validation": {
+    "type": "incremental-table-file",
+    "rows": 240,
+    "increments": 14
+   },
+   "trajectories/eval": {
+    "type": "incremental-table-file",
+    "rows": 240,
+    "increments": 14
+   },
+   "trajectories/train": {
+    "type": "incremental-table-file",
+    "rows": 2208,
+    "increments": 68
+   }
+  },
+  "reward_component_keys": [
+   "environment/reward_components/partial_tests",
+   "environment/reward_components/pass_all_tests"
+  ],
+  "median_step_s": 27.3,
+  "median_generate_s": 15.8,
+  "mean_response_tokens": 165.9,
+  "evidence_artifacts": [
+   "ab-partial-a1-evidence:v0"
+  ],
+  "summary": {
+   "test/baseline_accuracy": 0.23378582202111614,
+   "test/candidate_accuracy": 0.3333333333333333,
+   "test/accuracy_delta": 0.09954751131221719,
+   "critic/analyses": 104,
+   "critic/cost_usd": 0.013017899999999999,
+   "environment/infra_error": 0,
+   "environment/masked_group_fraction": 0
+  }
+ }
+}

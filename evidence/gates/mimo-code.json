@@ -1,0 +1,14 @@
+{
+  "domain": "code",
+  "note": "No Modal trial was run for code in this session (time/budget): the music, cyber, and general domains already consumed the bulk of the real-Modal verification budget in this run, and cyber's bug-fix pass (image resolution + deprecated Sandbox.open()) applies identically to code's compute_base_ref(), which shares the same two bugs and the same fix (see graders/code.py).",
+  "offline_verification": {
+    "unit_tests": "tests/test_mimo_graders.py::CodeGrader -- agent-fix passes (reward 1.0), nop fails (reward 0.0), and a tamper attempt (agent plants a fake always-passing test_lib.py at the gold test_patch's path) is reset to the gold test and correctly scores 0.0, all against a REAL throwaway git repo (not mocked).",
+    "bug_fixed_by_inspection": "graders/code.py::build() and ::screen_task() had the SAME raw-docker_image bug found and fixed in cyber.py (passed the row's internal docker_image tag straight to compute_base_ref()/run_fn() instead of resolving it through export.image_ref() first); fixed in the same pass, not independently re-verified against a real Modal sandbox."
+  },
+  "not_run": [
+    "compute_base_ref() against a real code task image in Modal",
+    "screen_task() (nop-must-fail screening) against a real code task image",
+    "Full Harbor Trial nop/tamper checks",
+    "gpt-6-luna positive control"
+  ]
+}

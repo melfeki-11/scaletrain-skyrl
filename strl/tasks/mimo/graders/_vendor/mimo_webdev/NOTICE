@@ -1,0 +1,14 @@
+Vendored from XiaomiMiMo/verl @ a2ad9f61 (branch mimo-oss), path
+recipes/design/webdev/{eval_rubric.py,shot.py}.
+
+Copyright 2026 Bytedance Ltd. and/or its affiliates.
+Licensed under the Apache License, Version 2.0 (see the header in each file, or
+http://www.apache.org/licenses/LICENSE-2.0).
+
+Files are unmodified byte-for-byte from the upstream commit above except where noted inline.
+strl/tasks/mimo/graders/webdev.py is our own code that imports this package; it is not part
+of the vendored tree. shot.py's `_build_shot_cmd` is reused for the in-sandbox render command;
+`_llm_client`/`design_mode`/`grade.py`/`group_reward.py` (the TRAINING-time grader that ships
+to an external grading service) are intentionally NOT vendored -- our contract always uses
+the evaluation-style render-then-judge path (see eval_mode.py upstream) with the judge call
+itself happening outside the sandbox, per strl/tasks/mimo/__init__.py.

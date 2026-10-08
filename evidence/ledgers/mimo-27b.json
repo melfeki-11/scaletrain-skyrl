@@ -1,0 +1,167 @@
+{
+  "program": "Qwen3.8-27B 2x8 H100 MiMo multi-domain RL (user-authorized 2026-10-06: 6 node-hours)",
+  "total_seconds": 21600,
+  "nodes": 2,
+  "attempts": [
+    {
+      "job_id": "job_db2t1nbmjdjg07lcror0",
+      "attempt": "dry2-lora-a",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-07T04:55:57Z",
+      "terminal_at": "2026-10-07T05:01:02Z",
+      "gpu_fraction": 0.0,
+      "nodes": 2,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db2t2tsf8c4g07jrod70",
+      "attempt": "dry2-full-a",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-07T04:58:31Z",
+      "terminal_at": "2026-10-07T05:01:03Z",
+      "gpu_fraction": 0.0,
+      "nodes": 2,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db2v603mjdjg07lcros0",
+      "attempt": "dry-mimo-a",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-07T07:21:36Z",
+      "terminal_at": "2026-10-07T07:24:51Z",
+      "gpu_fraction": 0.0,
+      "nodes": 1,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db2v7brmjdjg07lcrosg",
+      "attempt": "can-mimo-a",
+      "status": "CANCELED",
+      "allocated_at": null,
+      "terminal_at": "2026-10-07T08:26:07Z",
+      "gpu_fraction": 0.125,
+      "nodes": 1,
+      "evidence": "cancelled while QUEUED; no worker-started.json in the attempt artifacts: the pod never started (not charged)"
+    },
+    {
+      "job_id": "job_db304m3mjdjg088ceet0",
+      "attempt": "can-mimo-b",
+      "status": "CANCELED",
+      "allocated_at": null,
+      "terminal_at": "2026-10-07T13:56:48Z",
+      "gpu_fraction": 0.125,
+      "nodes": 1,
+      "evidence": "cancelled while QUEUED; no worker-started.json in the attempt artifacts: the pod never started (not charged)"
+    },
+    {
+      "job_id": "job_db34vd4f8c4g07jrodi0",
+      "attempt": "can-mimo-c",
+      "status": "FAILED",
+      "allocated_at": "2026-10-07T13:57:08Z",
+      "terminal_at": "2026-10-07T17:17:47Z",
+      "gpu_fraction": 0.125,
+      "nodes": 1,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db37uccf8c4g07jrodk0",
+      "attempt": "can-mimo-d",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-07T17:19:45Z",
+      "terminal_at": "2026-10-07T17:59:29Z",
+      "gpu_fraction": 0.125,
+      "nodes": 1,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db3b9s4f8c4g07jrodsg",
+      "attempt": "dry-27b-b",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-07T21:09:04Z",
+      "terminal_at": "2026-10-07T21:13:18Z",
+      "gpu_fraction": 0.0,
+      "nodes": 2,
+      "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db38ksbmjdjg07lcrp1g",
+      "attempt": "g4-mimo-a",
+      "status": "CANCELED",
+      "allocated_at": "2026-10-07T21:32:59Z",
+      "terminal_at": "2026-10-07T21:39:30Z",
+      "gpu_fraction": 1.0,
+      "nodes": 2,
+      "evidence": "worker budget.json started_at - 180 s (pods up) to the terminal observation; queue time (created_at 2026-10-07T18:07:45Z) is not charged"
+    },
+    {
+      "job_id": "job_db3c5mbmjdjg088cefr0",
+      "attempt": "g4-mimo-b",
+      "status": "FAILED",
+      "allocated_at": "2026-10-07T23:48:05Z",
+      "terminal_at": "2026-10-08T00:14:33Z",
+      "gpu_fraction": 1.0,
+      "nodes": 2,
+      "evidence": "worker budget.json started_at - 180 s (pods up) to the terminal observation; queue time (created_at 2026-10-07T22:08:25Z) is not charged"
+    },
+    {
+      "job_id": "job_db3e2pcf8c4g08flber0",
+      "attempt": "can-27b-a",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-08T00:18:45Z",
+      "terminal_at": "2026-10-08T01:13:51Z",
+      "gpu_fraction": 1.0,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 180 s (pods up) to the terminal observation; queue time (created_at 2026-10-08T00:18:45Z) is not charged"
+    },
+    {
+      "job_id": "job_db3g953mjdjg07lcrpog",
+      "attempt": "dry-run1-b",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-08T02:48:52Z",
+      "terminal_at": "2026-10-08T02:52:05Z",
+      "gpu_fraction": 0.0,
+      "nodes": 2,
+      "evidence": "worker budget.json started_at - 180 s (pods up) to the terminal observation; queue time (created_at 2026-10-08T02:48:52Z) is not charged"
+    },
+    {
+      "job_id": "job_db3u3mbmjdjg07lcrqd0",
+      "attempt": "run1-b",
+      "status": "CANCELED",
+      "allocated_at": null,
+      "terminal_at": "2026-10-08T19:32:56Z",
+      "gpu_fraction": 1.0,
+      "nodes": 2,
+      "evidence": "cancelled while QUEUED; no worker-started.json in the attempt artifacts: the pod never started (not charged)"
+    },
+    {
+      "job_id": "job_db3u3mrmjdjg088ceh6g",
+      "attempt": "run1-c",
+      "status": "CANCELED",
+      "allocated_at": null,
+      "terminal_at": "2026-10-08T19:32:57Z",
+      "gpu_fraction": 1.0,
+      "nodes": 2,
+      "evidence": "cancelled while QUEUED; no worker-started.json in the attempt artifacts: the pod never started (not charged)"
+    },
+    {
+      "job_id": "job_db3fcg4f8c4g08flbf0g",
+      "attempt": "run1-a",
+      "status": "CANCELED",
+      "allocated_at": "2026-10-08T19:30:22Z",
+      "terminal_at": "2026-10-08T20:02:30Z",
+      "gpu_fraction": 1.0,
+      "nodes": 2,
+      "evidence": "worker budget.json started_at - 180 s (pods up) to the terminal observation; queue time (created_at 2026-10-08T01:47:44Z) is not charged"
+    },
+    {
+      "job_id": "job_db3verkf8c4g07jrog1g",
+      "attempt": "run1-n1-a",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-08T20:05:02Z",
+      "terminal_at": "2026-10-08T22:06:30Z",
+      "gpu_fraction": 1.0,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 180 s (pods up) to the terminal observation; queue time (created_at 2026-10-08T20:05:02Z) is not charged"
+    }
+  ]
+}

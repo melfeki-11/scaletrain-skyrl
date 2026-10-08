@@ -1,0 +1,30 @@
+{
+  "domain": "webdev",
+  "nop": {
+    "all_zero_no_infra": true,
+    "bad": [],
+    "n": 2,
+    "results": [
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 14.3,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/webdev/webdev-dasyn_260630_00021__WXJPFJQ",
+        "verifier_note": "",
+        "verifier_ran": true
+      },
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 14.3,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/webdev/webdev-dasyn_260638_00176__aBR4wmm",
+        "verifier_note": "",
+        "verifier_ran": true
+      }
+    ]
+  },
+  "task_dirs": [
+    "assets/mimo/data-smoke/tasks/test/webdev-dasyn_260630_00021",
+    "assets/mimo/data-smoke/tasks/test/webdev-dasyn_260638_00176"
+  ]
+}

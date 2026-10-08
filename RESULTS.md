@@ -1,8 +1,207 @@
-# Results: q35v2-a1
+# Results
+
+Every number below comes from an independently verified attempt. The raw evidence is in `evidence/results/` and `evidence/verified-result.json`.
+
+| Run | Environment · reward | GPUs · updates | Held-out set | Base | Trained | Δ [95% paired CI] |
+| --- | --- | --- | --- | --- | --- | --- |
+| `q35v2-a1` | gsm8k · strict answer | 8 · 36 | GSM8K test (1,319) | 50.80% | **68.84%** | +18.04 [+15.31, +20.77] |
+| `ab-binary-a1` | coding_exec · `pass_all_tests` | 4 · 66 | MBPP-test + HumanEval (663) | 23.38% | **36.05%** | +12.67 [+9.20, +16.29] |
+| `ab-partial-a1` | coding_exec · `pass_all_tests + 0.5·partial_tests` | 4 · 69 | MBPP-test + HumanEval (663) | 23.38% | **33.33%** | +9.95 [+6.33, +13.57] |
+
+All three runs use Qwen/Qwen3.5-0.8B at revision `2fc0636`, full-parameter SkyRL GRPO, on ScaleTrain `p5.48xlarge` (H100).
+Common protocol for every run:
+- Checkpoint selection used only the train-derived validation split.
+- Held-out evaluation is greedy and paired by task ID.
+- Δ is a paired bootstrap CI.
+- `strl verify` re-scored every completion independently (in Modal for coding) and found 0 disagreements with the worker.
+
+## MiMo-V2.6-RL suite · Qwen3.8-27B LoRA · 8×H100 (attempt run1-n1-a, 2026-10-08)
+
+The first 27B agentic GRPO run on the platform: all five MiMo domains (music, cyber, code, general, webdev) in one trainer, Qwen3.8-27B with
+LoRA r64/α64 on every linear layer, 1 node × 8 H100, 3 optimizer steps (240 rollouts per step, 8 prompts per domain × 6 samples),
+`experiments/mimo-qwen38-27b-lora-run1-1node.yaml`. W&B: `mohamed-elfeki/scaletrain-rl-envs`, run `run1-n1-a-261008200411`, group `mimo-27b-lora-run1-1node`.
+
+**The 2 × 8 run did not complete.** `run1-a` (2 nodes) waited ~23 h for two free nodes in one network domain, started, loaded the 27B over 16
+GPUs, finished its step-0 base evaluation, and was preempted by a SIGTERM 30 minutes in (borrowed capacity reclaimed) before any update. Its
+step-0 numbers never reached S3 or W&B. The 1-node run below used the budget that was left (the program authorized 6 node-hours; 20,211 of
+21,600 node-seconds were used across the whole ladder). 2-node training is verified only at 0.8B (`g4-mimo-b`, validation.md).
+
+### Held-out result (base = step 0, trained = step 3, same engines/agent/template, 16 fixed held-out tasks per domain × 2 repeats)
+
+| domain | base | trained | Δ [95% paired CI] | tasks | dropped |
+| --- | --- | --- | --- | --- | --- |
+| code | 0.100 | 0.100 | +0.000 [-0.200, +0.200] | 15 | 2 |
+| cyber | 0.031 | 0.125 | +0.094 [+0.000, +0.188] | 16 | 0 |
+| general | 0.000 | 0.000 | +0.000 [+0.000, +0.000] | 16 | 0 |
+| music | 0.057 | 0.043 | -0.014 [-0.081, +0.052] | 16 | 0 |
+| webdev | 0.025 | 0.051 | +0.026 [-0.019, +0.081] | 16 | 0 |
+| **macro** | **4.26%** | **6.38%** | **+2.11 [-2.68, +7.08]** | 79 | 2 |
+
+Outcome flips on the 158 paired trials (160 minus 2 code trials masked by an infrastructure error on both sides): 6 fixed, 3 broken, 1 correct in both, 148 wrong in both.
+
+**What this does and does not show.** Three updates on a 27B with 20% of groups carrying a learning signal cannot move a macro score by a measurable
+amount, and it did not: the macro delta's CI contains zero, and so does every domain's except cyber's (+9.4 points, lower bound exactly 0.0,
+16 tasks): suggestive, not a result. The claims this run supports are the infrastructure and measurement claims below, not a training
+gain. Do not read the rise from 4.3% to 6.4% as an effect.
+
+**Timeouts dominate this evaluation (read before the next run).** 107 of the 160 held-out trials ended by running out of time, in the base
+and in the trained evaluation alike (`evidence/results/mimo-run1-n1-a-eval-stops.json`):
+
+| domain (32 trials) | timed out, base -> trained | completed | note |
+| --- | --- | --- | --- |
+| music | 10 -> 8 | 22 -> 24 | a timeout leaves no tokens (single shot): scored 0 |
+| cyber | 21 -> 22 | 11 -> 10 | |
+| code | 19 -> 21 | 11 -> 9 | 2 trials masked (infrastructure) on both sides |
+| general | 26 -> 24 | 6 -> 8 | **no trial left an answer file**: the agent reached its 14-turn cap while still querying the MCP tools |
+| webdev | 31 -> 32 | 1 -> 0 | cut off before a page was written |
+
+At ~30 s per Terminus turn the per-domain turn and time caps (8-14 turns, 600 s) were chosen to fit the budget, and they cut the agent off
+before it finishes most tasks. They apply equally to the base and trained evaluations, so the comparison is fair, but it is low-ceiling:
+**general and webdev carry essentially no signal in this run** (general scored 0.0 on all 64 trials, so the judged-answer re-score check
+below is vacuous for it; the transcripts show the environment working, the agent simply never reached its deliverable). The macro average is
+therefore driven by music, cyber and code. In training, a trial that times out *with* tokens (most agentic ones) trains on the verifier's reward
+for the partial workspace; one that leaves none (single-shot music, some webdev) stays in its group as a zero-loss placeholder; per step,
+62-88% of music groups and 25-62% of webdev groups contained such a tokenless timeout. The lever for the next run is time per trial (a larger
+cap, more engines, CUDA graphs for the hybrid GDN decode) and more turns for general/webdev, not more steps.
+
+### Measured infrastructure (1 node, 8 H100, TP2 × 4 engines)
+
+| item | value |
+| --- | --- |
+| startup to first generation | ~12 min (27B weights 55.6 GB from S3 take ~1 min on a p5 node) |
+| step time | 1,397-1,504 s: generate 821, forward/logprobs 131, policy_train 388, weight sync 14 |
+| held-out evaluation (160 trials) | 793 s |
+| adapter export (HF) | 121 s |
+| peak GPU memory | 70.8 GB (limit 76) |
+| step-wise turn merging (Qwen3.8) | ~6x fewer sequences: 5.7-6.4x in the main run (1,508 -> 251, 1,590 -> 249, 1,517 -> 266), 223 -> 36 in the canary |
+| infrastructure-masked groups | training: 0 except one code group at step 3 (mean 0.042, max 0.125); evaluation: 2 code trials on both sides |
+| judge / critic cost | gpt-6-luna judge $1.90 (general $0.86, webdev $1.04), critic $0.10 |
+
+### Verification (`strl verify`, `evidence/results/mimo-27b-lora-run1-1node-report.md`)
+
+- Coverage complete: 160 expected evaluation rows for base and for trained, none missing, none duplicated.
+- The independent re-score reproduces the worker's per-domain point estimates exactly (the bootstrap CI endpoints differ by ~0.2 points: macro
+  [-2.88, +6.92] independent vs [-2.68, +7.08] worker, different resampling); 28 music artifacts re-graded offline with 0 disagreements; 8 judged
+  general answers re-judged with mean absolute difference 0.0 (vacuous: every general score was 0.0). Code, cyber and webdev need their sandboxes and are not re-gradable offline.
+- W&B readback (`evidence/results/wandb-readback-mimo-run1-n1-a.json`): run finished, 282 metric keys, per-domain and macro evaluation keys, 15
+  artifacts (train and eval trajectory tables, fixed-validation, critic, media).
+
+## Coding RL environment: reward-design A/B (2026-10-06)
+
+The A/B is the "change one axis and see the effect" demonstration. The two experiments, `experiments/mbpp-qwen35-binary.yaml` and
+`experiments/mbpp-qwen35-partial.yaml`, differ **only** in `reward.components`; the resolved-config diff is printed by `strl plan --against`.
+
+Shared setup:
+- Both ran concurrently on `p5.48xlarge:4` slices.
+- Batch: 16 prompts × 16 samples = 256 rollouts per step. Generation was capped at 512 tokens, learning rate 2e-6, KL 0.01.
+- Training ran for 2,831–2,858 s, bounded by the budget ledger.
+- Jobs: `job_db2kshss49qg07jejfbg` (binary) and `job_db2ksicf8c4g08flbdh0` (partial).
+- W&B group `mbpp-reward-ab` in `mohamed-elfeki/scaletrain-rl-envs`.
+- Tests ran in the deployed Modal executor (`strl-code-exec`, harness `fab5f1b39071ab5c`) with **0 infra errors and 0 masked groups** across both runs.
+
+### Outcome on the yardstick (held-out pass@1, 663 paired tasks)
+
+| | binary (A) | partial credit (B) |
+| --- | --- | --- |
+| all 663 | 23.38% → **36.05%** (+12.67 [+9.20, +16.29]) | 23.38% → **33.33%** (+9.95 [+6.33, +13.57]) |
+| MBPP-test (499) | 20.44% → 37.47% (+17.03) | 20.44% → 34.47% (+14.03) |
+| HumanEval (164, never trained on) | 32.32% → 31.71% (−0.61) | 32.32% → 29.88% (−2.44) |
+| fixed / broken vs base | 117 / 33 | 110 / 44 |
+| selected step (validation only) | 55 of 66 | 50 of 69 |
+
+The paired comparison, B − A on the same 663 tasks, is **−2.71 points [−6.18, +0.75]**. The data do not separate the arms; they
+point toward the binary reward. Both arms beat the base model by a wide margin. Neither transfers to HumanEval: the gains are
+MBPP-style.
+
+### Training dynamics: the effect of the reward term (from `strl compare`)
+
+| | learning signal (mean) | train reward last (max) | `environment/reward_components` last | validation pass@1 last (max) | median step |
+| --- | --- | --- | --- | --- | --- |
+| binary | 0.53 | 0.58 (0.65) | pass_all_tests 0.58 | 0.417 (0.427) | 27.7 s |
+| partial | **0.73** | 0.80 (1.07) | partial_tests 0.58, pass_all_tests 0.51 | 0.302 (0.448) | 27.3 s |
+
+Learning signal is the share of GRPO groups that have reward variance. The partial-credit term did what the decision-points
+reference predicts: groups had reward variance 73% of the time instead of 53%. But the extra signal went into the shaping term.
+Training reward climbed to 0.80 while the yardstick, both validation and held-out pass@1, ended no better than binary.
+
+This is the "reward up, metric flat" pattern that `strl plan` warns about (`! REWARD: shaping terms ... are NOT the yardstick`).
+It is why every run is judged on `eval/task_metric` and the held-out test.
+
+Validation pass@1 every 5 steps (96 tasks; one task = 1.04 points):
+- binary: 0.198 → 0.292 → 0.302 → 0.385 → 0.406 → 0.406 → 0.354 → 0.375 → 0.333 → 0.375 → 0.385 → **0.427** → 0.406 → 0.406 → 0.417
+- partial: 0.198 → 0.344 → 0.323 → 0.333 → 0.354 → 0.385 → 0.396 → 0.354 → 0.365 → 0.375 → **0.448** → 0.406 → 0.344 → 0.365 → 0.302
+
+Caveat: 96 validation tasks have a standard error of about ±5 points. The partial arm's best validation step (0.448, the highest of
+either arm) produced the *lower* held-out score. That is selection noise. Use a larger validation set (`environment.sources.validation.size`)
+when arms are this close.
+
+### What changed in the model's behaviour (held-out, binary arm; the partial arm is similar)
+
+| failure class | base | trained |
+| --- | --- | --- |
+| ok (all tests pass) | 155 | 239 |
+| runtime_error | 208 | 83 |
+| truncated (hit the 512-token cap) | 97 | 28 |
+| wrong_answer (runs, fails a test) | 197 | 304 |
+| syntax_error / timeout | 6 | 9 |
+
+Mean response length fell from 237 to 141 tokens. The base model's failures were mostly mechanical: long docstring-heavy answers
+that got truncated, and calls to undefined helpers such as `product(...)`. RL removed most of those. What remains is mainly wrong
+algorithms. The LiteLLM critic (gpt-6-luna, 104 failed rollouts per run, about $0.012 per run) agrees: in both arms its top failure
+modes were syntax/runtime errors, wrong algorithm and misread task. It flagged **0% reward-hacking attempts**.
+
+Examples the base model failed and the trained model solved. W&B table `qualitative/fixed_by_training` holds 50 per run.
+1. `humaneval-test-0008` `sum_product`: the base model called an undefined `product(numbers)` (runtime_error). The trained model
+   writes the loop explicitly.
+2. `mbpp-test-0014` `find_Volume`: the base model wrote a long docstring and was truncated mid-expression. The trained model
+   answers in 5 lines: `(length * width) / 2 * height`.
+3. `mbpp-test-0011` `remove_Occ`: **a weak-test pass, reported honestly.** The trained model removes *every* occurrence
+   (`s.replace(c, "")`) rather than the first and last. MBPP's three hidden tests only use strings with exactly two occurrences,
+   so it passes. The execution reward is only as strong as the tests. The `no_suspicious_code` component and the critic catch
+   exploits, not under-specified tests.
+
+### Monitoring evidence (W&B readback, `evidence/results/wandb-readback-reward-ab.json`)
+
+Both runs finished in W&B with:
+- **Tables:**
+  - `trajectories/train`: 2,112 / 2,208 rows, two full GRPO groups per step.
+  - `trajectories/eval`: 240 rows.
+  - `qualitative/fixed_validation`: 16 fixed IDs at every eval.
+  - `qualitative/critic`: 104 rows, incremental.
+  - `qualitative/fixed_by_training`: 50 rows.
+- **Scalars:** per-component `environment/reward_components/*`, `environment/failure/*`, `train/learning_signal_fraction`,
+  `critic/*_frac`.
+- **Artifact:** the evidence artifact `<attempt>-evidence:v0`.
+
+### Efficiency
+
+| | binary | partial |
+| --- | --- | --- |
+| median step (generate / policy train) | 27.7 s (16.6 / 4.2) | 27.3 s (15.8 / 4.2) |
+| validation (96 tasks) | 15.7 s | 15.3 s |
+| final held-out eval (2 × 663, base + trained concurrently on 2 shards each) | 117 s | 117 s |
+| worker wall-clock | 3,043 s | 3,016 s |
+
+Each arm used half a node (4 of 8 GPUs) for about 51 minutes.
+- **Budget:** the whole verification program used 5,151 of the 7,200 authorized node-seconds (1.43 node-hours). That covers
+  10 canaries (6 of them Harbor), both A/B arms and every retry, charged conservatively from job creation to terminal
+  observation. CPU dry runs are free. Details in `evidence/ledgers/rl-envs.json`.
+- **Planning accuracy:** `strl plan` now calibrates coding estimates from these runs. It predicts 29.7 s/step against 27.7 s measured.
+
+### Limits
+
+- **Single seed per arm.** The −2.71-point difference between reward designs is within noise.
+- **One model size:** 0.8B. The model switch to Qwen3-1.7B is canary-verified only.
+- **Harbor (agentic) tier:** canary-level evidence only. `can-hb-f` completed 2 real updates through Terminus-2 in Modal
+  sandboxes, with 0 environment failures and a 6% base pass rate on 16 tasks. At about 480 s per step for 32 trajectories per
+  GPU, a meaningful Harbor training run needs more than this program's budget. See the skill's `references/validation.md`.
+- **Not GPU-verified:** multi-node and fully-async training.
+
+## GSM8K · Qwen3.5-0.8B · 8×H100 (attempt q35v2-a1, original code `2916fb9`)
 
 ScaleTrain job `job_db2hb8sf8c4g07jroc60` (COMPLETED), W&B `mohamed-elfeki/qwen35-grpo-gsm8k/q35v2261006153651`. Qwen3.5-0.8B, SkyRL GRPO, 36 updates on one 8×H100 node; checkpoint selected on validation only (step 36).
 
-## Official GSM8K test (1,319 paired examples, greedy, identical decoding and scorer)
+### Official GSM8K test (1,319 paired examples, greedy, identical decoding and scorer)
 
 | model | correct | accuracy | truncated | no `#### n` line |
 | --- | --- | --- | --- | --- |
@@ -11,7 +210,7 @@ ScaleTrain job `job_db2hb8sf8c4g07jroc60` (COMPLETED), W&B `mohamed-elfeki/qwen3
 
 Delta **+18.04 points**, paired 95% bootstrap CI [+15.31, +20.77]. Flips: 312 fixed (wrong→right), 74 broken (right→wrong), 596 both right, 337 both wrong.
 
-## Validation (256 train-derived examples, greedy)
+### Validation (256 train-derived examples, greedy)
 
 | step | correct | accuracy |
 | --- | --- | --- |
@@ -21,15 +220,15 @@ Delta **+18.04 points**, paired 95% bootstrap CI [+15.31, +20.77]. Flips: 312 fi
 | 30 | 190/256 | 74.22% |
 | 36 | 186/256 | 72.66% |
 
-## Training efficiency (measured)
+### Training efficiency (measured)
 
 - median step 51.2s (generate 35.1s, policy train 5.0s); 3736 tokens/s/GPU; 512 rollouts per step.
 - worker wall time 2756s (bootstrap ~35s, training+validation ~2561s, final test eval of 2×1,319 examples 132s); scheduler allocation <=~3,010s (ledger, conservative) of the 3,600s budget.
 - the checkpoint is chosen among exported steps only (exports at step 20 and at the deadline step); an unexported step with higher validation accuracy is not eligible.
 
-## Examples the base model failed and the trained model solved
+### Examples the base model failed and the trained model solved
 
-### 1. `gsm8k-test-00000` · base failure: no_final_answer_line · truth `18`
+#### 1. `gsm8k-test-00000` · base failure: no_final_answer_line · truth `18`
 
 **Question**
 
@@ -67,7 +266,7 @@ Let's break down Janet's daily earnings step by step:
 #### 18
 ```
 
-### 2. `gsm8k-test-00002` · base failure: no_final_answer_line · truth `70000`
+#### 2. `gsm8k-test-00002` · base failure: no_final_answer_line · truth `70000`
 
 **Question**
 
@@ -112,7 +311,7 @@ Let's break down the calculation step by step:
 #### 70000
 ```
 
-### 3. `gsm8k-test-00075` · base failure: truncated · truth `60`
+#### 3. `gsm8k-test-00075` · base failure: truncated · truth `60`
 
 **Question**
 
@@ -169,7 +368,7 @@ Average = $\frac{240}{4} = 60$
 #### 60
 ```
 
-### 4. `gsm8k-test-00108` · base failure: truncated · truth `50`
+#### 4. `gsm8k-test-00108` · base failure: truncated · truth `50`
 
 **Question**
 
@@ -234,7 +433,7 @@ So, Henry baked 50 cookies last year.
 #### 50
 ```
 
-### 5. `gsm8k-test-00009` · base failure: wrong_answer · truth `460`
+#### 5. `gsm8k-test-00009` · base failure: wrong_answer · truth `460`
 
 **Question**
 

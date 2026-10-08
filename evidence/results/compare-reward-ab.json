@@ -1,0 +1,173 @@
+{
+  "runs": [
+    {
+      "attempt": "ab-binary-a1",
+      "experiment": "mbpp-qwen35-binary",
+      "sha": "96c3952728af9601",
+      "reward": "1.0*pass_all_tests",
+      "model": "Qwen/Qwen3.5-0.8B",
+      "curves": {
+        "optimizer_steps": 66,
+        "train/learning_signal_fraction": {
+          "first": 0.375,
+          "last": 0.75,
+          "max": 0.75
+        },
+        "reward/avg_raw_reward": {
+          "first": 0.15625,
+          "last": 0.58203125,
+          "max": 0.6484375
+        },
+        "eval/task_metric": {
+          "first": 0.19791666666666666,
+          "last": 0.4166666666666667,
+          "max": 0.4270833333333333
+        },
+        "train/pass_at_1": {
+          "first": 0.15625,
+          "last": 0.58203125,
+          "max": 0.6484375
+        },
+        "timing/step": {
+          "first": 121.95758748054504,
+          "last": 42.55413317680359,
+          "max": 121.95758748054504
+        },
+        "reward_components": {
+          "pass_all_tests": {
+            "first": 0.15625,
+            "last": 0.58203125
+          }
+        },
+        "critic_modes": {
+          "syntax_or_runtime_error": 0.3942307692307692,
+          "wrong_algorithm": 0.375,
+          "misread_task": 0.11538461538461539,
+          "edge_case": 0.057692307692307696,
+          "arithmetic_error": 0.038461538461538464
+        }
+      },
+      "test": {
+        "examples": 663,
+        "baseline_accuracy": 0.23378582202111614,
+        "candidate_accuracy": 0.36048265460030166,
+        "accuracy_delta": 0.12669683257918551,
+        "ci_level": 0.95,
+        "ci_lower": 0.09200603318250378,
+        "ci_upper": 0.16289592760180996,
+        "quality_passed": true
+      },
+      "by_source": {
+        "mbpp": {
+          "examples": 499,
+          "base_pass_at_1": 0.20440881763527055,
+          "trained_pass_at_1": 0.374749498997996,
+          "delta": 0.17034068136272543
+        },
+        "humaneval": {
+          "examples": 164,
+          "base_pass_at_1": 0.3231707317073171,
+          "trained_pass_at_1": 0.3170731707317073,
+          "delta": -0.0060975609756097615
+        }
+      },
+      "optimizer_steps": 66,
+      "elapsed_seconds": 3043.352835893631
+    },
+    {
+      "attempt": "ab-partial-a1",
+      "experiment": "mbpp-qwen35-partial",
+      "sha": "149c32d3da5789b8",
+      "reward": "1.0*pass_all_tests + 0.5*partial_tests",
+      "model": "Qwen/Qwen3.5-0.8B",
+      "curves": {
+        "optimizer_steps": 69,
+        "train/learning_signal_fraction": {
+          "first": 0.625,
+          "last": 0.6875,
+          "max": 1.0
+        },
+        "reward/avg_raw_reward": {
+          "first": 0.20768229166666669,
+          "last": 0.796875,
+          "max": 1.0703125
+        },
+        "eval/task_metric": {
+          "first": 0.19791666666666666,
+          "last": 0.3020833333333333,
+          "max": 0.4479166666666667
+        },
+        "train/pass_at_1": {
+          "first": 0.12890625,
+          "last": 0.5078125,
+          "max": 0.6796875
+        },
+        "timing/step": {
+          "first": 123.83978056907654,
+          "last": 32.5362114906311,
+          "max": 123.83978056907654
+        },
+        "reward_components": {
+          "partial_tests": {
+            "first": 0.15755208333333334,
+            "last": 0.578125
+          },
+          "pass_all_tests": {
+            "first": 0.12890625,
+            "last": 0.5078125
+          }
+        },
+        "critic_modes": {
+          "wrong_algorithm": 0.375,
+          "syntax_or_runtime_error": 0.3269230769230769,
+          "misread_task": 0.15384615384615385,
+          "arithmetic_error": 0.0673076923076923,
+          "edge_case": 0.0673076923076923
+        }
+      },
+      "test": {
+        "examples": 663,
+        "baseline_accuracy": 0.23378582202111614,
+        "candidate_accuracy": 0.3333333333333333,
+        "accuracy_delta": 0.09954751131221719,
+        "ci_level": 0.95,
+        "ci_lower": 0.06334841628959276,
+        "ci_upper": 0.13574660633484162,
+        "quality_passed": true
+      },
+      "by_source": {
+        "mbpp": {
+          "examples": 499,
+          "base_pass_at_1": 0.20440881763527055,
+          "trained_pass_at_1": 0.34468937875751504,
+          "delta": 0.1402805611222445
+        },
+        "humaneval": {
+          "examples": 164,
+          "base_pass_at_1": 0.3231707317073171,
+          "trained_pass_at_1": 0.29878048780487804,
+          "delta": -0.024390243902439046
+        }
+      },
+      "optimizer_steps": 69,
+      "elapsed_seconds": 3015.8728234767914
+    }
+  ],
+  "pairs": [
+    {
+      "a": "ab-binary-a1",
+      "b": "ab-partial-a1",
+      "examples": 663,
+      "b_minus_a": {
+        "examples": 663,
+        "baseline_accuracy": 0.36048265460030166,
+        "candidate_accuracy": 0.3333333333333333,
+        "accuracy_delta": -0.027149321266968326,
+        "ci_level": 0.95,
+        "ci_lower": -0.06184012066365008,
+        "ci_upper": 0.007541478129713424,
+        "quality_passed": false
+      }
+    }
+  ]
+}

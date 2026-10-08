@@ -1,0 +1,2 @@
+{"model": "openai/gpt-6-luna", "split": "validation", "tasks": 20, "pass_at_1": 0.9, "by_source": {"mbpp": 0.9}, "failure_classes": {"ok": 18, "wrong_answer": 2}, "seconds": 36.7, "cost_usd": 0.0037}
+{"model": "openai/gpt-6-luna", "split": "validation", "tasks": 10, "pass_at_1": 0.7, "by_source": {"mbpp": 0.7}, "failure_classes": {"wrong": 3, "ok": 7}, "seconds": 152.7, "cost_usd": 0}

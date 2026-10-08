@@ -1,0 +1,67 @@
+{
+  "attempt": "ab-partial-a1",
+  "experiment": "mbpp-qwen35-partial",
+  "experiment_sha": "149c32d3da5789b8",
+  "environment": "coding_exec",
+  "examples": 663,
+  "worker_vs_independent_disagreements": {
+    "base": 0,
+    "trained": 0
+  },
+  "disagreement_ids": {
+    "base": [],
+    "trained": []
+  },
+  "test": {
+    "examples": 663,
+    "baseline_accuracy": 0.23378582202111614,
+    "candidate_accuracy": 0.3333333333333333,
+    "accuracy_delta": 0.09954751131221719,
+    "ci_level": 0.95,
+    "ci_lower": 0.06334841628959276,
+    "ci_upper": 0.13574660633484162,
+    "quality_passed": true
+  },
+  "flips": {
+    "fixed": 110,
+    "broken": 44,
+    "both_correct": 111,
+    "both_wrong": 398
+  },
+  "worker_test": {
+    "examples": 663,
+    "baseline_accuracy": 0.23378582202111614,
+    "candidate_accuracy": 0.3333333333333333,
+    "accuracy_delta": 0.09954751131221719,
+    "ci_level": 0.95,
+    "ci_lower": 0.06334841628959276,
+    "ci_upper": 0.13574660633484162,
+    "quality_passed": true
+  },
+  "optimizer_steps": 69,
+  "selected_step": 50,
+  "by_source": {
+    "mbpp": {
+      "examples": 499,
+      "base_pass_at_1": 0.20440881763527055,
+      "trained_pass_at_1": 0.34468937875751504,
+      "delta": 0.1402805611222445
+    },
+    "humaneval": {
+      "examples": 164,
+      "base_pass_at_1": 0.3231707317073171,
+      "trained_pass_at_1": 0.29878048780487804,
+      "delta": -0.024390243902439046
+    }
+  },
+  "phases": {
+    "worker_start": 1791315822.55175,
+    "ray_ready": 1791315862.0865037,
+    "training_end": 1791318692.7128499,
+    "eval_start": 1791318721.43327,
+    "eval_end": 1791318838.4740894,
+    "finished": 1791318838.5274563
+  },
+  "elapsed_seconds": 3015.8728234767914,
+  "verified": true
+}

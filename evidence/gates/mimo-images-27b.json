@@ -1,0 +1,724 @@
+{
+  "distinct_images": 103,
+  "reason": null,
+  "results": [
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-001404",
+      "ok": true,
+      "seconds": 2.2,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000588",
+      "ok": true,
+      "seconds": 2.5,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-19175",
+      "ok": true,
+      "seconds": 2.2,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42479691",
+      "ok": true,
+      "seconds": 1.8,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "python:3.12-slim",
+      "ok": true,
+      "seconds": 1.7,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:general-agent-env-0",
+      "ok": true,
+      "seconds": 2.0,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:webdev-rl-opensource",
+      "ok": true,
+      "seconds": 2.0,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000110",
+      "ok": true,
+      "seconds": 69.5,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000803",
+      "ok": true,
+      "seconds": 84.3,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-001423",
+      "ok": true,
+      "seconds": 61.7,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000732",
+      "ok": true,
+      "seconds": 154.7,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000191",
+      "ok": true,
+      "seconds": 196.6,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-001559",
+      "ok": true,
+      "seconds": 49.0,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-001339",
+      "ok": true,
+      "seconds": 209.5,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-001356",
+      "ok": true,
+      "seconds": 146.8,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-001179",
+      "ok": true,
+      "seconds": 256.5,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-001519",
+      "ok": true,
+      "seconds": 136.4,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002131",
+      "ok": true,
+      "seconds": 97.2,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000418",
+      "ok": true,
+      "seconds": 315.9,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002411",
+      "ok": true,
+      "seconds": 48.1,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-001994",
+      "ok": true,
+      "seconds": 126.4,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-001747",
+      "ok": true,
+      "seconds": 153.6,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-001160",
+      "ok": true,
+      "seconds": 376.3,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-001901",
+      "ok": true,
+      "seconds": 183.9,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002773",
+      "ok": true,
+      "seconds": 58.6,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002349",
+      "ok": true,
+      "seconds": 149.3,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-16531",
+      "ok": true,
+      "seconds": 70.5,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-25167",
+      "ok": true,
+      "seconds": 54.2,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002415",
+      "ok": true,
+      "seconds": 130.6,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-20747",
+      "ok": true,
+      "seconds": 79.1,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-388905046",
+      "ok": true,
+      "seconds": 67.5,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-39056",
+      "ok": true,
+      "seconds": 65.0,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002772",
+      "ok": true,
+      "seconds": 158.7,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42482100",
+      "ok": true,
+      "seconds": 55.2,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42473518",
+      "ok": true,
+      "seconds": 71.4,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42483697",
+      "ok": true,
+      "seconds": 68.6,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-40317",
+      "ok": true,
+      "seconds": 125.9,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42486834",
+      "ok": true,
+      "seconds": 88.2,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42517938",
+      "ok": true,
+      "seconds": 68.6,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42504520",
+      "ok": true,
+      "seconds": 84.9,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42528228",
+      "ok": true,
+      "seconds": 76.0,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42538772",
+      "ok": true,
+      "seconds": 70.3,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42485350",
+      "ok": true,
+      "seconds": 139.1,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42538984",
+      "ok": true,
+      "seconds": 58.8,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-52181",
+      "ok": true,
+      "seconds": 69.4,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-5365",
+      "ok": true,
+      "seconds": 68.0,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": "RemoteError: Image build for im-u0O7ffMxalS6td9Ryq8UgM failed. See build logs for more details. (Hint: Use `modal.enable_output()` to see logs from the process building the Image.)",
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:general-agent-env-8",
+      "ok": false,
+      "seconds": 39.4
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-59532",
+      "ok": true,
+      "seconds": 62.7,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000141",
+      "ok": true,
+      "seconds": 2.1,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002771",
+      "ok": true,
+      "seconds": 352.0,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-6011",
+      "ok": true,
+      "seconds": 75.8,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000240",
+      "ok": true,
+      "seconds": 1.7,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": "RemoteError: Image build for im-MqkLD3cKmz9VZJ2r8EV7l5 failed. See build logs for more details. (Hint: Use `modal.enable_output()` to see logs from the process building the Image.)",
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:general-agent-env-22",
+      "ok": false,
+      "seconds": 54.9
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-432880859",
+      "ok": true,
+      "seconds": 133.6,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-62435",
+      "ok": true,
+      "seconds": 91.3,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000026",
+      "ok": true,
+      "seconds": 61.7,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000159",
+      "ok": true,
+      "seconds": 53.9,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000227",
+      "ok": true,
+      "seconds": 47.2,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000013",
+      "ok": true,
+      "seconds": 145.1,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000521",
+      "ok": true,
+      "seconds": 102.9,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000795",
+      "ok": true,
+      "seconds": 99.9,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000250",
+      "ok": true,
+      "seconds": 135.3,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000836",
+      "ok": true,
+      "seconds": 153.7,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000936",
+      "ok": true,
+      "seconds": 163.1,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000756",
+      "ok": true,
+      "seconds": 197.8,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002295",
+      "ok": true,
+      "seconds": 84.2,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002915",
+      "ok": true,
+      "seconds": 1.7,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002922",
+      "ok": true,
+      "seconds": 1.8,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-001689",
+      "ok": true,
+      "seconds": 95.6,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-001171",
+      "ok": true,
+      "seconds": 139.5,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-001396",
+      "ok": true,
+      "seconds": 155.3,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002856",
+      "ok": true,
+      "seconds": 84.7,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002414",
+      "ok": true,
+      "seconds": 114.8,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-27517",
+      "ok": true,
+      "seconds": 1.8,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-21296",
+      "ok": true,
+      "seconds": 55.3,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002721",
+      "ok": true,
+      "seconds": 126.9,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-22556",
+      "ok": true,
+      "seconds": 64.4,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002970",
+      "ok": true,
+      "seconds": 121.8,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-344",
+      "ok": true,
+      "seconds": 2.5,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-000281",
+      "ok": true,
+      "seconds": 328.7,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-3608",
+      "ok": true,
+      "seconds": 1.9,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-2603",
+      "ok": true,
+      "seconds": 53.8,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-27719",
+      "ok": true,
+      "seconds": 65.7,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002983",
+      "ok": true,
+      "seconds": 156.3,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-28123",
+      "ok": true,
+      "seconds": 92.4,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-36793",
+      "ok": true,
+      "seconds": 64.2,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42479300",
+      "ok": true,
+      "seconds": 72.0,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-28239",
+      "ok": true,
+      "seconds": 119.9,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42470142",
+      "ok": true,
+      "seconds": 103.5,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42487660",
+      "ok": true,
+      "seconds": 77.7,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42492173",
+      "ok": true,
+      "seconds": 71.4,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42474963",
+      "ok": true,
+      "seconds": 134.5,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42491638",
+      "ok": true,
+      "seconds": 79.7,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42533954",
+      "ok": true,
+      "seconds": 3.6,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42475818",
+      "ok": true,
+      "seconds": 146.4,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42492801",
+      "ok": true,
+      "seconds": 70.1,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42519362",
+      "ok": true,
+      "seconds": 63.9,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": "RemoteError: Image build for im-Vj31C4jdBwfBgrhBSzov1w failed. See build logs for more details. (Hint: Use `modal.enable_output()` to see logs from the process building the Image.)",
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:general-agent-env-17",
+      "ok": false,
+      "seconds": 39.0
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42504591",
+      "ok": true,
+      "seconds": 102.8,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42538975",
+      "ok": true,
+      "seconds": 69.2,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-42516159",
+      "ok": true,
+      "seconds": 114.1,
+      "tmux_version": "tmux 3.4"
+    },
+    {
+      "error": "RemoteError: Image build for im-b1UDsxxm2M9kqXU78kdJBp failed. See build logs for more details. (Hint: Use `modal.enable_output()` to see logs from the process building the Image.)",
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:general-agent-env-14",
+      "ok": false,
+      "seconds": 82.4
+    },
+    {
+      "error": null,
+      "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:arvo-v1-63725",
+      "ok": true,
+      "seconds": 85.4,
+      "tmux_version": "tmux 3.4"
+    }
+  ],
+  "stopped_early": false
+}

@@ -1,0 +1,108 @@
+# Base experiment: MiMo-V2.6-RL-oss multi-domain agentic RL (music, cyber, code, general, webdev) on Harbor/Modal, Qwen3.8-27B on
+# 2 x p5.48xlarge (16 H100). One trainer, domain-stratified batches (8 prompts per domain per step), the native graders as the reward.
+#   SkyRL trainer -> MimoHarborGenerator -> Harbor Trial (Terminus-2 | single-shot agent) -> Modal sandbox -> verifier [+ LLM judge]
+# Held-out evaluation runs INSIDE training (eval/<domain>/task_metric, eval/macro_task_metric): the same agent, each held-out task
+# `eval_repeats` times; there is no offline final eval. Prepare once: `strl prepare` (selection + task export), then plan/stage.
+name: mimo-base
+description: MiMo-V2.6-RL-oss, five domains, Qwen3.8-27B, 2 nodes x 8 H100
+extends: base/infra.yaml
+
+model:
+  id: Qwen/Qwen3.8-27B
+  revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
+  local_path: assets/models/Qwen3.8-27B
+  profile: qwen3_5                  # Qwen3_5ForConditionalGeneration (hybrid GDN): forced so `strl plan` works offline
+
+environment:
+  name: mimo
+  harbor:
+    max_turns: 30                   # default agent episodes; each task's strl.json may override
+    max_seq_len: 32768              # ONE context size for the vLLM engine, the agent and the trainer
+    max_concurrency: 256            # concurrent Modal sandboxes (HarborGenerator rate limiter)
+    trajectories_per_second: 8
+  mimo:
+    revision: 639865fd              # XiaomiMiMo/MiMo-V2.6-RL-oss; parquet sha256 pinned in strl/tasks/mimo/data.py
+    seed: 17
+    eval_repeats: 2                 # every held-out task is evaluated this many times (eval noise = rep_std)
+    canary: 2                       # held-out tasks per domain in the canary validation set
+    step_deadline_sec: 1800         # trials still running after this are cancelled and masked ('deadline'); + 600 s must fit budget.stall_seconds
+    timeout_policy: score           # agent/verifier timeouts are scored by the verifier (a slow policy fails); 'mask' masks the group
+    judge: {model: openai/gpt-6-luna, votes: 1, eval_votes: 3, concurrency: 16, timeout_s: 120}
+    domains:                        # train: tasks drawn for training; test: fixed grouped held-out tasks; weight: share of each step
+      music:   {train: 24, weight: 1.0, test: 24, max_prompt_tokens: 4096}
+      cyber:   {train: 24, weight: 1.0, test: 24, max_prompt_tokens: 4096}
+      code:    {train: 24, weight: 1.0, test: 24, max_prompt_tokens: 4096, max_agent_sec: 900, max_verifier_sec: 600}   # defaults 1200 + 900 do not fit the step deadline
+      general: {train: 24, weight: 1.0, test: 24, max_prompt_tokens: 4096}
+      webdev:  {train: 24, weight: 1.0, test: 24, max_prompt_tokens: 4096}
+
+reward:
+  components:
+    - {fn: verifier_score, weight: 1.0}   # the native grader (reward.txt, or the judged final); other terms are out of scope for mimo
+
+algorithm:
+  prompts_per_step: 40              # 8 per domain at equal weights
+  minibatch_prompts: 40             # == prompts_per_step -> one on-policy update per step
+  n_samples: 6
+  micro_train_per_gpu: 1            # 32k-token step-wise sequences: one per GPU per micro-batch
+  micro_forward_per_gpu: 1
+  lr: 1.0e-06
+  use_kl_loss: false
+  grpo_norm_by_std: false           # continuous judged rewards: std normalisation would amplify tiny group variance
+  temperature: 1.0
+  max_prompt_tokens: 4096
+  eval_temperature: 1.0
+  max_generate_length: 2048         # per agent turn
+  max_steps: 100
+
+inference:
+  tensor_parallel_size: 2
+  gpu_memory_utilization: 0.5
+  engine_init_kwargs:               # the profile adds gdn_prefill_backend=triton, language_model_only, disable_custom_all_reduce
+    trust_remote_code: true
+    compilation_config: {pass_config: {fuse_allreduce_rms: false}}   # vLLM allocates NCCL communicators before the memory check
+
+evaluation:
+  interval_steps: 5
+  checkpoint_interval_steps: 10
+  max_checkpoints: 2
+  final_eval: false                 # agents cannot run in the offline evaluator: eval/* inside training is the yardstick
+  fixed_qualitative_samples: 16
+  training_groups_to_log: 2
+
+compute:
+  nodes: 2
+  gpus_per_node: 8
+
+budget:
+  total_seconds: 21600
+  attempt_max_seconds: 7200
+  stall_seconds: 3000
+  canary_max_seconds: 4800
+  save_optimizer_state: false
+  ledger: evidence/ledgers/mimo-27b.json
+
+limits:
+  max_nodes: 2
+  max_attempt_seconds: 7200
+
+tracking:
+  project: scaletrain-rl-envs
+  group: mimo-multidomain
+  critic:
+    enabled: true
+    model: openai/gpt-6-luna
+    every_n_steps: 1
+    max_rows: 8
+    budget_usd: 5.0
+
+services:
+  modal:
+    credentials_uri: s3://scale-ml/tmp/mohamedelfeki/scaletrain/modal-harbor/private/mh-cpu-261006a-modal.env
+    environment: main
+    sandbox_secret: modal-proxy-user
+  litellm:
+    key_name: HIL_BENCH_EVAL_1
+    project_id: 696011502a26dc4a64b24f55
+
+run:
+  data_dir: assets/mimo/data

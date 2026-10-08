@@ -1,0 +1,30 @@
+{
+  "domain": "code",
+  "nop": {
+    "all_zero_no_infra": true,
+    "bad": [],
+    "n": 2,
+    "results": [
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 16.6,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/code/code-format-code-task-000588__Xd4aVzv",
+        "verifier_note": "",
+        "verifier_ran": true
+      },
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 43.5,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/code/code-format-code-task-001404__ZGXZQti",
+        "verifier_note": "",
+        "verifier_ran": true
+      }
+    ]
+  },
+  "task_dirs": [
+    "assets/mimo/data-smoke/tasks/test/code-format-code-task-000588",
+    "assets/mimo/data-smoke/tasks/test/code-format-code-task-001404"
+  ]
+}

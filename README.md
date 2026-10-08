@@ -1,81 +1,150 @@
-# Qwen3.5-0.8B · SkyRL GRPO · GSM8K · one 8×H100 node on ScaleTrain
+# RL post-training of open-weight LLMs on ScaleTrain: GSM8K vs RL environments
 
-Full-parameter GRPO of `Qwen/Qwen3.5-0.8B` on GSM8K with [SkyRL](https://github.com/NovaSky-AI/SkyRL), run as a single
-ScaleTrain job on one `p5.48xlarge` (8×H100) within a hard one-hour allocation budget. The job trains, selects a checkpoint
-on a train-derived validation split, then compares base vs trained on the untouched official GSM8K test split (1,319
-paired examples) and logs examples the base model got wrong and the trained model got right.
+One experiment platform (`strl`) for GRPO post-training with [SkyRL](https://github.com/NovaSky-AI/SkyRL) on ScaleTrain H100s, with:
+- **W&B** for quantitative curves and qualitative tables;
+- **Modal** for executed rewards and agent sandboxes;
+- **Harbor** for agentic tasks;
+- **LiteLLM** for a trajectory critic.
 
-This repo is the code only. Launching, capacity checks and submission use the (not included) `scaletrain-services` Claude
-Code skill's helpers (`scripts/run.py capacity|scaletrain|lifecycle`); any equivalent `scale-train` CLI flow works.
+You change three axes in one YAML file; everything else is derived, validated and kept stable:
 
-## Result (job `job_db2hb8sf8c4g07jroc60`, COMPLETED; details and examples in [RESULTS.md](RESULTS.md))
-
-| Official GSM8K test, 1,319 paired examples | base | trained (36 GRPO updates) |
+| Axis | Where | Shipped |
 | --- | --- | --- |
-| accuracy | 50.80% (670) | **68.84% (908)** |
+| **model** | `model.id` + `model.revision` (profile auto-detected from `config.json`) | `qwen3_5` (GPU-verified), `qwen3` (canary-verified), `llama`, `generic` |
+| **RL environment** | `environment.name` | `gsm8k`, `coding_exec` (MBPP/HumanEval, tests run in Modal), `coding_harbor` (Terminus-2 agent in Modal sandboxes) |
+| **reward design** | `reward.components`: a weighted sum of named terms, or your own `module:function` | `pass_all_tests`, `partial_tests`, `compiles`, `no_suspicious_code`, `strict_answer`, `length_penalty`, `format_ok`, ... |
 
-+18.04 points, paired 95% bootstrap CI [+15.31, +20.77]; 312 problems fixed, 74 broken. Validation (train-derived) rose 51.6% → 72.7%.
-One run, 8×H100, ~46 min of worker time (≤ ~3,010 s of the 3,600 s allocation), median 51 s/step, ~3.7k tokens/s/GPU.
-Efficiency is provisional: only this configuration was measured. Rollout generation (35 s of a 51 s step, eager vLLM) is the bottleneck.
+Held-out evaluation always reports the environment's **task metric** (accuracy or pass@1), never the training reward. That
+keeps runs that change different axes comparable on one yardstick.
 
-## Design (what makes it efficient)
+The agent-facing manual is the in-repo Claude Code skill [`.claude/skills/scaletrain-rl/SKILL.md`](.claude/skills/scaletrain-rl/SKILL.md).
+Its [decision-points reference](.claude/skills/scaletrain-rl/references/decision-points.md) lists every knob, its mechanism, its
+expected effect, and the W&B key that shows the effect.
 
-| Choice | Why |
-| --- | --- |
-| 1 node × 8 GPUs, 8 colocated TP1 vLLM engines + 8-rank FSDP policy/ref | A 0.8B model needs no cross-node traffic; removes Ray/NCCL rendezvous and custom placement |
-| 64 prompts × 8 samples per step = 512 rollouts (64/GPU), 1 on-policy update per step | Even divisibility, no off-policy staleness |
-| Time-bounded training (`GRPO_TRAIN_DEADLINE`), not step-bounded | Uses all of the budget except a reserved final-eval window |
-| Checkpoint/HF export every 20 steps + at the deadline; S3 sync runs in a background loop and skips optimizer shards | Nothing blocks the training loop on uploads |
-| Lightweight 2-step canary inside the same job (finite, nonzero gradient) | No separate GPU canary job |
-| Final test eval: base on GPUs 0-3 and trained on GPUs 4-7 concurrently, 4 shards each | ~1 model-load + 1 generation round instead of 4 sequential ones |
-| CPU-only preflight job (`m5.2xlarge`) against the exact 8-GPU overrides | Parser, `validate_cfg`, generator checks, reward/metrics contracts and imports are verified before any GPU is requested |
+## GSM8K vs RL environments
+
+| | GSM8K (`experiments/gsm8k-qwen35.yaml`) | Coding RL environment (`experiments/mbpp-qwen35-*.yaml`) |
+| --- | --- | --- |
+| Task | single-turn math, `#### <number>` answer | single-turn python: one fenced code block per MBPP/HumanEval task |
+| Reward | in-process strict scorer | the program runs against hidden tests in a deployed **Modal** executor (`strl-code-exec`): no network, rlimits, non-root, nonce-gated pass, candidate `__eq__` rejected |
+| Infra failure handling | n/a | a Modal error masks the whole GRPO group (`environment/masked_group_fraction`), so it is never mislabelled as a wrong answer |
+| Data | GSM8K train → seeded validation split; official 1,319-example test | MBPP train+validation (364 train / 96 validation after reference validation); held-out MBPP-test (499) + HumanEval (164) |
+| Monitoring | SkyRL curves, `trajectories/*`, `qualitative/fixed_validation` | the same, plus `environment/reward_components/*`, `environment/failure/*` classes, `train/learning_signal_fraction`, `environment/exec_latency_s`, and a LiteLLM critic table `qualitative/critic` |
+| External services | W&B only | W&B, Modal, LiteLLM (critic) |
+| Agentic variant | - | `coding_harbor`: the same tasks as Harbor task dirs; Terminus-2 operates a Modal sandbox, and the verifier runs the same harness |
+
+Both run through the same worker, budget ledger, watchdog, checkpoint selection (validation only), paired-bootstrap final
+eval and independent re-scoring (`strl verify`).
+
+## Results
+
+Full tables, examples and job IDs are in [RESULTS.md](RESULTS.md). Raw evidence is under `evidence/`.
+
+- **GSM8K, Qwen3.5-0.8B, one 8×H100 node, 36 GRPO updates:** official test accuracy went from 50.80% to **68.84%**
+  (+18.04 points, paired 95% CI [+15.31, +20.77]), verified independently. The refactored code reproduces the original run's 76 SkyRL
+  overrides, job command and scorer decisions exactly (golden tests). A 1-GPU canary on the new code also completed.
+- **Coding RL environment, reward-design A/B. Same model, two concurrent half-node jobs, identical except the reward.**
+  On 663 held-out MBPP-test + HumanEval tasks:
+  - Binary `pass_all_tests` went from 23.38% to **36.05%** (+12.67, CI [+9.20, +16.29]).
+  - `pass_all_tests + 0.5·partial_tests` went from 23.38% to **33.33%** (+9.95, CI [+6.33, +13.57]).
+  - Partial vs binary: −2.71 [−6.18, +0.75], not separable.
+  - Partial credit raised the learning signal (73% vs 53% of groups) and the training reward, but not the yardstick: the
+    "reward up, metric flat" effect that `strl plan` warns about, visible in W&B.
+  - 0 Modal infra errors. The LiteLLM critic cost about $0.012 per run.
+
+## Beyond one node: LoRA or full fine-tuning, 2+ nodes, and the 5-domain MiMo suite
+
+The same experiment file now also switches **how** the model is trained and **where**:
+
+| Switch | Key | Notes |
+| --- | --- | --- |
+| LoRA vs full fine-tuning | `finetune.mode: lora \| full` (+ `finetune.lora.{rank,alpha,target_modules}`) | LoRA shards the frozen base inside each node and only moves adapter gradients across nodes; full needs fast cross-node links (the probe measures them) |
+| Nodes | `compute.nodes`, `compute.gpus_per_node` (`limits.max_nodes` gates it) | S3 rendezvous, a probe (NCCL transport, all-gather GB/s, EFA), per-host LoRA adapter sync, node-aware budget (`nodes x gpus/8` per second) |
+| Large models | `strl stage-model <exp> --attempt A` | A CPU job copies the HF snapshot into S3 one shard at a time (a 55.6 GB model never goes through a laptop) |
+| Any key, no YAML edit | `strl plan\|stage <exp> --set finetune.mode=full --set environment.mimo.domains.code.train=0` | recorded in the resolved config and its sha |
+
+**MiMo suite** (`environment.name: mimo`; [XiaomiMiMo/MiMo-V2.6-RL-oss](https://huggingface.co/datasets/XiaomiMiMo/MiMo-V2.6-RL-oss)):
+pick any subset of five domains at run time, each as sandboxed Harbor tasks graded by its own verifier.
+
+| Domain | Task | Grader (reward) |
+| --- | --- | --- |
+| `music` | write a piece in ABC notation under key/tempo/meter/voice constraints (single shot) | MiMo's deterministic human-likeness scorer (`abc2midi` + 18 features) |
+| `cyber` | reproduce a known ARVO sanitizer crash from source and a binary | re-run of the agent's PoC against a pristine copy of the binary: function + bug type must match |
+| `code` | resolve a repo issue (SWE) | reset + apply the hidden test patch from our own copy, run its test command: exit 0 |
+| `general` | office-style tasks over MCP tools (and terminal-bench tasks) | in-sandbox rule checks + an outside-the-sandbox LLM rubric judge |
+| `webdev` | build a static website | in-sandbox Playwright render + an outside-the-sandbox vision judge |
+
+`experiments/mimo-qwen38-27b-lora.yaml` and `-full.yaml` are the full-size Qwen3.8-27B experiments on 2 x 8 H100 (the only edit between them is
+`finetune.mode`); `-lora-run1.yaml` fits that to the budget that was left after the verification ladder and `-lora-run1-1node.yaml` is its 1-node
+fallback (the 2-node attempt waited ~23 h for two nodes in one network domain, then was preempted: see RESULTS.md). `mimo-qwen35-0p8b-smoke.yaml` is
+the 1-GPU canary (5 domains, 4 train + 2 held-out tasks each) and `mimo-qwen35-0p8b-2node-smoke.yaml` the 2 x 8 multi-node smoke.
+
+Result of the 27B run (3 updates, LoRA): macro task metric 4.26% -> 6.38%, paired CI [-2.68, +7.08] (not significant; see RESULTS.md for the
+limits). What it demonstrates is the platform: five graders and two judges in one trainer, in-loop paired held-out evaluation, per-domain
+monitoring, and an independent `strl verify` that re-scored the evaluation without disagreement. Held-out sets are fixed per domain (grouped by project, repo, scenario or tag), so runs with a different
+training selection remain comparable; evaluation is in the training loop (step 0 = base, last step = trained) and reported per domain plus a macro average
+with paired bootstrap CIs (`strl verify`, `strl compare`, `strl report`). The verification ladder and what each rung caught are in
+[validation.md](.claude/skills/scaletrain-rl/references/validation.md).
+
+## Quickstart
+
+```bash
+uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements-local.txt
+.venv/bin/python -m unittest discover -s tests -t .                       # contract + golden tests, no network
+.venv/bin/python -m strl plan experiments/gsm8k-qwen35.yaml                # validate + derived infra + estimates + warnings (free)
+.venv/bin/python -m strl plan experiments/mbpp-qwen35-partial.yaml --against experiments/mbpp-qwen35-binary.yaml
+```
+
+Run one experiment end to end. `stage` never submits, and `submit` reconciles by job name instead of resubmitting.
+
+```bash
+E=experiments/mbpp-qwen35-binary.yaml
+.venv/bin/python -m strl fetch $E                              # pinned model snapshot + data (coding: every reference validated in Modal)
+.venv/bin/python -m strl executor deploy                       # coding only: deploy/verify the Modal executor
+.venv/bin/python -m strl overlay                               # once: Modal/Harbor packages for the training image
+.venv/bin/python -m strl capacity --gpus-per-node 8,4,1
+.venv/bin/python -m strl stage $E --attempt my-dry1 --mode dry    && .venv/bin/python -m strl submit evidence/my-dry1/job.json
+.venv/bin/python -m strl stage $E --attempt my-can1 --mode canary && .venv/bin/python -m strl submit evidence/my-can1/job.json
+.venv/bin/python -m strl stage $E --attempt my-a1 --mode train    && .venv/bin/python -m strl submit evidence/my-a1/job.json
+.venv/bin/python -m strl monitor $E --attempt my-a1 --job-id <job_id>
+.venv/bin/python -m strl ledger $E --attempt my-a1 --job-id <job_id>
+.venv/bin/python -m strl verify $E --attempt my-a1
+.venv/bin/python -m strl compare $E:my-a1 experiments/mbpp-qwen35-partial.yaml:<attempt>
+```
+
+The modes:
+- `dry` (CPU, `m5.2xlarge`) proves everything except the GPUs in the real image: credentials, the SkyRL parser and
+  `validate_cfg` at the target GPU count, reward contracts, executor calls from the pod, W&B readback, and a critic call.
+- `canary` (`p5.48xlarge:1`, capped at `canary_max_seconds` + 600 s: 30 min by default, 50 min for Harbor) trains 2 real updates with the same model, environment and reward, then checks
+  every W&B table.
+- `train` is time-bounded by the budget ledger.
 
 ## Layout
 
-- `config.yaml` – every pin and hyper-parameter (model/dataset revisions, SkyRL commit, image, batch, budget, W&B, S3).
-- `q35/` – worker and library: `worker.py` (single-node supervisor), `skyrl.py` (SkyRL override builder), `entrypoint.py` /
-  `tracking.py` (W&B forwarding, deadline-aware callback, diagnostics), `runtime.py` + `ipv6_patch.py` (router overlay,
-  EOS-aware reward and metrics-port fixes), `evaluate.py` (sharded vLLM test eval), `export_adapter.py` (Qwen wrapper config
-  for vLLM reload), `finalize.py`, `stats.py`, `verify.py`, `data.py`, `answers.py`.
-- `stage.py` – uploads hash-pinned payload/model to S3 and renders `job.json`. `runtime_probe_stage.py` – renders the CPU preflight job.
-- `scripts/fetch_assets.py` – downloads the pinned model, builds the pinned dataset splits, fetches the hash-checked router wheel.
-- `tests.py` – local contract tests (`python tests.py`). `pinned/` – upstream SkyRL source snapshots used by static schema tests.
-
-## Run order
-
-```bash
-python -m pip install -r requirements-local.txt
-python scripts/fetch_assets.py                    # model + GSM8K splits + router wheel (untracked)
-python tests.py                                   # local gates
-SKILL=<path to scaletrain-services skill>
-# 1) CPU preflight in the training image (no GPU budget)
-python runtime_probe_stage.py --name q35v2-preflight-1
-python $SKILL/scripts/run.py scaletrain validate runtime-check-job.json
-python $SKILL/scripts/run.py scaletrain submit runtime-check-job.json --user-id <you> --receipt evidence/preflight-submission.json
-# 2) capacity (foundation→research without borrowing, then with borrowing)
-python $SKILL/scripts/run.py capacity --nodes 1 --gpus-per-node 8 --output evidence/capacity.json
-# 2b) optional CPU rehearsal of bootstrap/budget/services/Ray (no training)
-python stage.py --attempt q35v2-dry-1 --dry-run --output dry-job.json   # then validate + submit dry-job.json as above
-# 3) stage + submit the training job; budget comes from evidence/budget-ledger.json
-python stage.py --attempt q35v2-a1 [--team gen_ai.agents_research] [--allow-borrowing]
-python $SKILL/scripts/run.py scaletrain validate job.json
-python $SKILL/scripts/run.py scaletrain submit job.json --user-id <you> --receipt evidence/submission-a1.json
-python $SKILL/scripts/run.py scaletrain get <job_id>
-```
-
-After the job completes: `python scripts/verify_results.py --attempt q35v2-a1 --job-id <id> --wandb-run <entity/project/run_id>`
-re-downloads the outputs, re-scores them against the local test parquet, recomputes the paired bootstrap and writes `RESULTS.md`.
-Note: `scale-train submit` via the helper may raise a `TypeError` after the job was created; reconcile with `scaletrain list` by exact job name and never resubmit blindly.
-
-After a terminal attempt, append its allocated/terminal timestamps to `evidence/budget-ledger.json` before staging another one.
+| Path | Contents |
+| --- | --- |
+| `experiments/` | runnable experiments; each one `extends:` a base and changes only what it studies ([index](experiments/README.md)) |
+| `base/` | `infra.yaml` (image, storage, team, budget envelope), `gsm8k.yaml`, `coding_exec.yaml`, `coding_harbor.yaml`, `canary_overlay.yaml` |
+| `strl/experiment.py`, `derive.py`, `overrides.py` | schema + `extends` resolution + validation + `experiment_sha`; derived infra, estimates and warnings; SkyRL overrides |
+| `strl/models/` | model profiles: wrap class, packing, chat-template flags, vLLM kwargs, export adapter |
+| `strl/tasks/` | environments: `gsm8k/`, `coding/` (data, Modal executor + harness, rewards, group-masking generator, Harbor export, evaluator) |
+| `strl/rewards.py`, `strl/envs.py` | the reward component registry and the generic environment that applies any reward design |
+| `strl/worker.py`, `stage.py`, `entrypoint.py`, `train.py`, `runtime.py` | ScaleTrain worker (budget, credentials, watchdog, selection, final eval), staging, the SkyRL entrypoint |
+| `strl/tracking.py`, `strl/monitor/` | W&B axis/tables/alerts, the LiteLLM critic thread, live monitor, cross-run compare |
+| `strl/services/` | W&B / Modal / LiteLLM credential locators and smoke checks; no secret values anywhere in the repo |
+| `tools/` | vendored ScaleTrain submit/capacity/lifecycle helpers, the overlay builder |
+| `tests/` | unit, contract and golden-equivalence tests; `pinned/` holds the SkyRL source snapshots for static schema checks |
+| `evidence/` | budget ledgers, gate results, the verified GSM8K result; per-attempt receipts are gitignored |
 
 ## Known pitfalls baked into the code
 
-- The strict reward must strip only the terminal `<|im_end|>`/`<|endoftext|>` marker; otherwise every reward is 0.
-- Qwen3.5 hybrid (GDN) layers: `remove_microbatch_padding=false`, `language_model_only=true`, wrap `Qwen3_5DecoderLayer`.
-- `generator.batched=true` is rejected with `chat_template_kwargs` (needed for `enable_thinking=false`) only at engine start; use `batched=false`.
-- The image lacks `vllm-router==0.1.14.post1`; `q35.runtime` loads the hash-pinned wheel from a writable overlay.
-- Ray metrics discovery must skip port `-1` and bracket IPv6; both are patched.
-- SkyRL's HF export is a text-only config; vLLM needs the original wrapper config around it (`export_adapter.py`). Existing `model.language_model.*` keys must not be re-prefixed.
-- Advertise only the allocated CPUs to Ray (`q35/resources.py`), not the host's.
-- Every secret is a locator (S3 object / secrets manager). Nothing in this repo contains credential values.
+The skill's [troubleshooting reference](.claude/skills/scaletrain-rl/references/troubleshooting.md) has the full list. The ones most
+likely to bite:
+- **Silent reward bypass:** a dataset row's `env_class` overrides the configured environment in SkyRL, so a custom reward is silently
+  skipped. The generic path ignores the row column.
+- **Silent prompt drops:** SkyRL drops prompts longer than `max_prompt_tokens`. `strl prepare` asserts that none are dropped.
+- **Stale Modal versions:** a Modal deploy rolls gradually, so the old version can keep answering. `strl executor deploy` recreates
+  the app and polls until the new harness version answers.
+- **Qwen3.5 specifics:** it needs `language_model_only`, no sample packing, and a wrapped export for the vLLM reload (the `qwen3_5`
+  profile handles all three).
+- **Missing router:** the image lacks `vllm-router`, so the hash-pinned wheel is loaded from a writable overlay.

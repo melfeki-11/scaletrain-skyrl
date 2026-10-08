@@ -1,0 +1,109 @@
+{
+  "domain": "music",
+  "nop": {
+    "all_zero_no_infra": true,
+    "bad": [],
+    "n": 2,
+    "results": [
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 38.3,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/music/music-gK-0426__hx4Ed9T",
+        "verifier_note": "",
+        "verifier_ran": true
+      },
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 38.1,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/music/music-gK-0430__Gy648bV",
+        "verifier_note": "",
+        "verifier_ran": true
+      }
+    ]
+  },
+  "positive": {
+    "details": {
+      "components": {},
+      "constraint_adherence": {
+        "bars_got": 8,
+        "bpm_got": null,
+        "bpm_want": 93,
+        "bpm_within_10pct": false,
+        "length_want": "short",
+        "length_within_band": true,
+        "meter_got": "4/4",
+        "meter_match": true,
+        "meter_want": "4/4",
+        "nvoice_got": 1,
+        "nvoice_match": false,
+        "nvoice_want": 4,
+        "tag": "\u5f26\u4e50\u56db\u91cd\u594f\uff08\u6d77\u987f\u98ce\uff09"
+      },
+      "constraints": {
+        "bpm": 93,
+        "lang": "zh",
+        "length": "short",
+        "meter": "4/4",
+        "nvoice_want": 4,
+        "src_id": "gK-0426",
+        "tag": "\u5f26\u4e50\u56db\u91cd\u594f\uff08\u6d77\u987f\u98ce\uff09"
+      },
+      "domain": "music",
+      "extracted": true,
+      "groups": {
+        "acoustic": 0.0,
+        "register": 0.0,
+        "rhythm": 32.6,
+        "structure": 4.2,
+        "texture": 16.7,
+        "tonal": 66.9
+      },
+      "infra_error": false,
+      "metric": 0.228,
+      "passed": false,
+      "scorer": {
+        "abc_len": 118,
+        "bar": 0,
+        "blank": 0,
+        "ch_conflict": 0,
+        "err": 0,
+        "groups": {
+          "acoustic": 0.0,
+          "register": 0.0,
+          "rhythm": 32.6,
+          "structure": 4.2,
+          "texture": 16.7,
+          "tonal": 66.9
+        },
+        "id": 0,
+        "is_piano": null,
+        "key": "mimo_task",
+        "lang": "zh",
+        "latency": null,
+        "low_c3": 0.0,
+        "n_chan": 1,
+        "nvoice": 4,
+        "pit_max": 72,
+        "pit_min": 55,
+        "pit_range": 17,
+        "pit_std": 4.69,
+        "reject": 0,
+        "rep": 0,
+        "tag": "\u5f26\u4e50\u56db\u91cd\u594f\uff08\u6d77\u987f\u98ce\uff09",
+        "total": 22.8
+      },
+      "validity": "ok"
+    },
+    "exception": null,
+    "ok": true,
+    "reward": 0.228,
+    "verifier_note": "",
+    "verifier_ran": true
+  },
+  "task_dirs": [
+    "assets/mimo/data-smoke/tasks/test/music-gK-0426",
+    "assets/mimo/data-smoke/tasks/test/music-gK-0430"
+  ]
+}

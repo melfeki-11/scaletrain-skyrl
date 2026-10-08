@@ -1,0 +1,48 @@
+{
+ "run": "run1-n1-a",
+ "state": "finished",
+ "url": "https://scaleai.wandb.io/mohamed-elfeki/scaletrain-rl-envs/runs/run1-n1-a-261008200411",
+ "tags": [
+  "domain:code",
+  "domain:cyber",
+  "domain:general",
+  "domain:music",
+  "domain:webdev",
+  "finetune:lora",
+  "gen_ai.agent_training_foundation",
+  "grpo",
+  "mimo",
+  "nodes:1",
+  "run1",
+  "scale-train"
+ ],
+ "config_keys": 9,
+ "history_rows": 17,
+ "n_metric_keys": 282,
+ "per_domain_eval_keys": [
+  "eval/code/task_metric",
+  "eval/cyber/task_metric",
+  "eval/general/task_metric",
+  "eval/music/task_metric",
+  "eval/task_metric",
+  "eval/webdev/task_metric"
+ ],
+ "has_macro": true,
+ "tables": [],
+ "artifact_count": 15,
+ "artifact_sample": [
+  "run-run1-n1-a-261008200411-incr-trajectorieseval-ZhYnXA:v0",
+  "run-run1-n1-a-261008200411-incr-qualitativefixed_validation-AP7EQA:v0",
+  "run-run1-n1-a-261008200411-qualitativemedia-k3Apog:v0",
+  "run-run1-n1-a-261008200411-incr-trajectoriestrain-tSZ1Cg:v0",
+  "run-run1-n1-a-261008200411-incr-qualitativecritic-9YXS6w:v0",
+  "run-run1-n1-a-261008200411-incr-trajectoriestrain-tSZ1Cg:v1",
+  "run-run1-n1-a-261008200411-incr-qualitativecritic-9YXS6w:v1",
+  "run-run1-n1-a-261008200411-incr-trajectoriestrain-tSZ1Cg:v2",
+  "run-run1-n1-a-261008200411-events:v8",
+  "run-run1-n1-a-261008200411-incr-trajectorieseval-ZhYnXA:v1",
+  "run-run1-n1-a-261008200411-incr-qualitativefixed_validation-AP7EQA:v1",
+  "run-run1-n1-a-261008200411-qualitativemedia-k3Apog:v1"
+ ],
+ "alerts_ok": null
+}

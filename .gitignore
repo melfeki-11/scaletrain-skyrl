@@ -17,3 +17,17 @@ assets/data/
 assets/runtime/*.whl
 assets/runtime/packages/
 assets/model-manifest.json
+tests/.tmp/
+assets/overlay/
+assets/models/
+assets/coding/
+!evidence/ledgers/
+!evidence/ledgers/*.json
+!evidence/gates/
+!evidence/gates/*.json
+!evidence/results/
+!evidence/results/*.json
+!evidence/results/*.md
+assets/mimo/
+.claude/worktrees/
+wandb/

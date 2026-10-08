@@ -1,0 +1,65 @@
+# EXAMPLE (plan-validated only, never run on GPUs): a different model, a two-domain subset of the MiMo suite, FULL fine-tuning on one node
+# and a shaped reward (native verifier score + a turn-efficiency bonus from user_rewards/examples.py). It shows which keys to touch for
+# each axis; copy it, change the name, the ledger and the data_dir, and run the ladder in .claude/skills/scaletrain-rl/SKILL.md.
+name: mimo-example-music-code-full
+description: MiMo music+code, Qwen3.5-2B, full fine-tuning, 1 node x 8 H100, verifier_score + turn_efficiency_bonus
+extends: base/mimo.yaml
+
+model:                                  # axis 1: the model (revision = the commit sha from https://huggingface.co/api/models/<id>)
+  id: Qwen/Qwen3.5-2B
+  revision: 15852e8c16360a2fea060d615a32b45270f8a8fc
+  local_path: assets/models/Qwen3.5-2B
+
+finetune:
+  mode: full
+
+environment:                            # axis 2: the environment, here a subset of domains (train: 0 and test: 0 switches one off)
+  harbor: {max_seq_len: 16384, max_concurrency: 128, max_turns: 12}
+  mimo:
+    eval_repeats: 2
+    domains:
+      music:   {train: 16, test: 8}
+      code:    {train: 16, test: 8}
+      cyber:   {train: 0, test: 0}
+      general: {train: 0, test: 0}
+      webdev:  {train: 0, test: 0}
+
+reward:                                 # axis 3: the reward = native grader + shaping terms (training only; evaluation stays native)
+  components:
+    - {fn: verifier_score, weight: 1.0}
+    - {fn: 'user_rewards.examples:turn_efficiency_bonus', weight: 1.0, bonus: 0.05, max_turns: 12}
+
+compute:
+  nodes: 1
+  gpus_per_node: 8
+  training: {fsdp_size: 8}
+
+inference:                              # a 2B model fits one GPU per engine: TP1 x 8 engines
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.5
+
+algorithm:
+  prompts_per_step: 8                   # 4 per domain
+  minibatch_prompts: 8
+  n_samples: 8
+  lr: 1.0e-06
+  max_steps: 8
+
+evaluation:
+  interval_steps: 4
+  checkpoint_interval_steps: 4
+
+budget:                                 # a NEW program needs its own ledger file (see references/launch-and-capacity.md) and data dir
+  ledger: evidence/ledgers/mimo-example-music-code-full.json
+  attempt_max_seconds: 7200
+
+limits:
+  max_nodes: 1
+  max_attempt_seconds: 7200
+
+tracking:
+  group: mimo-example-music-code-full
+  tags: ['nodes:1', 'finetune:full', 'example']
+
+run:
+  data_dir: assets/mimo/data-example-music-code

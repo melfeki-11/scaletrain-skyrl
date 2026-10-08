@@ -1,0 +1,67 @@
+{
+  "attempt": "ab-binary-a1",
+  "experiment": "mbpp-qwen35-binary",
+  "experiment_sha": "96c3952728af9601",
+  "environment": "coding_exec",
+  "examples": 663,
+  "worker_vs_independent_disagreements": {
+    "base": 0,
+    "trained": 0
+  },
+  "disagreement_ids": {
+    "base": [],
+    "trained": []
+  },
+  "test": {
+    "examples": 663,
+    "baseline_accuracy": 0.23378582202111614,
+    "candidate_accuracy": 0.36048265460030166,
+    "accuracy_delta": 0.12669683257918551,
+    "ci_level": 0.95,
+    "ci_lower": 0.09200603318250378,
+    "ci_upper": 0.16289592760180996,
+    "quality_passed": true
+  },
+  "flips": {
+    "fixed": 117,
+    "broken": 33,
+    "both_correct": 122,
+    "both_wrong": 391
+  },
+  "worker_test": {
+    "examples": 663,
+    "baseline_accuracy": 0.23378582202111614,
+    "candidate_accuracy": 0.36048265460030166,
+    "accuracy_delta": 0.12669683257918551,
+    "ci_level": 0.95,
+    "ci_lower": 0.09200603318250378,
+    "ci_upper": 0.16289592760180996,
+    "quality_passed": true
+  },
+  "optimizer_steps": 66,
+  "selected_step": 55,
+  "by_source": {
+    "mbpp": {
+      "examples": 499,
+      "base_pass_at_1": 0.20440881763527055,
+      "trained_pass_at_1": 0.374749498997996,
+      "delta": 0.17034068136272543
+    },
+    "humaneval": {
+      "examples": 164,
+      "base_pass_at_1": 0.3231707317073171,
+      "trained_pass_at_1": 0.3170731707317073,
+      "delta": -0.0060975609756097615
+    }
+  },
+  "phases": {
+    "worker_start": 1791315822.5547023,
+    "ray_ready": 1791315862.2166734,
+    "training_end": 1791318720.4076746,
+    "eval_start": 1791318748.9194114,
+    "eval_end": 1791318865.9584026,
+    "finished": 1791318866.0126905
+  },
+  "elapsed_seconds": 3043.352835893631,
+  "verified": true
+}

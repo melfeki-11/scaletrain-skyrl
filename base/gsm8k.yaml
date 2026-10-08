@@ -1,0 +1,23 @@
+# Base experiment: Qwen3.5-0.8B on GSM8K, one 8xH100 node, 1 hour. These are the VERIFIED values (commit 2916fb9:
+# +18.04 points on GSM8K test, paired 95% CI [+15.31, +20.77]). Experiments `extends:` this file and override only
+# the keys they change; `strl plan <experiment>` prints the resolved config, the derived infrastructure and warnings.
+name: gsm8k-base
+description: GSM8K strict-answer GRPO, Qwen3.5-0.8B, 1 node x 8 H100
+
+extends: base/infra.yaml
+
+environment:
+  name: gsm8k
+  dataset:
+    id: openai/gsm8k
+    config: main
+    revision: 740312add88f781978c0658806c59bc2815b9866
+    validation_size: 256          # train-derived validation; the official test split is never used for selection
+    split_seed: 17
+    prompt_suffix: Show your work briefly. End with exactly "#### <number>".
+  test_size: 1319
+
+reward:                           # weighted sum of named components (strl/tasks/<env>/rewards.py)
+  components:
+    - {fn: strict_answer, weight: 1.0}
+

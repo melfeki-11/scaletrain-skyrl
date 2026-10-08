@@ -1,0 +1,24 @@
+{
+  "domain": "general",
+  "image_build": {
+    "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:general-agent-env-0",
+    "ok": true,
+    "seconds": 97.1
+  },
+  "mcp_sidecar_end_to_end": {
+    "verified": true,
+    "method": "Real Modal sandbox of the fully exported task s3k_2076_legal_compliance_en_t5_rl_009 (real HF env-dir fetch, real Dockerfile build). After the ENTRYPOINT ran: all 15 MCP tool servers (clio_matter_operations .. servicenow_clerk_control_desk) started under the low-privilege mcpsvc user and listened on 39101-39115; /usr/local/bin/mcp (our stdlib CLI wrapper) called search_operational_matters on clio_matter_operations through the real MCP streamable-http protocol and got back a genuine application-level response ('provide at least one matter filter'), proving the tool code itself ran (not just a transport echo). An unknown-tool call correctly returned {'is_error': true, 'content': ['Unknown tool: ...']}.",
+    "bugs_found_and_fixed": [
+      "The published general-agent-env-0 image ships `mcp` 2.2.0, whose `mcp.server.fastmcp.FastMCP` was renamed/restructured to `mcp.server.mcpserver.MCPServer`; the HF env dir's mcp_http.py (authored against mcp 1.x) crashed on import, so every per-tool subprocess the sidecar launched immediately zombied. Fixed by pinning `mcp<2` in the general Dockerfile (confirmed `mcp.client.streamable_http.streamable_http_client`, used by our CLI, exists under both 1.x and 2.x).",
+      "`pip install mcp` also installs mcp's OWN console-script at /usr/local/bin/mcp (needs `typer`, not pulled in by the pin); it was clobbering our wrapper when COPY'd before the pip install. Reordered the Dockerfile so our wrapper is copied AFTER the pip install.",
+      "Wrote our own minimal sidecar.py instead of vendoring MiMo's sidecar_entrypoint.py verbatim: that script hardcodes /opt/openai-agents-venv/bin/python, a venv path specific to MiMo's OWN training image that was not confirmed present in the published general-agent-env-0 image; ours uses the system python3 (mcp preinstalled there, confirmed by probing)."
+    ]
+  },
+  "rule_item_grading": {
+    "verified": "offline only (tests/test_mimo_graders.py::GeneralGrader) -- gate semantics (gate item fails -> force_zero=True + judge skipped-equivalent via judge_request.force_zero; non-gate rule+llm atoms weighted-averaged with default weight 1.0) exercised against a synthetic verifier_meta.json, not the real s3k_2076 task's own check_code (which needs its own SQLite state.db fixtures under system/ -- not run against those in this session)."
+  },
+  "nop_tamper_harbor_trial": {
+    "not_run": "No general_agent task was run through a full strl.tasks.coding.harbor.run_trial(nop) in this session (time/budget); only the MCP-sidecar-and-tool-call check above, which is agent-independent."
+  },
+  "judge_request_for_925_general_agent_tasks": "Deterministic (rule) items run in-sandbox via graders/general.py::run_rule_item; llm items become judge_request.json entries per the contract. See strl/tasks/mimo/graders/general.py module docstring for the exact weighting algebra (ported, with one documented deviation, from the reference sidecar's _grade_sc) -- Track A's judge.py needs to honor judge_request['force_zero'] when a gate item fails."
+}

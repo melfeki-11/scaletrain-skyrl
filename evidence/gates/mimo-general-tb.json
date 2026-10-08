@@ -1,0 +1,48 @@
+{
+  "domain": "general",
+  "nop": {
+    "all_zero_no_infra": true,
+    "bad": [],
+    "n": 4,
+    "results": [
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 9.3,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/general/general-candidate-0867-software__SMf7vwe",
+        "verifier_note": "",
+        "verifier_ran": true
+      },
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 9.0,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/general/general-candidate-1001-security__XfmagrT",
+        "verifier_note": "",
+        "verifier_ran": true
+      },
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 22.8,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/general/general-candidate-0628-media-mus__YEt3zTR",
+        "verifier_note": "",
+        "verifier_ran": true
+      },
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 8.9,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/general/general-candidate-1216-software__Wgfe4NZ",
+        "verifier_note": "",
+        "verifier_ran": true
+      }
+    ]
+  },
+  "task_dirs": [
+    "assets/mimo/data/tasks/train/general-candidate-0867-software-frontend",
+    "assets/mimo/data/tasks/train/general-candidate-1001-security-forensics",
+    "assets/mimo/data/tasks/test/general-candidate-0628-media-music",
+    "assets/mimo/data/tasks/test/general-candidate-1216-software-frontend"
+  ]
+}

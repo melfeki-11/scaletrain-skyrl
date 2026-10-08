@@ -1,0 +1,3 @@
+name: gsm8k-qwen35
+description: The GPU-verified GSM8K run (commit 2916fb9, +18.04 points); unchanged base.
+extends: base/gsm8k.yaml

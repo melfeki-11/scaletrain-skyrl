@@ -1,0 +1,67 @@
+# MiMo smoke: Qwen3.5-0.8B, LoRA r16, ONE GPU, 2 prompts per domain x 4 samples per step: proves the whole mimo path (task export,
+# domain-stratified sampler, Harbor trials, judge, per-domain eval, tables) cheaply. It is also the 1-GPU canary arm (G3).
+# Data: `strl prepare experiments/mimo-qwen35-0p8b-smoke.yaml` writes assets/mimo/data-smoke (4 train + 2 held-out per domain).
+name: mimo-qwen35-0p8b-smoke
+description: MiMo five-domain smoke, Qwen3.5-0.8B, LoRA r16, 1 GPU
+extends: base/mimo.yaml
+
+model:
+  id: Qwen/Qwen3.5-0.8B
+  revision: 2fc06364715b967f1860aea9cf38778875588b17
+  local_path: assets/model
+
+finetune:
+  mode: lora
+  lora: {rank: 16, alpha: 32, dropout: 0.0, target_modules: all-linear}
+
+environment:
+  harbor: {max_seq_len: 16384, max_concurrency: 32, max_turns: 12}
+  mimo:
+    eval_repeats: 1
+    canary: 1
+    step_deadline_sec: 600
+    domains:
+      music:   {train: 4, test: 2}
+      cyber:   {train: 4, test: 2, max_agent_sec: 240, max_verifier_sec: 120}
+      code:    {train: 4, test: 2, max_agent_sec: 240, max_verifier_sec: 120}
+      general: {train: 4, test: 2, max_agent_sec: 240, max_verifier_sec: 120}
+      webdev:  {train: 4, test: 2, max_agent_sec: 240, max_verifier_sec: 120}
+
+compute:
+  nodes: 1
+  gpus_per_node: 1
+
+inference:
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.5
+
+algorithm:
+  prompts_per_step: 10              # 2 per domain
+  minibatch_prompts: 10
+  n_samples: 4
+  micro_train_per_gpu: 1
+  micro_forward_per_gpu: 1
+  lr: 1.0e-05
+  max_steps: 4
+
+evaluation:
+  interval_steps: 2
+  checkpoint_interval_steps: 2
+  fixed_qualitative_samples: 8
+
+budget:
+  total_seconds: 21600
+  attempt_max_seconds: 3600
+  stall_seconds: 1800
+  canary_max_seconds: 3000
+
+limits:
+  max_nodes: 1
+  max_attempt_seconds: 3600
+
+tracking:
+  group: mimo-smoke
+  tags: ['finetune:lora', 'smoke']
+
+run:
+  data_dir: assets/mimo/data-smoke

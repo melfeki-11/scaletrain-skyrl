@@ -1,0 +1,18 @@
+# MiMo multi-domain RL, full fine-tuning arm: identical to the LoRA arm except finetune.mode, the full-parameter learning rate and the
+# FSDP layout (full shard over all 16 GPUs until a probe measures the cross-node bandwidth; see `strl plan`).
+name: mimo-qwen38-27b-full
+description: MiMo five-domain agentic GRPO, Qwen3.8-27B, full fine-tuning, 2 nodes x 8 H100
+extends: base/mimo.yaml
+
+finetune:
+  mode: full
+  lora: {rank: 0}
+
+compute:
+  training: {fsdp_size: null}       # full shard across both nodes
+
+algorithm:
+  lr: 1.0e-06
+
+tracking:
+  tags: ['nodes:2', 'finetune:full']

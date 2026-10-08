@@ -1,0 +1,10 @@
+# Reward A/B arm B: denser signal from the fraction of tests passed. Judge it by eval/task_metric and the held-out test, not by
+# its own reward (strl plan warns about this); watch environment/reward_components/* for terms that rise without the metric.
+name: mbpp-qwen35-partial
+description: coding_exec, Qwen3.5-0.8B, pass@1 + 0.5 x fraction of tests passed
+extends: experiments/mbpp-qwen35-binary.yaml
+reward:
+  components:
+    - {fn: pass_all_tests, weight: 1.0}
+    - {fn: partial_tests, weight: 0.5}
+tracking: {tags: ['reward:partial']}

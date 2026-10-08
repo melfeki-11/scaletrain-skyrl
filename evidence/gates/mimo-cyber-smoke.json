@@ -1,0 +1,30 @@
+{
+  "domain": "cyber",
+  "nop": {
+    "all_zero_no_infra": true,
+    "bad": [],
+    "n": 2,
+    "results": [
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 18.2,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/cyber/cyber-arvo_19175__HATLQ8Z",
+        "verifier_note": "",
+        "verifier_ran": true
+      },
+      {
+        "exception": null,
+        "reward": 0.0,
+        "seconds": 9.1,
+        "trial_dir": "/Users/mohamed.elfeki/Documents/Codex/ScaleTrain/qwen35-grpo-v2/artifacts/mimo-gate-trials/cyber/cyber-arvo_42479691__i2erQ6h",
+        "verifier_note": "",
+        "verifier_ran": true
+      }
+    ]
+  },
+  "task_dirs": [
+    "assets/mimo/data-smoke/tasks/test/cyber-arvo_19175",
+    "assets/mimo/data-smoke/tasks/test/cyber-arvo_42479691"
+  ]
+}

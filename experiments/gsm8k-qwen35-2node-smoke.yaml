@@ -1,0 +1,46 @@
+# Multi-node smoke, LoRA arm: 2 x p5.48xlarge (16 H100), Qwen3.5-0.8B on GSM8K, 2 updates. It proves the path the 27B run uses
+# (S3 rendezvous, 2-node Ray, cross-host NCCL probe + EFA detection, HSDP within a node, per-host LoRA adapter sync, cross-node
+# shard verification, LoRA export -> merged final eval) on a model small enough that failures are cheap.
+# Draws from the program ledger evidence/ledgers/mimo-27b.json (6 node-hours); a train attempt reserves 2 x 1500 s.
+name: gsm8k-qwen35-2node-smoke
+description: GSM8K GRPO, Qwen3.5-0.8B, 2 nodes x 8 H100, LoRA r16 (all-linear), 2 updates
+extends: base/gsm8k.yaml
+
+finetune:
+  mode: lora
+  lora: {rank: 16, alpha: 32, dropout: 0.0, target_modules: all-linear}
+
+compute:
+  nodes: 2
+  gpus_per_node: 8
+  training: {fsdp_size: 8}        # HSDP: shard the frozen base within a node, replicate across the 2 nodes
+
+algorithm:
+  prompts_per_step: 32            # 32 x 8 = 256 rollouts = 16 per GPU
+  minibatch_prompts: 32
+  n_samples: 8
+  micro_train_per_gpu: 8
+  micro_forward_per_gpu: 8
+  lr: 1.0e-05                     # LoRA adapters take a larger step than full fine-tuning (verified full: 2e-6)
+  max_generate_length: 512
+  max_steps: 2
+
+evaluation:
+  interval_steps: 2
+  checkpoint_interval_steps: 2    # one export at the stop step; it is the only selectable checkpoint
+  eval_shards_per_model: 4        # final eval runs on the head node's 8 GPUs
+
+budget:
+  total_seconds: 21600
+  attempt_max_seconds: 1500
+  final_eval_reserve_seconds: 300
+  canary_max_seconds: 1200
+  ledger: evidence/ledgers/mimo-27b.json
+
+limits:
+  max_nodes: 2
+  max_attempt_seconds: 7200
+
+tracking:
+  group: qwen35-2node-smoke
+  tags: ['nodes:2', 'finetune:lora']
