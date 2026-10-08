@@ -9,7 +9,7 @@ Everything is driven by ONE experiment YAML and ONE CLI, run from the repo root 
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements-local.txt   # once (~2 min)
-.venv/bin/python -m unittest discover -s tests -t .                                                # unit, contract and golden tests (246)
+.venv/bin/python -m unittest discover -s tests -t .                                                # unit, contract and golden tests (all of them load every experiment under experiments/)
 .venv/bin/python -m strl plan experiments/mbpp-qwen35-partial.yaml --against experiments/mbpp-qwen35-binary.yaml
 ```
 
@@ -20,7 +20,7 @@ monitoring) is derived and validated:
 | --- | --- | --- |
 | model | `model.id` / `model.revision` (profile auto-detected) | `qwen3_5` (GPU-verified +18 pts GSM8K), `qwen3`, `llama`, `generic` |
 | environment | `environment.name` | `gsm8k`, `coding_exec` (MBPP/HumanEval, tests in Modal), `coding_harbor` (Terminus-2 in Modal sandboxes) |
-| reward | `reward.components` (weighted named terms or `module:function`) | coding: `pass_all_tests`, `partial_tests`, `compiles`, `no_suspicious_code`; gsm8k: `strict_answer`, `contains_number_answer`; common: `length_penalty`, `format_ok`; mimo: the per-domain native verifier (`verifier_score`) |
+| reward | `reward.components` (weighted named terms or `module:function`; for `mimo`: the native `verifier_score` plus optional custom terms that shape training only) | coding: `pass_all_tests`, `partial_tests`, `compiles`, `no_suspicious_code`; gsm8k: `strict_answer`, `contains_number_answer`; common: `length_penalty`, `format_ok`; mimo: the per-domain native verifier (`verifier_score`) |
 
 Two more switches, also one YAML key each: **`finetune.mode: lora | full`** (LoRA rank/targets under `finetune.lora`) and
 **`compute.nodes`** (1..N; `limits.max_nodes` gates it). `strl plan` derives the layout (FSDP group, TP x engines, per-GPU memory) and

@@ -2,8 +2,8 @@
 
 Built on the coding_harbor machinery (SkyRL HarborGenerator, Modal sandboxes, step-wise GRPO). What is new: a domain-stratified
 batch sampler, an LLM judge for the judged domains (outside the sandbox), per-domain held-out evaluation (every held-out task run
-``eval_repeats`` times with the training agent) and the macro task metric. The reward IS the native grader (reward.components is
-[verifier_score]); explore reward shaping in coding_exec. Contract with the exporter/graders: strl/tasks/mimo/__init__.py.
+``eval_repeats`` times with the training agent) and the macro task metric. The reward starts from the native grader (verifier_score, exactly once);
+extra `module:function` terms shape the TRAINING reward only (evaluation always reports the native task metric). Contract with the exporter/graders: strl/tasks/mimo/__init__.py.
 """
 from __future__ import annotations
 
@@ -72,9 +72,13 @@ class MimoSpec(CodingHarborSpec):
         if not data.selected_domains(m):
             problems.append('environment.mimo.domains: at least one domain needs train > 0')
         names = [c['fn'] for c in cfg['reward']['components'] if c.get('weight', 1.0)]
-        if names != ['verifier_score']:
-            problems.append('mimo rewards are the native graders (verifier reward / LLM judge): reward.components must be exactly '
-                            f'[{{fn: verifier_score}}], got {names}; shaping terms are out of scope here (use coding_exec to study them)')
+        if names.count('verifier_score') != 1:
+            problems.append('mimo rewards start from the native graders (verifier reward / LLM judge): reward.components must contain '
+                            f'{{fn: verifier_score}} exactly once with a non-zero weight, got {names}')
+        extra = [n for n in names if n != 'verifier_score' and ':' not in n]
+        if extra:
+            problems.append(f'mimo shaping terms must be custom "module:function" components (user_rewards/); got {extra}. They are called as '
+                            'fn(result, ctx, **params) with result = {domain, task, reward (native), metric, passed, components, turns, tokens, seconds, stop, artifact}')
         if e.get('final_eval', True):
             problems.append('mimo has no offline final eval (agents run in sandboxes): set evaluation.final_eval: false; the held-out '
                             'per-domain eval runs inside training (eval/<domain>/task_metric, eval/macro_task_metric)')
@@ -214,14 +218,15 @@ class MimoSpec(CodingHarborSpec):
         return DomainBatchSampler(domains, weights, cfg.trainer.train_batch_size, seed=cfg.trainer.seed)
 
     def build_generator(self, experiment: dict, cfg: Any, tokenizer: Any, inference_engine_client: Any) -> Any:
-        from .generator import generator_settings, make_generator_class, mimo_template
+        from .generator import generator_settings, make_generator_class, mimo_template, native_weight, reward_terms
         coding_harbor.install_compat()
         m = mcfg(experiment)
         caps = {d: {k: v[k] for k in ('max_agent_sec', 'max_verifier_sec', 'max_turns') if v.get(k)} for d, v in m['domains'].items()}
         judged = any(d in m['domains'] for d in JUDGED)
         return make_generator_class()(
             generator_cfg=cfg.generator, harbor_cfg=mimo_template(experiment), inference_engine_client=inference_engine_client, tokenizer=tokenizer,
-            max_seq_len=cfg.trainer.algorithm.max_seq_len, mimo={**generator_settings(experiment), 'caps': caps},
+            max_seq_len=cfg.trainer.algorithm.max_seq_len,
+            mimo={**generator_settings(experiment), 'caps': caps, 'reward_terms': reward_terms(experiment), 'native_weight': native_weight(experiment)},
             judge=judge.Judge(experiment) if judged else None)
 
     # ------------------------------------------------------------------ evidence

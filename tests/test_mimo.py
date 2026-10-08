@@ -90,6 +90,56 @@ def fake_exporter(row, dest, *, split):
     return {'task_dir': str(dest), 'domain': row['domain'], 'instance_id': row['instance_id'], 'group': row['group'], 'image': 'img', 'tree_sha256': 'x'}
 
 
+class ShapedReward(unittest.TestCase):
+    """The forward test (a fresh engineer following the skill) found mimo rejected every custom reward term although the skill presents the reward
+    as a free axis. Terms now shape the TRAINING reward; evaluation and the task metric stay native."""
+
+    def cfg(self, *terms, native=1.0):
+        return {'reward': {'components': [{'fn': 'verifier_score', 'weight': native}, *terms]}}
+
+    def test_terms_resolve_and_combine(self):
+        cfg = self.cfg({'fn': 'user_rewards.examples:turn_efficiency_bonus', 'weight': 2.0, 'bonus': 0.1, 'max_turns': 10})
+        terms = generator.reward_terms(cfg)
+        self.assertEqual([(t['name'], t['weight'], t['params']) for t in terms], [('user_rewards.examples:turn_efficiency_bonus', 2.0, {'bonus': 0.1, 'max_turns': 10})])
+        self.assertEqual(generator.native_weight(self.cfg(native=0.5)), 0.5)
+        result = {'domain': 'code', 'reward': 1.0, 'turns': 5}
+        shaped, parts = generator.shape_reward(result, 1.0, 1.0, terms)
+        self.assertAlmostEqual(shaped, 1.0 + 2.0 * 0.1 * 0.5)               # native + weight x bonus x (1 - 5/10)
+        self.assertAlmostEqual(parts['user_rewards.examples:turn_efficiency_bonus'], 0.1)
+        failed, _ = generator.shape_reward({'domain': 'code', 'reward': 0.4, 'turns': 1}, 0.4, 1.0, terms)
+        self.assertAlmostEqual(failed, 0.4)                                  # the bonus needs a full pass
+
+    def test_training_is_shaped_evaluation_is_native(self):
+        with tempfile.TemporaryDirectory() as temp:
+            terms = generator.reward_terms(self.cfg({'fn': 'user_rewards.examples:turn_efficiency_bonus', 'weight': 1.0, 'bonus': 0.1, 'max_turns': 10}))
+            for phase, expect in (('train', 1.0 + 0.1 * 0.7), ('eval', 1.0)):
+                env = Env(f'{temp}/{phase}', settings={'reward_terms': terms})
+                trial = env.trial_dir(reward_txt='1', details={'metric': 1.0, 'passed': True})
+                env.queue = [fake_results(reward=1.0, trial_dir=trial, turns=3)]
+                out, summary = env.go(phase=phase)
+                self.assertAlmostEqual(out['reward'], expect, msg=phase)
+                self.assertEqual(summary['metric'], 1.0)                      # the task metric never includes shaping
+                if phase == 'train':
+                    self.assertEqual(summary['reward_native'], 1.0)
+                else:
+                    self.assertNotIn('reward_native', summary)
+
+    def test_validation_accepts_one_native_term_plus_custom_terms_only(self):
+        from strl.experiment import resolve
+        from strl.tasks.mimo import spec
+        base = resolve(str(ROOT / 'experiments/mimo-example-music-code-full.yaml'))
+        env = spec.MimoSpec()
+
+        def problems(components):
+            cfg = copy.deepcopy(base)
+            cfg['reward'] = {'components': components}
+            return [p for p in env.validate_experiment(cfg) if 'reward' in p or 'shaping' in p]
+        self.assertEqual(problems([{'fn': 'verifier_score'}]), [])
+        self.assertEqual(problems([{'fn': 'verifier_score'}, {'fn': 'user_rewards.examples:turn_efficiency_bonus', 'weight': 1.0}]), [])
+        self.assertTrue(any('exactly once' in p for p in problems([{'fn': 'user_rewards.examples:turn_efficiency_bonus', 'weight': 1.0}])))
+        self.assertTrue(any('module:function' in p for p in problems([{'fn': 'verifier_score'}, {'fn': 'length_penalty', 'weight': 1.0}])))
+
+
 class PlaceholderMasks(unittest.TestCase):
     def test_placeholder_steps_get_a_zero_loss_mask_and_keep_their_group(self):
         class Tid:

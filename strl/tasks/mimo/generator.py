@@ -319,10 +319,53 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
         if phase == 'eval' and request.get('kind') == 'rubric':   # persisted so `strl verify` can re-score a sample of judged records offline
             summary['judge_request'] = request
         summary['judge'] = {'final': judged['final'], 'scores': judged['scores'], 'rationale': judged['rationale'], 'meta': judged['meta']}
-    summary.update(reward=reward, metric=metric, passed=bool(details.get('passed', metric >= 0.999)))
+    passed = bool(details.get('passed', metric >= 0.999))
+    terms = settings.get('reward_terms') or []
+    if terms and phase != 'eval':   # shaping changes what training maximises; evaluation always reports the native task metric
+        result = {'domain': domain, 'task': name, 'reward': reward, 'metric': metric, 'passed': passed, 'components': summary['components'],
+                  'turns': summary['turns'], 'tokens': summary['tokens'], 'seconds': summary['seconds'], 'stop': summary['stop'], 'artifact': summary['artifact']}
+        shaped, parts = shape_reward(result, reward, float(settings.get('native_weight', 1.0)), terms)
+        summary.update(reward_native=reward, reward_terms=parts)
+        reward = shaped
+    summary.update(reward=reward, metric=metric, passed=passed)
     return {'rollout_details': rollout, 'reward': float(reward), 'num_turns': summary['turns'],
             'stop_reason': ('context_length' if exc == 'ContextLengthExceededError' else 'output_length' if exc == 'OutputLengthExceededError'
                                     else 'complete') if rollout else 'error', 'e2e_time': seconds, 'trajectory_id': trajectory_id}, summary
+
+
+def reward_terms(cfg: dict | None) -> list[dict]:
+    """The shaping terms of ``reward.components`` (everything but the native ``verifier_score``) as callables: [{'name', 'fn', 'weight', 'params'}],
+    plus the weight of the native term under key ``native_weight`` on the first entry-less dict returned by ``native_weight``."""
+    from ...rewards import resolve_component
+    from . import spec as mimo_spec
+    out = []
+    for c in ((cfg or {}).get('reward') or {}).get('components') or []:
+        if c['fn'] == 'verifier_score' or not c.get('weight', 1.0):
+            continue
+        out.append({'name': c['fn'], 'fn': resolve_component(mimo_spec.MimoSpec(), c['fn']), 'weight': float(c.get('weight', 1.0)),
+                    'params': {k: v for k, v in c.items() if k not in ('fn', 'weight')}})
+    return out
+
+
+def native_weight(cfg: dict | None) -> float:
+    for c in ((cfg or {}).get('reward') or {}).get('components') or []:
+        if c['fn'] == 'verifier_score':
+            return float(c.get('weight', 1.0))
+    return 1.0
+
+
+def shape_reward(result: dict, native: float, native_w: float, terms: list[dict]) -> tuple[float, dict[str, float]]:
+    """Training reward = native_w x native + sum(weight x term(result, ctx, **params)). Returns (reward, {term name: its weighted value}).
+    ``result``: domain, task, reward (the native grader score), metric, passed, components, turns, tokens, seconds, stop, artifact."""
+    from ...rewards import RewardContext
+    ctx = RewardContext(extras={'domain': result.get('domain')})
+    parts = {}
+    total = native_w * native
+    for t in terms:
+        value = float(t['weight']) * float(t['fn'](result, ctx, **t['params']))
+        parts[t['name']] = value
+        total += value
+    return total, parts
 
 
 PLACEHOLDER_DETAIL = {'prompt_token_ids': [[0]], 'completion_token_ids': [[0]], 'logprobs': [[0.0]]}
@@ -396,6 +439,8 @@ def rollout_metrics(summaries: list[dict], group_ids: list[str] | None = None, *
         out[f'{p}/judge_masked'] = float(sum(s.get('mask_reason') == 'judge' for s in rows))
         if valid:
             out[f'{p}/reward_mean'] = sum(float(s['reward']) for s in valid) / len(valid)
+            if any('reward_native' in s for s in valid):   # shaped training: the native score next to it exposes reward hacking
+                out[f'{p}/reward_native_mean'] = sum(float(s.get('reward_native', s['reward'])) for s in valid) / len(valid)
             out[f'{p}/pass_rate'] = sum(bool(s['passed']) for s in valid) / len(valid)
             out[f'{p}/avg_turns'] = sum(s['turns'] for s in valid) / len(valid)
             out[f'{p}/tokens'] = sum(s['tokens'] for s in valid) / len(valid)

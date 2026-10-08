@@ -6,7 +6,7 @@ updates, every W&B table) -> a real run. Do not skip rungs for a new axis value.
 
 ## A new model (most models need only YAML)
 
-1. In an experiment: set `model.id`, `model.revision` (a commit sha, never a branch) and `model.local_path: assets/models/<name>`.
+1. In an experiment: set `model.id`, `model.revision` (a commit sha, never a branch: `curl -s https://huggingface.co/api/models/<id> | python3 -c 'import sys,json;print(json.load(sys.stdin)["sha"])'`) and `model.local_path: assets/models/<name>`.
 2. `python -m strl fetch <exp>` (downloads the pinned snapshot; data is reused if its manifest verifies).
 3. `python -m strl plan <exp>` shows the detected profile and its verification level. Detection reads `config.json` from
    `model.local_path`; when that snapshot is missing, plan fetches only `config.json` from the HF hub at the pinned revision
@@ -49,6 +49,12 @@ reward:
 - Names resolve: environment components (`strl/tasks/<env>/rewards.py`), common (`length_penalty`, `format_ok`), `module:function`.
 - `strl plan` rejects unknown names and unknown parameters. Each term is logged as `environment/reward_components/<fn>`.
 - `coding_harbor` rewards come from the sandbox verifier: only `pass_all_tests` there; explore designs with `coding_exec`.
+- `mimo`: the reward starts from the native domain grader. `reward.components` must contain `{fn: verifier_score}` exactly once (its weight scales
+  the native score) and may add custom `module:function` terms (not the common `length_penalty`/`format_ok`, which need a completion string). Terms
+  shape the TRAINING reward only: evaluation, `eval/<d>/task_metric` and `test/*` always use the native score, and `generate/<d>/reward_native_mean`
+  next to `generate/<d>/reward_mean` shows whether the shaping is being gamed. A term receives `result = {domain, task, reward (native), metric,
+  passed, components (the grader's sub-scores), turns, tokens, seconds, stop, artifact (the agent's deliverable, truncated)}`; the worked example is
+  `user_rewards/examples.py:turn_efficiency_bonus` in `experiments/mimo-example-music-code-full.yaml`.
 - A custom GSM8K reward automatically switches from SkyRL's built-in `gsm8k` env to `strl_env` (same scorer, proven equivalent on
   266 real completions in `tests/test_gsm8k_golden.py`).
 
@@ -90,3 +96,16 @@ The MiMo environment (`strl/tasks/mimo/`) is the template for "many domains, one
 6. **Prove it on real tasks before GPU**: `strl prepare <exp>` on the smoke experiment, `tools/gate_mimo.py <domain> <task dirs>` (nop = 0, no
    infra error), `--mode dry` (judge selftest, nop from the pod, validate_cfg), then the 1-GPU canary. Unit tests alone missed: double-nested export
    dirs, sandboxes that exit at once, non-ASCII paths, a vision request shape that masked every trial, an ignored `force_zero`.
+
+
+## Starting a new MiMo program (what must not be shared with another experiment)
+
+`mimo-example-music-code-full.yaml` is the template. Three things are inherited from `base/mimo.yaml` and silently shared unless you change them:
+- `budget.ledger` (`evidence/ledgers/mimo-27b.json` is the authorized 27B program's node-second budget: a new program gets its own file, created with
+  the user's authorization);
+- `run.data_dir` (the exported tasks and manifest: a different selection needs a different directory, then `strl prepare <exp>`);
+- `services.modal.credentials_uri` (a locator the user approved for this project; confirm it before a new project reuses it).
+Switching a domain off takes both `train: 0` and `test: 0` (`train: 0` alone keeps its held-out set as an evaluation-only transfer probe). For a
+small model set `inference.tensor_parallel_size: 1`, `environment.harbor.max_seq_len` (16k is enough for a 2B), and size `compute.training.fsdp_size`
+to the GPUs of one node; read the plan's UNCALIBRATED step estimate as a placeholder and let a canary measure it.
+Every file under `experiments/` must plan: the test suite loads them all.
