@@ -259,8 +259,17 @@ def in_loop_finish(cfg, runtime, env_spec, root, steps):
             run = wandb.init(project=cfg['tracking']['project'], entity=cfg['tracking']['entity'], id=runtime['wandb_run_id'], resume='allow', reinit=True)
             run.log({'optimizer_step': steps, **scalars})
             run.summary.update({**scalars, 'test/trained_step': result['trained_step'], 'test/selection': result['selection']})
+            from .inloop import FLIP_COLUMNS
+            from .finalize import read_jsonl
+            for kind in ('fixed', 'broken'):   # the qualitative "what changed" tables, as the offline path logs them
+                path = eval_dir / f'{kind}_by_training.jsonl'
+                if path.is_file():
+                    table = wandb.Table(columns=list(FLIP_COLUMNS))
+                    for row in read_jsonl(path):
+                        table.add_data(*[row.get(c) for c in FLIP_COLUMNS])
+                    run.log({f'qualitative/{kind}_by_training': table})
             artifact = wandb.Artifact(runtime['run_name'] + '-evidence', type='evaluation')
-            for name in ('result.json', 'README.md', 'base.jsonl', 'candidate.jsonl'):
+            for name in ('result.json', 'README.md', 'base.jsonl', 'candidate.jsonl', 'fixed_by_training.jsonl', 'broken_by_training.jsonl'):
                 if (eval_dir / name).is_file():
                     artifact.add_file(str(eval_dir / name))
             run.log_artifact(artifact)

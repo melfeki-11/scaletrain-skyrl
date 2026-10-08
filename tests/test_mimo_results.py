@@ -802,3 +802,18 @@ class MultiNodeMonitoring(unittest.TestCase):
         sent, calls = set(), []
         live.alert_once({'tracking': {}}, 'run', ['PEER_STALE(rank 2, 400s)', 'NETWORK(transport=socket)'], sent, lambda *a: calls.append(a[2]))
         self.assertEqual(sorted(calls), ['NETWORK', 'PEER_STALE'])
+
+
+class InLoopFlipTables(unittest.TestCase):
+    def test_flips_are_joined_by_sample_id_and_skip_masked(self):
+        from strl.inloop import flip_examples
+        from strl.tasks.mimo.spec import MimoSpec
+        base = [{'sample_id': 'a#0', 'domain': 'code', 'passed': False, 'task_metric': 0.0, 'masked': False, 'artifact': 'x'},
+                {'sample_id': 'b#0', 'domain': 'music', 'passed': True, 'task_metric': 1.0, 'masked': False},
+                {'sample_id': 'c#0', 'domain': 'cyber', 'passed': False, 'task_metric': 0.0, 'masked': True}]
+        trained = [{'sample_id': 'c#0', 'passed': True, 'masked': False}, {'sample_id': 'b#0', 'passed': False, 'task_metric': 0.2, 'masked': False},
+                   {'sample_id': 'a#0', 'passed': True, 'task_metric': 1.0, 'masked': False, 'artifact': 'y'}]
+        fixed, broken = flip_examples(base, trained, MimoSpec())
+        self.assertEqual([r['sample_id'] for r in fixed], ['a#0'])
+        self.assertEqual([r['sample_id'] for r in broken], ['b#0'])
+        self.assertEqual((fixed[0]['base_artifact'], fixed[0]['trained_artifact']), ('x', 'y'))
