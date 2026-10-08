@@ -20,6 +20,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import traceback
 
@@ -60,12 +61,38 @@ def _progress_mtime(progress: Path | None) -> float | None:
     return progress.stat().st_mtime if progress is not None and progress.is_file() else None
 
 
+def gather_exports(root, prefix):
+    """Multi-node: SkyRL writes HF exports from FSDP rank 0, which is on a random node (bundles are ordered by Ray NodeID). Upload every
+    node's exports to S3, then fetch onto the head whatever the head lacks, so selection, merge, final eval and the S3 copy of the trained
+    model never depend on where rank 0 landed."""
+    from .storage import download_prefix, sync_cluster
+    rel = Path(root).relative_to('artifacts')
+    target = f"{prefix}/{rel}/exports"
+    try:
+        report = sync_cluster(str(Path(root).resolve() / 'exports'), target)
+    except Exception as error:
+        return {'error': f'{type(error).__name__}: {error}'}
+    try:
+        download_prefix(target, Path(root) / 'exports')
+    except Exception as error:
+        return {'nodes': report, 'download_error': f'{type(error).__name__}: {error}'}
+    return {'nodes': report}
+
+
+def _background_sync():
+    """The periodic artifacts upload. A transient S3 error must never kill training: it is logged and retried on the next cycle."""
+    try:
+        sync_local('artifacts', os.environ['GRPO_ARTIFACT_URI'], exclude=SYNC_EXCLUDE)
+    except Exception as error:
+        print(f'[strl] artifacts sync failed (retried next cycle): {type(error).__name__}: {error}', file=sys.stderr, flush=True)
+
+
 def child(args, log, deadline, canary_path=None, canary_seconds=1200, env=None, progress=None, stall_seconds=None, abort=None):
     """``abort``: optional callable returning a reason to stop (multi-node liveness watcher)."""
     started = time.time()
     with Path(log).open('w') as output:
         process = subprocess.Popen(args, stdout=output, stderr=subprocess.STDOUT, start_new_session=True, env=env)
-        last_sync = 0
+        last_sync, sync_thread = 0, None
         try:
             while process.poll() is None:
                 now = time.time()
@@ -83,7 +110,9 @@ def child(args, log, deadline, canary_path=None, canary_seconds=1200, env=None, 
                     Path('artifacts/heartbeat.json').write_text(json.dumps({
                         'at': now, 'child_alive': True, 'elapsed_seconds': now - started, 'last_progress_at': seen,
                         'log_bytes': Path(log).stat().st_size if Path(log).exists() else 0}))
-                    sync_local('artifacts', os.environ['GRPO_ARTIFACT_URI'], exclude=SYNC_EXCLUDE)
+                    if sync_thread is None or not sync_thread.is_alive():   # never block the deadline / liveness checks on an upload
+                        sync_thread = threading.Thread(target=_background_sync, daemon=True)
+                        sync_thread.start()
                     last_sync = now
                 time.sleep(5)
             if process.returncode:
@@ -406,6 +435,7 @@ def main():
         if multi:
             watcher.stop()
             shard_reports = cluster_shards(root, nodes * gpus) if save_optimizer_state(cfg) else None
+            identity['exports_gathered'] = gather_exports(root, prefix)
             ray.shutdown()
         subprocess.run([RAY, 'stop', '--force'], check=False)
         progress = json.loads((root / 'training_completed.json').read_text()) if (root / 'training_completed.json').is_file() else \
@@ -483,21 +513,25 @@ def main():
                      experiment_sha=cfg['_meta']['sha'], environment=env_spec.name, metric=env_spec.metric, model=cfg['model']['id'], **extra)
         (eval_dir / 'result.json').write_text(json.dumps(final, indent=2))
         import wandb
-        run = wandb.init(project=cfg['tracking']['project'], entity=cfg['tracking']['entity'], id=runtime['wandb_run_id'], resume='must')
-        run.log({'optimizer_step': steps, **{'test/' + k: v for k, v in result.items()}, **{'test/flips_' + k: v for k, v in counts.items()},
-                 **{f'test/{src}/{k}': v for src, d in by_source.items() for k, v in d.items()},
-                 'checkpoint/reload_passed': True, 'distributed/nodes': cfg['compute']['nodes'], 'distributed/gpus': gpus})
-        cols = ['sample_id', 'prompt', 'ground_truth', 'base_failure_mode', 'base_completion', 'trained_completion']
-        table = wandb.Table(columns=cols)
-        for r in fixed:
-            table.add_data(r['sample_id'], str(r['prompt']), str(r['ground_truth']), r['base_failure_mode'], r['base_completion'], r['trained_completion'])
-        run.log({'qualitative/fixed_by_training': table})
-        artifact = wandb.Artifact(runtime['run_name'] + '-evidence', type='evaluation')
-        for name in ['result.json', 'base.jsonl', 'candidate.jsonl', 'fixed_by_training.jsonl', 'broken_by_training.jsonl']:
-            artifact.add_file(str(eval_dir / name))
-        run.log_artifact(artifact)
-        run.summary.update({k: v for k, v in final.items() if k != 'validation_by_step'})
-        run.finish()
+        try:   # the evaluation is complete and on disk: a W&B outage must not turn a finished attempt into a failed one
+            run = wandb.init(project=cfg['tracking']['project'], entity=cfg['tracking']['entity'], id=runtime['wandb_run_id'], resume='must')
+            run.log({'optimizer_step': steps, **{'test/' + k: v for k, v in result.items()}, **{'test/flips_' + k: v for k, v in counts.items()},
+                     **{f'test/{src}/{k}': v for src, d in by_source.items() for k, v in d.items()},
+                     'checkpoint/reload_passed': True, 'distributed/nodes': cfg['compute']['nodes'], 'distributed/gpus': gpus})
+            cols = ['sample_id', 'prompt', 'ground_truth', 'base_failure_mode', 'base_completion', 'trained_completion']
+            table = wandb.Table(columns=cols)
+            for r in fixed:
+                table.add_data(r['sample_id'], str(r['prompt']), str(r['ground_truth']), r['base_failure_mode'], r['base_completion'], r['trained_completion'])
+            run.log({'qualitative/fixed_by_training': table})
+            artifact = wandb.Artifact(runtime['run_name'] + '-evidence', type='evaluation')
+            for name in ['result.json', 'base.jsonl', 'candidate.jsonl', 'fixed_by_training.jsonl', 'broken_by_training.jsonl']:
+                artifact.add_file(str(eval_dir / name))
+            run.log_artifact(artifact)
+            run.summary.update({k: v for k, v in final.items() if k != 'validation_by_step'})
+            run.finish()
+        except Exception as error:
+            final['wandb_error'] = f'{type(error).__name__}: {error}'
+            print(f'[strl] W&B logging of the final evaluation failed (results are in S3): {final["wandb_error"]}', file=sys.stderr, flush=True)
         sync_local('artifacts', prefix, exclude=SYNC_EXCLUDE)
         put_json(prefix + '/completion.json', final)
         print(json.dumps(final), flush=True)

@@ -1,0 +1,133 @@
+"""strl launch: race every capacity route, keep the first that starts, cancel and ledger the rest (fake ScaleTrain, no network)."""
+import os
+import tempfile
+import unittest
+from pathlib import Path
+
+from strl import launch as L
+
+
+class FakeScaleTrain:
+    """Scripted job states: script[route_code] = list of (status, detail) per poll; the last entry repeats. Cancel -> CANCELED next poll."""
+
+    def __init__(self, script, started=()):
+        self.script, self.started = script, set(started)
+        self.jobs, self.polls, self.cancelled, self.staged, self.recorded, self.now = {}, {}, set(), [], [], 0.0
+
+    def api(self):
+        return L.Api(stage=self.stage, submit=self.submit, get=self.get, cancel=self.cancel, record=self.record,
+                     pods_started=lambda experiment, attempt: attempt in self.started, clock=lambda: self.now, sleep=self.sleep, log=lambda m: None)
+
+    def stage(self, experiment, *, attempt, mode, team, allow_borrowing, overrides):
+        self.staged.append({'attempt': attempt, 'team': team, 'borrow': allow_borrowing, 'overrides': list(overrides)})
+        return {'job_file': f'evidence/{attempt}/job.json'}
+
+    def submit(self, job_file):
+        attempt = Path(job_file).parent.name
+        job_id = f'job-{attempt}'
+        self.jobs[job_id] = attempt
+        self.polls[job_id] = 0
+        return job_id
+
+    def get(self, job_id):
+        if job_id in self.cancelled:
+            return {'status': 'CANCELED', 'status_detail': 'absent'}
+        attempt = self.jobs[job_id]
+        script = self.script.get(attempt.rsplit('-', 1)[-1] if attempt.rsplit('-', 1)[-1] in self.script else attempt, [('QUEUED', 'waiting')])
+        i = min(self.polls[job_id], len(script) - 1)
+        self.polls[job_id] += 1
+        status, detail = script[i]
+        return {'status': status, 'status_detail': detail}
+
+    def cancel(self, job_id):
+        self.cancelled.add(job_id)
+
+    def record(self, experiment, attempt, job_id, never_started=False, terminal_at=None):
+        self.recorded.append((attempt, never_started))
+        return {'ok': True}
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+class Race(unittest.TestCase):
+    def setUp(self):
+        self.cwd = os.getcwd()
+        self.tmp = tempfile.TemporaryDirectory()
+        os.chdir(self.tmp.name)
+
+    def tearDown(self):
+        os.chdir(self.cwd)
+        self.tmp.cleanup()
+
+    def test_first_route_to_start_wins_and_the_rest_are_cancelled_uncharged(self):
+        fake = FakeScaleTrain({'rb': [('QUEUED', 'w'), ('QUEUED', 'w'), ('IN_PROGRESS', 'absent')]})
+        out = L.race('exp.yaml', 'run1', 'train', fake.api(), poll=10)
+        self.assertEqual(out['winner'], 'run1-rb')
+        self.assertEqual(fake.cancelled, {'job-run1-fb', 'job-run1-ro', 'job-run1-fo'})
+        self.assertEqual(sorted(fake.recorded), [('run1-fb', True), ('run1-fo', True), ('run1-ro', True)])   # no pod ran: not charged
+        self.assertNotIn('job-run1-rb', fake.cancelled)
+
+    def test_routes_stage_team_and_borrowing(self):
+        fake = FakeScaleTrain({'fb': [('IN_PROGRESS', 'absent')]})
+        L.race('exp.yaml', 'run1', 'canary', fake.api(), overrides=['compute.nodes=1'], poll=1)
+        by = {s['attempt']: s for s in fake.staged}
+        self.assertEqual((by['run1-fb']['team'], by['run1-fb']['borrow']), (L.FOUNDATION, True))
+        self.assertEqual((by['run1-ro']['team'], by['run1-ro']['borrow']), (L.RESEARCH, False))
+        self.assertIn('compute.allow_borrowing=false', by['run1-fo']['overrides'])     # base/infra.yaml defaults borrowing on
+        self.assertEqual(by['run1-fb']['overrides'], ['compute.nodes=1'])
+
+    def test_two_routes_starting_in_one_poll_keep_one_and_charge_the_other(self):
+        fake = FakeScaleTrain({'fb': [('IN_PROGRESS', 'absent')], 'rb': [('IN_PROGRESS', 'absent')]}, started={'run1-rb'})
+        out = L.race('exp.yaml', 'run1', 'train', fake.api(), poll=5)
+        self.assertEqual(out['winner'], 'run1-fb')                     # the runbook's preferred route wins a tie
+        self.assertIn(('run1-rb', False), fake.recorded)               # its pod ran: charged (never_started False)
+        self.assertTrue(next(l for l in out['losers'] if l['attempt'] == 'run1-rb')['charged'])
+
+    def test_no_capacity_within_the_window_cancels_everything(self):
+        fake = FakeScaleTrain({})
+        out = L.race('exp.yaml', 'run1', 'train', fake.api(), poll=60, max_wait_seconds=600)
+        self.assertIsNone(out['winner'])
+        self.assertEqual(len(fake.cancelled), 4)
+        self.assertEqual(len(fake.recorded), 4)
+
+    def test_a_job_that_started_and_finished_between_polls_still_wins(self):
+        fake = FakeScaleTrain({'fb': [('COMPLETED', 'absent')], 'rb': [('FAILED', 'absent')]}, started={'run1-fb'})
+        out = L.race('exp.yaml', 'run1', 'dry', fake.api(), poll=5)
+        self.assertEqual(out['winner'], 'run1-fb')
+        self.assertNotIn('job-run1-fb', fake.cancelled)
+
+    def test_route_selection_and_name_length(self):
+        self.assertEqual([r[0] for r in L.select_routes('ro,fb')], ['ro', 'fb'])
+        with self.assertRaises(ValueError):
+            L.select_routes('xx')
+        with self.assertRaises(ValueError):
+            L.race('exp.yaml', 'a' * 27, 'train', FakeScaleTrain({}).api())
+
+    def test_preemption_is_detected_cancelled_recorded_and_relaunched(self):
+        fake = FakeScaleTrain({'fb': [('IN_PROGRESS', 'absent'), ('IN_PROGRESS', 'absent'), ('QUEUED', 'preemption_reported')],
+                               'run1-p1-fb': [('IN_PROGRESS', 'absent'), ('COMPLETED', 'absent')]}, started={'run1-fb'})
+        # the relaunch race uses the same route codes; give its fb a different script by attempt name
+        fake.script['p1-fb'] = fake.script.pop('run1-p1-fb')
+        original_get = fake.get
+
+        def get(job_id):
+            attempt = fake.jobs.get(job_id, '')
+            if attempt.startswith('run1-p1-') and job_id not in fake.cancelled:
+                script = fake.script['p1-fb'] if attempt.endswith('-fb') else [('QUEUED', 'w')]
+                i = min(fake.polls[job_id], len(script) - 1)
+                fake.polls[job_id] += 1
+                return {'status': script[i][0], 'status_detail': script[i][1]}
+            return original_get(job_id)
+        api = fake.api()
+        api.get = get
+        history = L.launch('exp.yaml', 'run1', 'train', api, poll=1, follow=True, relaunch_on_preempt=1)
+        self.assertEqual([h['winner'] for h in history], ['run1-fb', 'run1-p1-fb'])
+        self.assertEqual(history[0]['outcome']['outcome'], 'preempted')
+        self.assertEqual(history[1]['outcome']['outcome'], 'terminal')
+        self.assertIn(('run1-fb', False), fake.recorded)               # the preempted attempt is charged (its pod ran)
+        self.assertTrue(Path('evidence/run1/launch.json').is_file())
+
+
+if __name__ == '__main__':
+    unittest.main()

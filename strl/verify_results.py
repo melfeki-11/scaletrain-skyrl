@@ -44,8 +44,10 @@ def verify_in_loop(cfg: dict, attempt: str, local: Path, env) -> dict:
         out.update(verified=False, reasons=[f"no paired result to verify: {result.get('reason') or 'final_eval files missing'}"])
     else:
         stats = env.paired_result(base, cand, cfg)
-        diff = {k: (result.get('test') or {}).get(k) for k in ('baseline_accuracy', 'candidate_accuracy', 'accuracy_delta')
-                if abs(float((result.get('test') or {}).get(k, float('nan'))) - stats['test'][k]) > 1e-9}
+        worker = result.get('test') or {}
+        # a statistic the worker omitted is a disagreement (abs(nan - x) > eps is False, which silently "agreed" before)
+        diff = {k: worker.get(k) for k in ('baseline_accuracy', 'candidate_accuracy', 'accuracy_delta')
+                if worker.get(k) is None or not abs(float(worker[k]) - stats['test'][k]) <= 1e-9}
         out.update(test=stats['test'], worker_test=result.get('test'), flips=stats.get('flips'), disagreements=diff, verified=not diff,
                    reasons=[f'worker {k} differs from the recomputation' for k in diff])
     (local / 'verified-result.json').write_text(json.dumps(out, indent=2, default=str))

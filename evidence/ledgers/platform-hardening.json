@@ -1,0 +1,6 @@
+{
+  "program": "Platform hardening verification round: non-Qwen LoRA canary on a MiMo-style env with a shaped reward, preemption-resume test, one 2x8 0.8B smoke re-verifying the multi-node fixes; all via the capacity race (user-authorized 2026-10-08: ~4 node-hours)",
+  "total_seconds": 14400,
+  "nodes": 2,
+  "attempts": []
+}

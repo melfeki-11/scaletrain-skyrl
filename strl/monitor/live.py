@@ -136,14 +136,16 @@ def alert_once(cfg: dict, run_id: str | None, found: list[str], sent: set[str], 
 
 
 def notify_wandb(cfg: dict, run_id: str | None, name: str, text: str) -> None:
-    """Attach to the attempt's W&B run and send the alert through ``tracking.alert`` (a no-op unless alerts are enabled)."""
+    """Send the alert from a SEPARATE monitor run (``<run_id>-monitor``, same group): attaching to the training run itself made a second
+    concurrent writer and run.finish() could mark the live run finished. A no-op unless alerts are enabled."""
     if not run_id or not cfg['tracking'].get('alerts', True):
         return
     import wandb
     from ..services.wandb import local_key
     from ..tracking import alert
     local_key()
-    run = wandb.init(project=cfg['tracking']['project'], entity=cfg['tracking']['entity'], id=run_id, resume='allow', reinit=True)
+    run = wandb.init(project=cfg['tracking']['project'], entity=cfg['tracking']['entity'], id=f'{run_id}-monitor', resume='allow', reinit=True,
+                     group=cfg['tracking'].get('group'), job_type='monitor', name=f'{run_id}-monitor')
     try:
         alert(f'strl monitor: {name}', f'{cfg["name"]}: {text}', 'WARN')
     finally:

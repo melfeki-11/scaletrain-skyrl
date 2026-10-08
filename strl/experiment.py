@@ -29,6 +29,7 @@ class ExperimentError(ValueError):
         super().__init__('\n'.join(f'- {p}' for p in self.problems))
 
 
+MIN_FINAL_EVAL_RESERVE = 600     # strl.worker.CHILD_HARD_STOP_SECONDS (480) + 120 s for the shortest final eval
 FAILFAST_KEYS = ('mem_gb', 'domain_masked', 'step_slow_factor', 'min_steps')   # budget.failfast rules (see strl/tracking.py failfast_config)
 
 # Allowed keys per section. A value of None means "free-form mapping" (validated elsewhere).
@@ -227,6 +228,9 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
         problems.append('budget.attempt_max_seconds cannot exceed budget.total_seconds')
     if b['final_eval_reserve_seconds'] + 900 >= b['attempt_max_seconds'] and e.get('final_eval', True):
         problems.append('budget leaves no training time: attempt_max_seconds must exceed final_eval_reserve_seconds + 900')
+    if e.get('final_eval', True) and b['final_eval_reserve_seconds'] < MIN_FINAL_EVAL_RESERVE:
+        problems.append(f'budget.final_eval_reserve_seconds={b["final_eval_reserve_seconds"]} < {MIN_FINAL_EVAL_RESERVE}: the training child is hard-killed '
+                        '480 s before the deadline, so a smaller reserve kills a run that reaches its deadline before its final eval')
     for key, value in (b.get('failfast') or {}).items():
         if key not in FAILFAST_KEYS:
             problems.append(f'budget.failfast.{key}: unknown rule; allowed {list(FAILFAST_KEYS)}')
@@ -247,13 +251,15 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
             problems.append(f'minibatch_prompts*n_samples={expanded} must divide evenly into {gpus} GPUs x micro_train_per_gpu={a["micro_train_per_gpu"]} '
                             f'(per-GPU rollouts {expanded / gpus:g})')
         full = a['prompts_per_step'] * a['n_samples']
-        if full % gpus or (expanded // gpus) % a['micro_forward_per_gpu']:
+        if full % gpus or (full // gpus) % a['micro_forward_per_gpu']:
             problems.append(f'prompts_per_step*n_samples={full} must divide evenly into {gpus} GPUs x micro_forward_per_gpu={a["micro_forward_per_gpu"]}')
     shards = e['eval_shards_per_model']
     if e.get('final_eval', True) and (shards < 1 or shards * 2 > gpn):
         problems.append(f'evaluation.eval_shards_per_model={shards}: parallel final eval needs one GPU per shard for both models (<= {gpn // 2}); '
                         'set evaluation.final_eval: false to skip it')
-    if e['checkpoint_interval_steps'] % e['interval_steps']:
+    if e['interval_steps'] < 1 or e['checkpoint_interval_steps'] < 1:
+        problems.append('evaluation.interval_steps and checkpoint_interval_steps must be >= 1')
+    elif e['checkpoint_interval_steps'] % e['interval_steps']:
         problems.append('evaluation.checkpoint_interval_steps should be a multiple of interval_steps (only exported steps can be selected)')
     if not 0 < i['gpu_memory_utilization'] < 1:
         problems.append('inference.gpu_memory_utilization must be in (0, 1)')
