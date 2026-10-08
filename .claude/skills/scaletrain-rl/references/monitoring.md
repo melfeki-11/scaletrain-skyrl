@@ -51,7 +51,7 @@ kills the child, then still evaluates the latest export) and failures. S3 is the
 
 Per-domain scalars (one set per selected domain `<d>` in music, cyber, code, general, webdev): `eval/<d>/{task_metric,pass_rate,num_trials,num_masked,
 judge_variance,rep_std}`, `eval/macro_task_metric` (= `eval/task_metric`), `generate/<d>/{pass_rate,reward_mean,tokens,num_trials,num_masked,num_timeout,
-judge_cost_usd}`, `environment/<d>/masked_group_fraction`, `test/<d>/{base,trained,delta,ci_lower,ci_upper}` (final), `test/macro/*`, `test/dropped`.
+judge_cost_usd}`, `environment/<d>/{masked,timeout,dropped}_group_fraction` (infrastructure masks / groups with a timed-out trial / groups lost to any mask), `eval/<d>/no_artifact_rate`, `test/<d>/{base,trained,delta,ci_lower,ci_upper}` (final), `test/macro/*`, `test/dropped`.
 GPU memory: SkyRL's Ray monitor logs `ray/gpu.mem_used_gb.*`; when `budget.failfast.mem_gb` is on, the head also logs `gpu/mem_peak_gb` and
 `gpu/mem_used_gb_max` (nvidia-smi sampled by a daemon thread, head node only, absent when not measurable).
 
@@ -60,7 +60,8 @@ through `tracking.alert` (W&B alert on the attempt's run; honours `tracking.aler
 
 | Flag | Fires when | Why it matters |
 | --- | --- | --- |
-| `DOMAIN_MASKED(<d>=x)` | more than 15% of a domain's GRPO groups were masked (infra or judge failure) | that domain trains on fewer prompts than planned; the environment, not the model, is failing |
+| `DOMAIN_MASKED(<d>=x)` | more than 15% of a domain's GRPO groups were masked (infra or judge failure; timeouts are NOT counted here) | that domain trains on fewer prompts than planned; the environment, not the model, is failing |
+| `TIMEOUTS(<d>=x)` | more than 30% of a domain's groups contain a trial that ran out of time | those trials left no tokens (training keeps them as zero-loss placeholders with their reward); the policy is too slow or too long for `max_agent_sec` / `max_turns`: raise the cap or lower the turn limit. Informational: it never stops a run (a separate rule stops it when >= 90% of groups are dropped) |
 | `STEP_SLOW(Ns > 1.5 x plan Ms)` | `timing/step` above 1.5 x the plan's step estimate (`plan_step_seconds` in `evidence/<attempt>/stage.json` and the pod's `runtime.json`) | the run will not reach its planned steps; silent for runs staged before the estimate existed |
 | `MEM(<key>=x GB > 76)` | any logged GPU memory metric above 76 GB | OOM is close (an H100 has 80 GB) |
 
