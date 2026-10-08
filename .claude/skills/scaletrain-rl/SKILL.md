@@ -134,9 +134,10 @@ always `dry` -> `canary` before a new model/environment/reward's first real run;
   small model -> a 1-node canary with the target model (it measures decode speed, step time, memory, export) -> the run. Each rung found
   bugs the previous one could not (see validation.md).
 - Agentic RL and timeouts: ~30 s per Terminus turn on Qwen3.8-27B means turns x 35 s must stay under `max_agent_sec`
-  (`environment.mimo.domains.<d>.max_turns` caps turns at run time). A trial that times out leaves no tokens: evaluation scores it 0
-  (never masked: masking it flatters the policy), training keeps it in its GRPO group as a tokenless placeholder (reward in the
-  baseline, loss mask 0) because SkyRL would otherwise mask the whole prompt group. `environment/<d>/timeout_group_fraction` and the
+  (`environment.mimo.domains.<d>.max_turns` caps turns at run time). A trial that times out is a scored failure: evaluation scores it 0 (never
+  masked: masking it flatters the policy); in training it trains on the verifier's reward when it left tokens (most agentic trials do) and
+  otherwise (single-shot music, some webdev) stays in its GRPO group as a tokenless zero-loss placeholder, because SkyRL would otherwise mask
+  the whole prompt group. `environment/<d>/timeout_group_fraction` and the
   `TIMEOUTS` flag show it; the fail-fast rules read infrastructure masks only.
 - Borrowed GPU capacity can be reclaimed within a minute (`status_detail: preemption_reported`; the worker records `preempted`): a
   preempted attempt does not resume (no optimizer-state checkpoints, the budget window is anchored at the first start); restage a new

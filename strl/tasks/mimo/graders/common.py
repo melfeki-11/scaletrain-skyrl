@@ -27,7 +27,7 @@ find "$V" -mindepth 1 ! -name 'test-stdout.txt' ! -name 'test-stderr.txt' -delet
 echo 0 > "$V/reward.txt"
 # 3. only the files we shipped may exist in /tests (an agent with a root shell can plant modules that shadow the stdlib)
 if [ -f /tests/MANIFEST.txt ]; then
-  find /tests -type f | while IFS= read -r f; do grep -qxF -- "${{f#/tests/}}" /tests/MANIFEST.txt || rm -f -- "$f"; done
+  find /tests ! -type d | while IFS= read -r f; do grep -qxF -- "${{f#/tests/}}" /tests/MANIFEST.txt || rm -f -- "$f"; done   # symlinks included
 fi
 # 4. the images differ: python:3.12-slim and general-agent-env-0 only have /usr/local/bin/python3
 PY=$(command -v python3 || command -v /usr/local/bin/python3 || command -v /usr/bin/python3)

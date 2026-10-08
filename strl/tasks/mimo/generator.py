@@ -203,6 +203,15 @@ def decide(results: Any, *, attempt: int, attempts: int, policy: str) -> str:
     return 'retry' if attempt + 1 < attempts else 'mask'
 
 
+def verifier_reached(results: Any) -> bool:
+    """True when Harbor started the verifier (``results.verifier.started_at``): an agent timeout whose verifier never started or crashed is not
+    evidence about the policy. Results without that field (older Harbor, test fakes) are given the benefit of the doubt."""
+    if not hasattr(results, 'verifier'):
+        return True
+    verifier = getattr(results, 'verifier', None)
+    return bool(verifier is not None and getattr(verifier, 'started_at', None))
+
+
 def has_rollout(results: Any) -> bool:
     rollout = getattr(getattr(results, 'agent_result', None), 'rollout_details', None)
     return bool(rollout and len(rollout) >= 1 and len(rollout[0].get('completion_token_ids', [])) > 0)
@@ -264,6 +273,8 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
     seconds = time.monotonic() - started
     if verdict == 'mask' or results is None:
         reason = {'AgentTimeoutError': 'agent_timeout', 'VerifierTimeoutError': 'verifier_timeout'}.get(exception_type(results), 'error') if results is not None else 'error'
+        if reason == 'agent_timeout' and results is not None and not verifier_reached(results):
+            reason = 'verifier_missing'   # Harbor keeps the agent's timeout when the verifier then crashes: infrastructure, not the policy
         if phase == 'eval' and reason in ('agent_timeout', 'verifier_timeout') and settings['timeout_policy'] == 'score':
             # evaluation needs no tokens: a policy that ran out of time failed the task, it is not an infrastructure loss
             return _masked(trajectory_id, seconds), {**masked_summary(domain, name, rep, reason, seconds=round(seconds, 1)), 'masked': False, 'mask_reason': None, 'metric': 0.0}
@@ -295,7 +306,7 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
     if details.get('infra_error'):
         _warn(f'mimo masked {domain}/{name} rep={rep}: infra_error ({str(details.get("error"))[:160]})')
         return _masked(trajectory_id, seconds), {**summary, **masked_summary(domain, name, rep, 'infra_error', seconds=round(seconds, 1)),
-                                                 'artifact': summary['artifact'], 'screenshot': summary['screenshot']}
+                                                 'artifact': summary['artifact'], 'screenshot': summary['screenshot'], 'placeholder': False}
     if exc in ZERO_EXC:
         reward = 0.0
     else:
@@ -411,14 +422,35 @@ async def gather_with_deadline(factories: list[Callable[[], Any]], deadline_sec:
 # ------------------------------------------------------------------------------------------------------------ metrics
 # A trial that timed out leaves Harbor no tokens, so training cannot learn from it. That is the POLICY's behaviour (too slow or too long for
 # the caps), not an environment failure, and the fail-fast rules must not call it one (g4-mimo-b: 38 music timeouts at a 120 s cap read as
-# "the environment failed", killing a healthy run). It stays in its group as a tokenless placeholder (see PLACEHOLDER_DETAIL). Three views:
-# infrastructure masks (what the rules read), groups with a timed-out trial, all dropped groups.
+# "the environment failed", killing a healthy run). With tokens it trains on the verifier's reward; without, it stays in its group as a tokenless
+# placeholder (see PLACEHOLDER_DETAIL). Three views (group_fractions): infrastructure masks (what the rules read), groups with a timed-out trial,
+# groups with nothing trainable.
 TIMEOUT_REASONS = ('agent_timeout', 'verifier_timeout')
-GROUP_KINDS: dict[str, Callable[[dict], bool]] = {
-    'masked_group_fraction': lambda s: bool(s['masked']) and s.get('mask_reason') not in TIMEOUT_REASONS,
-    'timeout_group_fraction': lambda s: bool(s.get('placeholder')) or (bool(s['masked']) and s.get('mask_reason') in TIMEOUT_REASONS),
-    'dropped_group_fraction': lambda s: bool(s['masked']),
-}
+
+
+def _infra_masked(s: dict) -> bool:
+    return bool(s['masked']) and s.get('mask_reason') not in TIMEOUT_REASONS
+
+
+def _timed_out(s: dict) -> bool:
+    return s.get('stop') in TIMEOUT_REASONS or (bool(s['masked']) and s.get('mask_reason') in TIMEOUT_REASONS)
+
+
+def group_fractions(summaries: list[dict], groups: list[str]) -> dict[str, float]:
+    """{masked, timeout, dropped}_group_fraction over the groups of ``summaries`` (``groups[i]`` is trial i's prompt id):
+    masked  = a trial failed for an infrastructure reason (SkyRL masks the whole prompt group; what the fail-fast rules read);
+    timeout = a trial ran out of time (with tokens it still trains on the verifier's reward; without, it is a zero-loss placeholder);
+    dropped = nothing in the group can be trained: an infrastructure mask, or every trial is a placeholder or masked."""
+    members: dict[str, list[dict]] = {}
+    for g, s in zip(groups, summaries):
+        members.setdefault(g, []).append(s)
+    if not members:
+        return {'masked_group_fraction': 0.0, 'timeout_group_fraction': 0.0, 'dropped_group_fraction': 0.0}
+    n = float(len(members))
+    masked = sum(any(_infra_masked(s) for s in m) for m in members.values())
+    timeout = sum(any(_timed_out(s) for s in m) for m in members.values())
+    dropped = sum(any(_infra_masked(s) for s in m) or all(s['masked'] or s.get('placeholder') for s in m) for m in members.values())
+    return {'masked_group_fraction': masked / n, 'timeout_group_fraction': timeout / n, 'dropped_group_fraction': dropped / n}
 
 
 def rollout_metrics(summaries: list[dict], group_ids: list[str] | None = None, *, phase: str = 'train') -> dict[str, float]:
@@ -448,13 +480,10 @@ def rollout_metrics(summaries: list[dict], group_ids: list[str] | None = None, *
         if judged:
             out[f'{p}/judge_latency_s'] = sum(j['meta']['latency_s'] for j in judged) / len(judged)
             out[f'{p}/judge_cost_usd'] = sum(j['meta']['cost_usd'] for j in judged)
-        gids = {groups[i] for i in idx}
-        for name, pick in GROUP_KINDS.items():
-            hit = {groups[i] for i in idx if pick(summaries[i])}
-            out[f'environment/{domain}/{name}'] = len(hit) / len(gids) if gids else 0.0
-    all_groups = set(groups)
-    for name, pick in GROUP_KINDS.items():
-        out[f'environment/{name}'] = len({g for g, s in zip(groups, summaries) if pick(s)}) / len(all_groups) if all_groups else 0.0
+        for name, value in group_fractions([summaries[i] for i in idx], [groups[i] for i in idx]).items():
+            out[f'environment/{domain}/{name}'] = value
+    for name, value in group_fractions(summaries, groups).items():
+        out[f'environment/{name}'] = value
     return out
 
 
@@ -507,7 +536,7 @@ def make_generator_class():
             out, summary = await run_trajectory(self._deps(), prompt, trajectory_id, cache_salt=cache_salt, temperature=temperature,
                                                 env_extra=env_extra, phase=phase)
             remember(phase, trajectory_id, summary, env_extra)
-            if summary.get('placeholder'):   # not 'error'/'agent_timeout': either would make SkyRL mask the whole prompt group
+            if summary.get('placeholder') and not summary.get('masked'):   # not 'error'/'agent_timeout': either would make SkyRL mask the whole prompt group
                 out = {**out, 'rollout_details': [dict(PLACEHOLDER_DETAIL)], 'stop_reason': 'complete'}
             output = HarborTrajectoryOutput(**out)
             output.mimo_summary = summary

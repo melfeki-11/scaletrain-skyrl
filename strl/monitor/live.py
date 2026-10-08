@@ -107,7 +107,7 @@ def flags(rows: list[dict], progress: dict | None, heartbeat: dict | None, node_
         if (fraction.get('masked_group_fraction') or 0) > DOMAIN_MASKED_LIMIT:
             out.append(f"DOMAIN_MASKED({name}={fraction['masked_group_fraction']:.2f})")
         if (fraction.get('timeout_group_fraction') or 0) > TIMEOUT_LIMIT:
-            out.append(f"TIMEOUTS({name}={fraction['timeout_group_fraction']:.2f}: trials out of time leave no tokens and are dropped from training; raise the caps or shorten turns)")
+            out.append(f"TIMEOUTS({name}={fraction['timeout_group_fraction']:.2f}: a trial ran out of time (it trains on the verifier's reward if it left tokens, else it is a zero-loss placeholder); raise the caps or shorten turns)")
     if plan_step_seconds and isinstance(seen.get('timing/step'), (int, float)) and seen['timing/step'] > STEP_SLOW_FACTOR * plan_step_seconds:
         out.append(f"STEP_SLOW({seen['timing/step']:.0f}s > {STEP_SLOW_FACTOR} x plan {plan_step_seconds:.0f}s)")
     before, after = seen.get('generate/num_seq_before_merge'), seen.get('generate/num_seq_after_merge')

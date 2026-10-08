@@ -564,6 +564,16 @@ class SharedVerifierEntrypoint(unittest.TestCase):
         self.assertFalse((self.tests / "json.py").exists(), r.stderr)
         self.assertEqual(self.details()["ok"], True)
 
+    def test_a_planted_symlink_in_tests_is_deleted_too(self):
+        """Review finding: `find -type f` skipped symlinks, so /tests/json.py -> evil.py survived and shadowed the stdlib."""
+        self.install("import json\nopen('/logs/verifier/details.json','w').write(json.dumps({'ok': True}))\n")
+        evil = self.root / "evil.py"
+        evil.write_text("raise SystemExit('planted module ran')\n")
+        (self.tests / "json.py").symlink_to(evil)
+        r = self.run_sh()
+        self.assertFalse((self.tests / "json.py").is_symlink() or (self.tests / "json.py").exists(), r.stderr)
+        self.assertEqual(self.details()["ok"], True)
+
     def test_a_grader_that_crashes_or_never_ran_is_an_infra_error_not_a_zero(self):
         self.install("raise RuntimeError('boom')\n")
         self.run_sh()

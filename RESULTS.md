@@ -37,19 +37,32 @@ step-0 numbers never reached S3 or W&B. The 1-node run below used the budget tha
 | webdev | 0.025 | 0.051 | +0.026 [-0.019, +0.081] | 16 | 0 |
 | **macro** | **4.26%** | **6.38%** | **+2.11 [-2.68, +7.08]** | 79 | 2 |
 
-Outcome flips on the 160 paired trials: 6 fixed, 3 broken, 1 correct in both, 148 wrong in both.
+Outcome flips on the 158 paired trials (160 minus 2 code trials masked by an infrastructure error on both sides): 6 fixed, 3 broken, 1 correct in both, 148 wrong in both.
 
 **What this does and does not show.** Three updates on a 27B with 20% of groups carrying a learning signal cannot move a macro score by a measurable
 amount, and it did not: the macro delta's CI contains zero, and so does every domain's except cyber's (+9.4 points, lower bound exactly 0.0,
 16 tasks): suggestive, not a result. The claims this run supports are the infrastructure and measurement claims below, not a training
 gain. Do not read the rise from 4.3% to 6.4% as an effect.
 
-**Why the scores are this low (read before the next run).** The critic labels 88% of failing trials `timeout_or_inefficient`. At ~30 s per
-Terminus turn the agent is cut off by its per-domain turn and time caps (8-14 turns, 600 s) before it finishes most tasks. Those caps were chosen
-to fit the budget and apply equally to the base and trained evaluations, so the comparison is fair but low-ceiling. In training, 62-88% of music
-and webdev groups contained a trial that ran out of time under the load of 240 concurrent rollouts on four engines; those trials stay in their
-group as zero-loss placeholders (they have no tokens), so the signal came from the trials that finished. The lever for the next run is time per
-trial (more engines, CUDA graphs for the hybrid GDN decode, or a larger cap), not more steps.
+**Timeouts dominate this evaluation (read before the next run).** 107 of the 160 held-out trials ended by running out of time, in the base
+and in the trained evaluation alike (`evidence/results/mimo-run1-n1-a-eval-stops.json`):
+
+| domain (32 trials) | timed out, base -> trained | completed | note |
+| --- | --- | --- | --- |
+| music | 10 -> 8 | 22 -> 24 | a timeout leaves no tokens (single shot): scored 0 |
+| cyber | 21 -> 22 | 11 -> 10 | |
+| code | 19 -> 21 | 11 -> 9 | 2 trials masked (infrastructure) on both sides |
+| general | 26 -> 24 | 6 -> 8 | **no trial left an answer file**: the agent reached its 14-turn cap while still querying the MCP tools |
+| webdev | 31 -> 32 | 1 -> 0 | cut off before a page was written |
+
+At ~30 s per Terminus turn the per-domain turn and time caps (8-14 turns, 600 s) were chosen to fit the budget, and they cut the agent off
+before it finishes most tasks. They apply equally to the base and trained evaluations, so the comparison is fair, but it is low-ceiling:
+**general and webdev carry essentially no signal in this run** (general scored 0.0 on all 64 trials, so the judged-answer re-score check
+below is vacuous for it; the transcripts show the environment working, the agent simply never reached its deliverable). The macro average is
+therefore driven by music, cyber and code. In training, a trial that times out *with* tokens (most agentic ones) trains on the verifier's reward
+for the partial workspace; one that leaves none (single-shot music, some webdev) stays in its group as a zero-loss placeholder; per step,
+62-88% of music groups and 25-62% of webdev groups contained such a tokenless timeout. The lever for the next run is time per trial (a larger
+cap, more engines, CUDA graphs for the hybrid GDN decode) and more turns for general/webdev, not more steps.
 
 ### Measured infrastructure (1 node, 8 H100, TP2 × 4 engines)
 
@@ -60,15 +73,16 @@ trial (more engines, CUDA graphs for the hybrid GDN decode, or a larger cap), no
 | held-out evaluation (160 trials) | 793 s |
 | adapter export (HF) | 121 s |
 | peak GPU memory | 70.8 GB (limit 76) |
-| step-wise turn merging (Qwen3.8) | 6.3x fewer sequences (223 -> 36 in the canary) |
-| infrastructure-masked groups | 0 in training and evaluation, except 2 code held-out ids dropped on both sides |
+| step-wise turn merging (Qwen3.8) | ~6x fewer sequences: 5.7-6.4x in the main run (1,508 -> 251, 1,590 -> 249, 1,517 -> 266), 223 -> 36 in the canary |
+| infrastructure-masked groups | training: 0 except one code group at step 3 (mean 0.042, max 0.125); evaluation: 2 code trials on both sides |
 | judge / critic cost | gpt-6-luna judge $1.90 (general $0.86, webdev $1.04), critic $0.10 |
 
 ### Verification (`strl verify`, `evidence/results/mimo-27b-lora-run1-1node-report.md`)
 
 - Coverage complete: 160 expected evaluation rows for base and for trained, none missing, none duplicated.
-- The independent re-score reproduces the worker's per-domain table exactly; 28 music artifacts re-graded offline with 0 disagreements; 8
-  judged general answers re-judged with mean absolute difference 0.0. Code, cyber and webdev need their sandboxes and are not re-gradable offline.
+- The independent re-score reproduces the worker's per-domain point estimates exactly (the bootstrap CI endpoints differ by ~0.2 points: macro
+  [-2.88, +6.92] independent vs [-2.68, +7.08] worker, different resampling); 28 music artifacts re-graded offline with 0 disagreements; 8 judged
+  general answers re-judged with mean absolute difference 0.0 (vacuous: every general score was 0.0). Code, cyber and webdev need their sandboxes and are not re-gradable offline.
 - W&B readback (`evidence/results/wandb-readback-mimo-run1-n1-a.json`): run finished, 282 metric keys, per-domain and macro evaluation keys, 15
   artifacts (train and eval trajectory tables, fixed-validation, critic, media).
 

@@ -61,7 +61,7 @@ through `tracking.alert` (W&B alert on the attempt's run; honours `tracking.aler
 | Flag | Fires when | Why it matters |
 | --- | --- | --- |
 | `DOMAIN_MASKED(<d>=x)` | more than 15% of a domain's GRPO groups were masked (infra or judge failure; timeouts are NOT counted here) | that domain trains on fewer prompts than planned; the environment, not the model, is failing |
-| `TIMEOUTS(<d>=x)` | more than 30% of a domain's groups contain a trial that ran out of time | those trials left no tokens (training keeps them as zero-loss placeholders with their reward); the policy is too slow or too long for `max_agent_sec` / `max_turns`: raise the cap or lower the turn limit. Informational: it never stops a run (a separate rule stops it when >= 90% of groups are dropped) |
+| `TIMEOUTS(<d>=x)` | more than 30% of a domain's groups contain a trial that ran out of time | a timed-out trial that left tokens trains on the verifier's reward for its partial work; one that left none (single-shot music, some webdev) stays in its group as a zero-loss placeholder; the policy is too slow or too long for `max_agent_sec` / `max_turns`: raise the cap or lower the turn limit. Informational: it never stops a run (a separate rule stops it when >= 90% of groups are dropped) |
 | `STEP_SLOW(Ns > 1.5 x plan Ms)` | `timing/step` above 1.5 x the plan's step estimate (`plan_step_seconds` in `evidence/<attempt>/stage.json` and the pod's `runtime.json`) | the run will not reach its planned steps; silent for runs staged before the estimate existed |
 | `MEM(<key>=x GB > 76)` | any logged GPU memory metric above 76 GB | OOM is close (an H100 has 80 GB) |
 

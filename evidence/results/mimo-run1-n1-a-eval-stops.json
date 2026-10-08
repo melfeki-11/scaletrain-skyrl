@@ -1,0 +1,99 @@
+{
+ "step0/all": {
+  "stops": {
+   "agent_timeout": 107,
+   "complete": 51,
+   "masked:infra_error": 2
+  },
+  "trials": 160
+ },
+ "step0/code": {
+  "stops": {
+   "agent_timeout": 19,
+   "complete": 11,
+   "masked:infra_error": 2
+  },
+  "timeouts_without_tokens": 0,
+  "trials": 32
+ },
+ "step0/cyber": {
+  "stops": {
+   "agent_timeout": 21,
+   "complete": 11
+  },
+  "timeouts_without_tokens": 0,
+  "trials": 32
+ },
+ "step0/general": {
+  "stops": {
+   "agent_timeout": 26,
+   "complete": 6
+  },
+  "timeouts_without_tokens": 0,
+  "trials": 32
+ },
+ "step0/music": {
+  "stops": {
+   "agent_timeout": 10,
+   "complete": 22
+  },
+  "timeouts_without_tokens": 10,
+  "trials": 32
+ },
+ "step0/webdev": {
+  "stops": {
+   "agent_timeout": 31,
+   "complete": 1
+  },
+  "timeouts_without_tokens": 2,
+  "trials": 32
+ },
+ "step3/all": {
+  "stops": {
+   "agent_timeout": 107,
+   "complete": 51,
+   "masked:infra_error": 2
+  },
+  "trials": 160
+ },
+ "step3/code": {
+  "stops": {
+   "agent_timeout": 21,
+   "complete": 9,
+   "masked:infra_error": 2
+  },
+  "timeouts_without_tokens": 0,
+  "trials": 32
+ },
+ "step3/cyber": {
+  "stops": {
+   "agent_timeout": 22,
+   "complete": 10
+  },
+  "timeouts_without_tokens": 0,
+  "trials": 32
+ },
+ "step3/general": {
+  "stops": {
+   "agent_timeout": 24,
+   "complete": 8
+  },
+  "timeouts_without_tokens": 0,
+  "trials": 32
+ },
+ "step3/music": {
+  "stops": {
+   "agent_timeout": 8,
+   "complete": 24
+  },
+  "timeouts_without_tokens": 8,
+  "trials": 32
+ },
+ "step3/webdev": {
+  "stops": {
+   "agent_timeout": 32
+  },
+  "timeouts_without_tokens": 5,
+  "trials": 32
+ }
+}

@@ -140,6 +140,38 @@ class ShapedReward(unittest.TestCase):
         self.assertTrue(any('module:function' in p for p in problems([{'fn': 'verifier_score'}, {'fn': 'length_penalty', 'weight': 1.0}])))
 
 
+class ReviewFindings(unittest.TestCase):
+    """Independent review of the 27B run's code: a placeholder must never hide an infrastructure failure or a crashed verifier."""
+
+    def test_infra_error_after_a_timeout_is_masked_not_a_placeholder(self):
+        with tempfile.TemporaryDirectory() as temp:
+            env = Env(temp)
+            trial = env.trial_dir(reward_txt='0', details={'infra_error': True, 'error': 'grader crashed'})
+            env.queue = [fake_results(exc='AgentTimeoutError', reward=0.0, rollout=False, trial_dir=trial)]
+            out, summary = env.go(phase='train')
+            self.assertEqual((summary['masked'], summary['mask_reason'], summary['placeholder']), (True, 'infra_error', False))
+
+    def test_agent_timeout_without_a_verifier_is_infrastructure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            results = fake_results(exc='AgentTimeoutError', reward=None, rollout=False)
+            results.verifier = None                                    # Harbor never started (or crashed in) the verifier
+            env = Env(temp)
+            env.queue = [results]
+            out, summary = env.go(phase='eval')
+            self.assertEqual((summary['masked'], summary['mask_reason']), (True, 'verifier_missing'))
+            ran = fake_results(exc='AgentTimeoutError', reward=None, rollout=False)
+            ran.verifier = types.SimpleNamespace(started_at='2026-10-08T00:00:00Z')
+            env = Env(temp + '/ok')
+            env.queue = [ran]
+            self.assertFalse(env.go(phase='eval')[1]['masked'])         # the verifier ran: a real policy failure, scored 0
+
+    def test_no_artifact_rate_counts_screenshots(self):
+        from strl.tasks.mimo import spec
+        rows = [{'domain': 'webdev', 'masked': False, 'artifact': '', 'screenshot': '/x/screenshot.png', 'task_metric': 0.3},
+                {'domain': 'webdev', 'masked': False, 'artifact': '', 'screenshot': None, 'task_metric': 0.0}]
+        self.assertEqual(spec.MimoSpec().eval_metrics(rows)['eval/webdev/no_artifact_rate'], 0.5)
+
+
 class PlaceholderMasks(unittest.TestCase):
     def test_placeholder_steps_get_a_zero_loss_mask_and_keep_their_group(self):
         class Tid:
@@ -172,7 +204,12 @@ class TimeoutMasksAreNotEnvironmentFailures(unittest.TestCase):
         self.assertEqual((out['environment/cyber/masked_group_fraction'], out['environment/cyber/dropped_group_fraction']), (0.5, 0.5))
         self.assertAlmostEqual(out['environment/masked_group_fraction'], 1 / 5)
         self.assertAlmostEqual(out['environment/timeout_group_fraction'], 2 / 5)
-        self.assertAlmostEqual(out['environment/dropped_group_fraction'], 1 / 5)    # only the infrastructure mask drops a group
+        # dropped = nothing trainable in the group: the two all-placeholder music groups and the infrastructure-masked cyber group
+        self.assertAlmostEqual(out['environment/dropped_group_fraction'], 3 / 5)
+        mixed = generator.rollout_metrics([timed_out('music'), s('music')], ['m', 'm'])     # a placeholder next to a trainable trial keeps its group
+        self.assertEqual((mixed['environment/music/dropped_group_fraction'], mixed['environment/music/timeout_group_fraction']), (0.0, 1.0))
+        with_tokens = {**s('music'), 'stop': 'agent_timeout'}                              # a timeout that left tokens trains normally but is still counted
+        self.assertEqual(generator.rollout_metrics([with_tokens], ['m'])['environment/music/timeout_group_fraction'], 1.0)
 
 
 class DataCase(unittest.TestCase):

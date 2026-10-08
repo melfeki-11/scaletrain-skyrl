@@ -452,7 +452,7 @@ def make_callback_class():
                 nothing = max([self.dropped.get(s, 0.0) for s in (1, 2)])
                 if nothing >= CANARY_MAX_DROPPED:
                     alert('Canary failed', f'{nothing:.0%} of GRPO groups were dropped (timeouts or masks) in steps 1-2: nothing to train on')
-                    raise RuntimeError(f'Canary: {nothing:.0%} of GRPO groups were dropped in steps 1-2 (agent timeouts leave no tokens): '
+                    raise RuntimeError(f'Canary: {nothing:.0%} of GRPO groups were dropped in steps 1-2 (a timeout that leaves no tokens becomes a placeholder, not a trainable trial): '
                                        'raise the per-domain caps or lower max_generate_length / max_turns; see environment/*/timeout_group_fraction')
                 worst = max([self.env_failures.get(s, 0.0) for s in (1, 2)])
                 if worst >= CANARY_MAX_ENV_FAILURE:

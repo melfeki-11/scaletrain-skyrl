@@ -324,7 +324,7 @@ class MimoSpec(CodingHarborSpec):
         for domain in data.DOMAINS:   # eval/invalid_answer_rate is the all-domain version of this: a trial that left no artifact for the verifier
             rows = [r for r in records if r.get('domain') == domain and not r.get('masked')]
             if rows:
-                out[f'eval/{domain}/no_artifact_rate'] = sum(not r.get('artifact') for r in rows) / len(rows)
+                out[f'eval/{domain}/no_artifact_rate'] = sum(not (r.get('artifact') or r.get('screenshot')) for r in rows) / len(rows)
         if 'eval/macro_task_metric' in out:
             out['eval/task_metric'] = out['eval/macro_task_metric']
         return out

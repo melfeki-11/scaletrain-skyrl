@@ -157,7 +157,7 @@ def cmd_capacity(a):
 def cmd_stage(a):
     from .stage import stage
     receipt = stage(a.experiment, attempt=a.attempt, mode=a.mode, team=a.team, allow_borrowing=a.allow_borrowing, ledger=a.ledger,
-                    output=a.output or f'evidence/{a.attempt}/job.json', overrides=a.set)
+                    output=a.output or f'evidence/{a.attempt}/job.json', overrides=[*(a.set or []), *(['compute.allow_borrowing=false'] if a.no_borrowing else [])])
     Path(f'evidence/{a.attempt}').mkdir(parents=True, exist_ok=True)
     Path(f'evidence/{a.attempt}/stage.json').write_text(json.dumps(receipt, indent=2))
     print(json.dumps(receipt, indent=1))
@@ -225,7 +225,7 @@ def worker_started(cfg: dict, attempt: str, s3=None) -> bool:
         raise
 
 
-POD_START_SLACK_SECONDS = 180   # image pull + container start happen before the worker writes budget.json
+POD_START_SLACK_SECONDS = 420   # image pull, container start and the in-pod payload/model bootstrap (S3 fetch + sha256) happen before the worker writes budget.json
 
 
 def allocation_start(cfg: dict, attempt: str, s3=None) -> float | None:
@@ -267,8 +267,8 @@ def cmd_ledger(a):
     if a.never_started:   # cancelled while QUEUED: no pod, no GPU time -> not charged (budget.remaining_seconds skips an unallocated terminal job)
         if job['status'] not in {'CANCELED', 'CANCELLED'}:
             raise SystemExit('--never-started applies only to a cancelled job')
-        if worker_started(cfg, a.attempt):
-            raise SystemExit(f'{a.attempt} has worker-started.json: a pod ran, so it is charged from creation (omit --never-started)')
+        if worker_started(cfg, a.attempt) or allocation_start(cfg, a.attempt) is not None:   # budget.json is written before rendezvous: pods were up
+            raise SystemExit(f'{a.attempt} has worker-started.json or budget.json: a pod ran, so it is charged (omit --never-started)')
         entry.update(allocated_at=None, evidence='cancelled while QUEUED; no worker-started.json in the attempt artifacts: the pod never started (not charged)')
     ledger['attempts'].append(entry)
     ledger_path.write_text(json.dumps(ledger, indent=2) + '\n')
@@ -337,7 +337,7 @@ def main(argv=None):
     s = sub.add_parser('capacity'); s.add_argument('--nodes', type=int, default=1); s.add_argument('--gpus-per-node', default='8,4,2,1')
     s.add_argument('--output', default='evidence/capacity.json')
     s = sub.add_parser('stage'); s.add_argument('experiment'); s.add_argument('--attempt', required=True)
-    s.add_argument('--mode', choices=['dry', 'canary', 'train'], required=True); s.add_argument('--team'); s.add_argument('--allow-borrowing', action='store_true')
+    s.add_argument('--mode', choices=['dry', 'canary', 'train'], required=True); s.add_argument('--team'); s.add_argument('--allow-borrowing', action='store_true'); s.add_argument('--no-borrowing', action='store_true', help='own-quota route only (not reclaimable): sets compute.allow_borrowing=false')
     s.add_argument('--output'); s.add_argument('--ledger', help='program budget ledger (default: budget.ledger of the experiment)')
     s.add_argument('--set', action='append', default=[], metavar='KEY=VALUE', help='dotted experiment override, YAML value (repeatable)')
     s = sub.add_parser('check-template'); s.add_argument('experiment'); s.add_argument('--set', action='append', default=[])
