@@ -74,8 +74,14 @@ pick any subset of five domains at run time, each as sandboxed Harbor tasks grad
 | `general` | office-style tasks over MCP tools (and terminal-bench tasks) | in-sandbox rule checks + an outside-the-sandbox LLM rubric judge |
 | `webdev` | build a static website | in-sandbox Playwright render + an outside-the-sandbox vision judge |
 
-`experiments/mimo-qwen38-27b-lora.yaml` and `-full.yaml` target Qwen3.8-27B on 2 x 8 H100; `mimo-qwen35-0p8b-smoke.yaml` is the 1-GPU canary
-(5 domains, 4 train + 2 held-out tasks each). Held-out sets are fixed per domain (grouped by project, repo, scenario or tag), so runs with a different
+`experiments/mimo-qwen38-27b-lora.yaml` and `-full.yaml` are the full-size Qwen3.8-27B experiments on 2 x 8 H100 (the only edit between them is
+`finetune.mode`); `-lora-run1.yaml` fits that to the budget that was left after the verification ladder and `-lora-run1-1node.yaml` is its 1-node
+fallback (the 2-node attempt waited ~23 h for two nodes in one network domain, then was preempted: see RESULTS.md). `mimo-qwen35-0p8b-smoke.yaml` is
+the 1-GPU canary (5 domains, 4 train + 2 held-out tasks each) and `mimo-qwen35-0p8b-2node-smoke.yaml` the 2 x 8 multi-node smoke.
+
+Result of the 27B run (3 updates, LoRA): macro task metric 4.26% -> 6.38%, paired CI [-2.68, +7.08] (not significant; see RESULTS.md for the
+limits). What it demonstrates is the platform: five graders and two judges in one trainer, in-loop paired held-out evaluation, per-domain
+monitoring, and an independent `strl verify` that re-scored the evaluation without disagreement. Held-out sets are fixed per domain (grouped by project, repo, scenario or tag), so runs with a different
 training selection remain comparable; evaluation is in the training loop (step 0 = base, last step = trained) and reported per domain plus a macro average
 with paired bootstrap CIs (`strl verify`, `strl compare`, `strl report`). The verification ladder and what each rung caught are in
 [validation.md](.claude/skills/scaletrain-rl/references/validation.md).
