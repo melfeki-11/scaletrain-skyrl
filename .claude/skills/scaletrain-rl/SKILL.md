@@ -51,7 +51,8 @@ cp experiments/mbpp-qwen35-binary.yaml experiments/my-exp.yaml      # edit name,
 ```
 
 Models too large for a laptop upload (`strl stage-model <exp> --attempt A`) are copied from HF to S3 by a CPU job, one shard at a time.
-Multi-node programs have their own budget ledger (`evidence/ledgers/mimo-27b.json`); a wall-clock second costs `nodes x gpus/8`.
+Multi-node programs have their own budget ledger (`evidence/ledgers/mimo-27b.json`); a wall-clock second costs `nodes x gpus/8`, counted from when the
+pods started (the worker's `budget.json`), never from job creation: a 2 x 8 job can wait hours in the queue for two nodes in ONE network domain.
 
 Rules: `stage` never submits; `submit` writes a receipt first and reconciles by name if anything is ambiguous (never resubmit);
 always `dry` -> `canary` before a new model/environment/reward's first real run; record every terminal attempt in the ledger.
@@ -128,7 +129,19 @@ always `dry` -> `canary` before a new model/environment/reward's first real run;
   (`strl check-template`): Qwen3.5 never merges (811 turns -> 811 sequences), Qwen3.8 with `enable_thinking=false` does (-> 209).
 - Local tools put `assets/overlay` (Linux pod packages) AFTER the venv on `sys.path`: first, its x86_64 `.so` files shadow the Mac's.
 - Everything reaching Hugging Face or Modal paths must be percent-encoded (workspace file names carry spaces and non-ASCII).
-- Verification ladder for a new suite: unit tests -> real tasks through the real path (`prepare`, nop gate per domain) -> CPU dry run
-  in the image (judge selftest, validate_cfg at the target GPU count, 2 nodes if needed) -> 1-GPU canary -> the run. Each rung found
+- Verification ladder for a new suite: unit tests -> real tasks through the real path (`prepare`, nop gate per domain, image prebuild
+  in Modal) -> CPU dry run in the image (judge selftest, validate_cfg at the target GPU count, 2 nodes if needed) -> 1-GPU canary with a
+  small model -> a 1-node canary with the target model (it measures decode speed, step time, memory, export) -> the run. Each rung found
   bugs the previous one could not (see validation.md).
+- Agentic RL and timeouts: ~30 s per Terminus turn on Qwen3.8-27B means turns x 35 s must stay under `max_agent_sec`
+  (`environment.mimo.domains.<d>.max_turns` caps turns at run time). A trial that times out leaves no tokens: evaluation scores it 0
+  (never masked: masking it flatters the policy), training keeps it in its GRPO group as a tokenless placeholder (reward in the
+  baseline, loss mask 0) because SkyRL would otherwise mask the whole prompt group. `environment/<d>/timeout_group_fraction` and the
+  `TIMEOUTS` flag show it; the fail-fast rules read infrastructure masks only.
+- Borrowed GPU capacity can be reclaimed within a minute (`status_detail: preemption_reported`; the worker records `preempted`): a
+  preempted attempt does not resume (no optimizer-state checkpoints, the budget window is anchored at the first start); restage a new
+  attempt, preferably on a team's own quota (`strl capacity` ranks the routes). Every job still carries foundation team, high priority
+  and `allow_borrowing: true` unless the user approves another route; CPU jobs on another team's quota may never start.
+- The in-pod model download is gentle by design (4 files x 8 parts; a 55 GB model filled a 30 GiB CPU pod with 16 x 16), and `--mode dry`
+  skips the weights. One-pod CPU diagnostics that write status to S3 are the way to debug a pod that dies before the worker starts.
 - Custom `module:function` rewards must live in `user_rewards/` (or another top-level package of this repo) to ship to the pod.
