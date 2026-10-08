@@ -30,3 +30,4 @@ assets/coding/
 !evidence/results/*.md
 assets/mimo/
 .claude/worktrees/
+wandb/
