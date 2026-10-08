@@ -236,10 +236,11 @@ class MimoSpec(CodingHarborSpec):
         receipt: dict[str, Any] = {'domains': {}, 'actual_reward_passed': True}
         for domain, task in self._one_per_domain(cfg).items():
             meta, toml = read_task(task)
-            config = build_trial_config(template, task, session_id='contract', meta=meta, toml=toml, temperature=1.0)
+            caps = {k: v for k, v in data.mimo_config(cfg)['domains'][domain].items() if k in ('max_agent_sec', 'max_verifier_sec', 'max_turns') and v}
+            config = build_trial_config(template, task, session_id='contract', meta=meta, toml=toml, temperature=1.0, caps=caps)   # the caps real trials get
             TrialConfig.model_validate(config)
             receipt['domains'][domain] = {'agent': config['agent'].get('name') or config['agent'].get('import_path'), 'max_turns': config['agent']['kwargs']['max_turns'],
-                                          'agent_timeout_sec': (toml.get('agent') or {}).get('timeout_sec')}
+                                          'agent_timeout_sec': config['agent'].get('override_timeout_sec') or (toml.get('agent') or {}).get('timeout_sec')}
         request = {'kind': 'rubric', 'base_score': 0.25, 'total_weight': 1.0, 'items': [{'id': 'a', 'weight': 0.75}]}
         if abs(judge.combine(request, {'a': 1.0}) - 1.0) > 1e-9 or abs(judge.combine(request, {'a': 0.0}) - 0.25) > 1e-9:
             raise RuntimeError('judge combine contract failed')

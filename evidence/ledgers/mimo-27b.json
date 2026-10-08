@@ -112,6 +112,16 @@
       "gpu_fraction": 1.0,
       "nodes": 1,
       "evidence": "worker budget.json started_at - 180 s (pods up) to the terminal observation; queue time (created_at 2026-10-08T00:18:45Z) is not charged"
+    },
+    {
+      "job_id": "job_db3g953mjdjg07lcrpog",
+      "attempt": "dry-run1-b",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-08T02:48:52Z",
+      "terminal_at": "2026-10-08T02:52:05Z",
+      "gpu_fraction": 0.0,
+      "nodes": 2,
+      "evidence": "worker budget.json started_at - 180 s (pods up) to the terminal observation; queue time (created_at 2026-10-08T02:48:52Z) is not charged"
     }
   ]
 }
