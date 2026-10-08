@@ -1,0 +1,30 @@
+# Fallback of run1: two nodes in one network domain took ~23 h to appear (routes raced: research and foundation teams, borrowing on and
+# off), and run1-a was then preempted after 30 min (borrowed capacity reclaimed, right after its step-0 evaluation): the same run on ONE
+# 8 x H100 node with the ~8,600 node-seconds that were left. The 2 x 8 layout was verified at 0.8B (g4-mimo-b) and the 27B at 1 x 8
+# (can-27b-a); this run is the first 27B GRPO run with a held-out base-vs-trained evaluation. One node doubles the per-engine load (4 TP2
+# engines for 240 rollouts), so a step is slower, but the same budget buys more steps.
+name: mimo-qwen38-27b-lora-run1-1node
+description: MiMo five-domain agentic GRPO, Qwen3.8-27B LoRA r64, 1 node x 8 H100 (fallback of the 2-node run1)
+extends: experiments/mimo-qwen38-27b-lora-run1.yaml
+
+compute:
+  nodes: 1
+  training: {fsdp_size: 8}
+
+algorithm:
+  max_steps: 4                         # the predictive deadline stops earlier if the next step plus the final eval does not fit
+
+evaluation:
+  interval_steps: 4
+  checkpoint_interval_steps: 4
+
+budget:
+  attempt_max_seconds: 8600            # 8,677 node-seconds were left: one node, ~2.4 h
+
+limits:
+  max_nodes: 1
+  max_attempt_seconds: 8600
+
+tracking:
+  group: mimo-27b-lora-run1-1node
+  tags: ['nodes:1', 'finetune:lora', 'run1']

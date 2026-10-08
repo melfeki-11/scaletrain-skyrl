@@ -122,6 +122,46 @@
       "gpu_fraction": 0.0,
       "nodes": 2,
       "evidence": "worker budget.json started_at - 180 s (pods up) to the terminal observation; queue time (created_at 2026-10-08T02:48:52Z) is not charged"
+    },
+    {
+      "job_id": "job_db3u3mbmjdjg07lcrqd0",
+      "attempt": "run1-b",
+      "status": "CANCELED",
+      "allocated_at": null,
+      "terminal_at": "2026-10-08T19:32:56Z",
+      "gpu_fraction": 1.0,
+      "nodes": 2,
+      "evidence": "cancelled while QUEUED; no worker-started.json in the attempt artifacts: the pod never started (not charged)"
+    },
+    {
+      "job_id": "job_db3u3mrmjdjg088ceh6g",
+      "attempt": "run1-c",
+      "status": "CANCELED",
+      "allocated_at": null,
+      "terminal_at": "2026-10-08T19:32:57Z",
+      "gpu_fraction": 1.0,
+      "nodes": 2,
+      "evidence": "cancelled while QUEUED; no worker-started.json in the attempt artifacts: the pod never started (not charged)"
+    },
+    {
+      "job_id": "job_db3fcg4f8c4g08flbf0g",
+      "attempt": "run1-a",
+      "status": "CANCELED",
+      "allocated_at": "2026-10-08T19:30:22Z",
+      "terminal_at": "2026-10-08T20:02:30Z",
+      "gpu_fraction": 1.0,
+      "nodes": 2,
+      "evidence": "worker budget.json started_at - 180 s (pods up) to the terminal observation; queue time (created_at 2026-10-08T01:47:44Z) is not charged"
+    },
+    {
+      "job_id": "job_db3verkf8c4g07jrog1g",
+      "attempt": "run1-n1-a",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-08T20:05:02Z",
+      "terminal_at": "2026-10-08T22:06:30Z",
+      "gpu_fraction": 1.0,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 180 s (pods up) to the terminal observation; queue time (created_at 2026-10-08T20:05:02Z) is not charged"
     }
   ]
 }

@@ -15,6 +15,63 @@ Common protocol for every run:
 - Δ is a paired bootstrap CI.
 - `strl verify` re-scored every completion independently (in Modal for coding) and found 0 disagreements with the worker.
 
+## MiMo-V2.6-RL suite · Qwen3.8-27B LoRA · 8×H100 (attempt run1-n1-a, 2026-10-08)
+
+The first 27B agentic GRPO run on the platform: all five MiMo domains (music, cyber, code, general, webdev) in one trainer, Qwen3.8-27B with
+LoRA r64/α64 on every linear layer, 1 node × 8 H100, 3 optimizer steps (240 rollouts per step, 8 prompts per domain × 6 samples),
+`experiments/mimo-qwen38-27b-lora-run1-1node.yaml`. W&B: `mohamed-elfeki/scaletrain-rl-envs`, run `run1-n1-a-261008200411`, group `mimo-27b-lora-run1-1node`.
+
+**The 2 × 8 run did not complete.** `run1-a` (2 nodes) waited ~23 h for two free nodes in one network domain, started, loaded the 27B over 16
+GPUs, finished its step-0 base evaluation, and was preempted by a SIGTERM 30 minutes in (borrowed capacity reclaimed) before any update. Its
+step-0 numbers never reached S3 or W&B. The 1-node run below used the budget that was left (the program authorized 6 node-hours; 20,211 of
+21,600 node-seconds were used across the whole ladder). 2-node training is verified only at 0.8B (`g4-mimo-b`, validation.md).
+
+### Held-out result (base = step 0, trained = step 3, same engines/agent/template, 16 fixed held-out tasks per domain × 2 repeats)
+
+| domain | base | trained | Δ [95% paired CI] | tasks | dropped |
+| --- | --- | --- | --- | --- | --- |
+| code | 0.100 | 0.100 | +0.000 [-0.200, +0.200] | 15 | 2 |
+| cyber | 0.031 | 0.125 | +0.094 [+0.000, +0.188] | 16 | 0 |
+| general | 0.000 | 0.000 | +0.000 [+0.000, +0.000] | 16 | 0 |
+| music | 0.057 | 0.043 | -0.014 [-0.081, +0.052] | 16 | 0 |
+| webdev | 0.025 | 0.051 | +0.026 [-0.019, +0.081] | 16 | 0 |
+| **macro** | **4.26%** | **6.38%** | **+2.11 [-2.68, +7.08]** | 79 | 2 |
+
+Outcome flips on the 160 paired trials: 6 fixed, 3 broken, 1 correct in both, 148 wrong in both.
+
+**What this does and does not show.** Three updates on a 27B with 20% of groups carrying a learning signal cannot move a macro score by a measurable
+amount, and it did not: the macro delta's CI contains zero, and so does every domain's except cyber's (+9.4 points, lower bound exactly 0.0,
+16 tasks): suggestive, not a result. The claims this run supports are the infrastructure and measurement claims below, not a training
+gain. Do not read the rise from 4.3% to 6.4% as an effect.
+
+**Why the scores are this low (read before the next run).** The critic labels 88% of failing trials `timeout_or_inefficient`. At ~30 s per
+Terminus turn the agent is cut off by its per-domain turn and time caps (8-14 turns, 600 s) before it finishes most tasks. Those caps were chosen
+to fit the budget and apply equally to the base and trained evaluations, so the comparison is fair but low-ceiling. In training, 62-88% of music
+and webdev groups contained a trial that ran out of time under the load of 240 concurrent rollouts on four engines; those trials stay in their
+group as zero-loss placeholders (they have no tokens), so the signal came from the trials that finished. The lever for the next run is time per
+trial (more engines, CUDA graphs for the hybrid GDN decode, or a larger cap), not more steps.
+
+### Measured infrastructure (1 node, 8 H100, TP2 × 4 engines)
+
+| item | value |
+| --- | --- |
+| startup to first generation | ~12 min (27B weights 55.6 GB from S3 take ~1 min on a p5 node) |
+| step time | 1,397-1,504 s: generate 821, forward/logprobs 131, policy_train 388, weight sync 14 |
+| held-out evaluation (160 trials) | 793 s |
+| adapter export (HF) | 121 s |
+| peak GPU memory | 70.8 GB (limit 76) |
+| step-wise turn merging (Qwen3.8) | 6.3x fewer sequences (223 -> 36 in the canary) |
+| infrastructure-masked groups | 0 in training and evaluation, except 2 code held-out ids dropped on both sides |
+| judge / critic cost | gpt-6-luna judge $1.90 (general $0.86, webdev $1.04), critic $0.10 |
+
+### Verification (`strl verify`, `evidence/results/mimo-27b-lora-run1-1node-report.md`)
+
+- Coverage complete: 160 expected evaluation rows for base and for trained, none missing, none duplicated.
+- The independent re-score reproduces the worker's per-domain table exactly; 28 music artifacts re-graded offline with 0 disagreements; 8
+  judged general answers re-judged with mean absolute difference 0.0. Code, cyber and webdev need their sandboxes and are not re-gradable offline.
+- W&B readback (`evidence/results/wandb-readback-mimo-run1-n1-a.json`): run finished, 282 metric keys, per-domain and macro evaluation keys, 15
+  artifacts (train and eval trajectory tables, fixed-validation, critic, media).
+
 ## Coding RL environment: reward-design A/B (2026-10-06)
 
 The A/B is the "change one axis and see the effect" demonstration. The two experiments, `experiments/mbpp-qwen35-binary.yaml` and
