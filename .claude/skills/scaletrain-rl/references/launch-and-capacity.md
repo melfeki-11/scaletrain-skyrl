@@ -22,6 +22,7 @@
 - Job shape (rendered for you): `k8s-preset`, team `gen_ai.agent_training_foundation`, product `agent_training_foundation`,
   priority `high`, `allow_borrowing: true` (the ScaleTrain runbook, `SKILLS.md`, makes team/priority/borrowing mandatory on every job, CPU smokes included; `compute.allow_borrowing` in `base/infra.yaml`). Presets: `m5.2xlarge` (dry), `p5.48xlarge` (8 H100),
   `p5.48xlarge:4|:2|:1` (slices; one node).
+- `strl stage ... --no-borrowing` (= `--set compute.allow_borrowing=false`) requests the team's own quota only: it cannot be reclaimed. Borrowing stays the default because the runbook mandates it, but a long run on borrowed capacity can lose everything (no resume): check `strl capacity` for an own-quota route first.
 - Team stays `gen_ai.agent_training_foundation` (runbook). `strl capacity` still ranks foundation/research x own/borrowing so you can SEE whether quota or topology is the blocker; only switch team with the user's say-so.
 
 ## Capacity reading
