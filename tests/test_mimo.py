@@ -124,6 +124,16 @@ class ShapedReward(unittest.TestCase):
                 else:
                     self.assertNotIn('reward_native', summary)
 
+    def test_each_shaping_term_is_logged(self):
+        def row(domain, native, bonus):
+            return {'domain': domain, 'masked': False, 'mask_reason': None, 'stop': 'complete', 'reward': native + bonus, 'passed': native >= 1,
+                    'turns': 2, 'tokens': 5, 'judge': None, 'reward_native': native, 'reward_terms': {'user_rewards.examples:turn_efficiency_bonus': bonus}}
+        out = generator.rollout_metrics([row('code', 1.0, 0.1), row('code', 0.0, 0.0)], ['a', 'a'])
+        self.assertAlmostEqual(out['generate/code/reward_terms/user_rewards.examples:turn_efficiency_bonus'], 0.05)
+        self.assertAlmostEqual(out['environment/reward_components/user_rewards.examples:turn_efficiency_bonus'], 0.05)
+        self.assertAlmostEqual(out['environment/reward_components/verifier_score'], 0.5)
+        self.assertAlmostEqual(out['generate/code/reward_native_mean'], 0.5)
+
     def test_validation_accepts_one_native_term_plus_custom_terms_only(self):
         from strl.experiment import resolve
         from strl.tasks.mimo import spec

@@ -89,8 +89,13 @@ def finetune(cfg: dict) -> dict:
 
 
 def training(cfg: dict) -> dict:
-    """compute.training with defaults (fsdp_size None = full shard over every GPU)."""
-    return {**TRAINING_DEFAULTS, **(cfg['compute'].get('training') or {})}
+    """compute.training with defaults. fsdp_size unset: full shard over every GPU, EXCEPT multi-node LoRA, where the frozen base is sharded
+    within each node (HSDP, fsdp_size = gpus_per_node) so only the small adapter gradients cross the (socket-only, 0.69 GB/s measured)
+    inter-node link. Set fsdp_size explicitly to override."""
+    out = {**TRAINING_DEFAULTS, **(cfg['compute'].get('training') or {})}
+    if out.get('fsdp_size') is None and int(cfg['compute'].get('nodes', 1)) > 1 and finetune(cfg)['mode'] == 'lora':
+        out['fsdp_size'] = int(cfg['compute']['gpus_per_node'])
+    return out
 
 
 def save_optimizer_state(cfg: dict) -> bool:

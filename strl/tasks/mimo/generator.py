@@ -473,6 +473,8 @@ def rollout_metrics(summaries: list[dict], group_ids: list[str] | None = None, *
             out[f'{p}/reward_mean'] = sum(float(s['reward']) for s in valid) / len(valid)
             if any('reward_native' in s for s in valid):   # shaped training: the native score next to it exposes reward hacking
                 out[f'{p}/reward_native_mean'] = sum(float(s.get('reward_native', s['reward'])) for s in valid) / len(valid)
+                for term in sorted({t for s in valid for t in (s.get('reward_terms') or {})}):   # every weighted shaping term, per domain
+                    out[f'{p}/reward_terms/{term}'] = sum(float((s.get('reward_terms') or {}).get(term, 0.0)) for s in valid) / len(valid)
             out[f'{p}/pass_rate'] = sum(bool(s['passed']) for s in valid) / len(valid)
             out[f'{p}/avg_turns'] = sum(s['turns'] for s in valid) / len(valid)
             out[f'{p}/tokens'] = sum(s['tokens'] for s in valid) / len(valid)
@@ -484,6 +486,11 @@ def rollout_metrics(summaries: list[dict], group_ids: list[str] | None = None, *
             out[f'environment/{domain}/{name}'] = value
     for name, value in group_fractions(summaries, groups).items():
         out[f'environment/{name}'] = value
+    shaped = [s for s in summaries if not s['masked'] and 'reward_native' in s]
+    if shaped:   # the same key the other environments use (environment/reward_components/<fn>), so W&B panels are shared
+        out['environment/reward_components/verifier_score'] = sum(float(s['reward_native']) for s in shaped) / len(shaped)
+        for term in sorted({t for s in shaped for t in (s.get('reward_terms') or {})}):
+            out[f'environment/reward_components/{term}'] = sum(float((s.get('reward_terms') or {}).get(term, 0.0)) for s in shaped) / len(shaped)
     return out
 
 

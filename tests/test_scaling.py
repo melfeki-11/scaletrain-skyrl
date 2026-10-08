@@ -667,3 +667,13 @@ class ModelRegistry(unittest.TestCase):
                          'num_key_value_heads': 4, 'head_dim': 128, 'num_experts': 128, 'moe_intermediate_size': 768}
         self.assertAlmostEqual(ModelProfile().param_estimate_b(qwen3_30b_a3b), 30.1, delta=0.5)
         self.assertEqual(params_from_id('mistralai/Mixtral-8x7B-v0.1'), 56.0)
+
+
+class AutoLayout(unittest.TestCase):
+    def test_multi_node_lora_defaults_to_hsdp_within_a_node(self):
+        from strl.experiment import training
+        base = {'compute': {'nodes': 2, 'gpus_per_node': 8, 'training': {}}, 'finetune': {'mode': 'lora'}}
+        self.assertEqual(training(base)['fsdp_size'], 8)
+        self.assertIsNone(training({**base, 'finetune': {'mode': 'full'}})['fsdp_size'])          # full: full shard unless set
+        self.assertIsNone(training({**base, 'compute': {'nodes': 1, 'gpus_per_node': 8}})['fsdp_size'])
+        self.assertEqual(training({**base, 'compute': {'nodes': 2, 'gpus_per_node': 8, 'training': {'fsdp_size': 16}}})['fsdp_size'], 16)
