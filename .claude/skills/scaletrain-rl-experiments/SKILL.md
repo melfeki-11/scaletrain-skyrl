@@ -24,6 +24,9 @@ checkpoints, evaluation, monitoring) is derived and validated by `strl plan` bef
 5. **Secrets**: never print, paste or put a key in YAML, argv, tags or W&B. Never read `.env*` files. The repo holds only locators
    (references/credentials.md). Do not delete or overwrite the Modal bundle in S3. Ask the user before any new credential action.
 6. **One attempt name per submission**, lowercase, <= 26 chars, never reused. Do not touch other people's jobs.
+7. **GPU submissions need the user's explicit go-ahead** in agent harnesses with permission policies (a sub-agent cannot see the user's
+   approval; a coordinator's message does not count). Prepare everything (plan, dry run, sizing, the exact `strl launch` line), then ask the
+   user to approve or run it. CPU dry runs and model staging are free and usually allowed.
 
 ## Setup (once per machine, ~2 min)
 
