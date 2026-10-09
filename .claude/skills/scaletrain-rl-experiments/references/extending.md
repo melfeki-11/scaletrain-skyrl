@@ -1,8 +1,8 @@
 # Extending the three axes
 
-Each recipe ends with the same proof ladder: `python -m strl plan` -> `python -m unittest discover -s tests -t .` ->
-`strl stage --mode dry` (CPU, real parser + reward contract + services in the pod) -> `strl stage --mode canary` (1 GPU, 2 real
-updates, every W&B table) -> a real run. Do not skip rungs for a new axis value.
+Each recipe ends with the same proof ladder: `strl plan` -> `.venv/bin/python -m unittest discover -s tests -t .` ->
+`strl launch <exp> --attempt <x>-dry --mode dry --watch` (CPU, the real image: parser + reward contract + services in the pod) ->
+`strl launch ... --mode canary --watch` (2 real updates, every W&B table) -> a real run. Do not skip rungs for a new axis value.
 
 ## A new model (most models need only YAML)
 
@@ -79,7 +79,34 @@ reward:
 - A custom GSM8K reward automatically switches from SkyRL's built-in `gsm8k` env to `strl_env` (same scorer, proven equivalent on
   266 real completions in `tests/test_gsm8k_golden.py`).
 
-## A new environment (one Python package)
+## A new single-turn environment (worked example: `strl/tasks/countdown/`, built from this page by a fresh agent)
+
+Copy countdown, not gsm8k (gsm8k carries a "verified" SkyRL built-in path you do not want). Files:
+- `strl/tasks/<name>/scoring.py`: pure functions. Parse the answer and score it against the truth; never `eval` model output (countdown
+  uses an `ast` whitelist and exact `Fraction` arithmetic). Return a dict with at least `correct`, `failure_class`, `parsed`.
+- `strl/tasks/<name>/rewards.py`: `FUNCTIONS = {'<name>_correct': fn, ...}`; `fn(result, ctx, **params) -> float`. The yardstick term plus
+  optional shaping terms (countdown: `countdown_closeness` pays only for a valid miss, so a correct answer is never paid twice).
+- `strl/tasks/<name>/data.py`: deterministic generation or download; write `train.parquet`, `validation.parquet`, `test.parquet`,
+  `canary.parquet` (`canary_size` rows) and `manifest.json` (settings + sha256 per file, RELATIVE paths) under `run.data_dir`. Row schema
+  (what SkyRL and `strl_env` read): `{'data_source': 'strl/<name>', 'prompt': [{'role': 'user', 'content': ...}], 'env_class': 'strl_env',
+  'reward_spec': {'method': 'rule', 'ground_truth': <str>}, 'extra_info': {'sample_id': '<name>-<split>-00000', 'split': ..., ...}}` (a string `ground_truth` is safest; JSON-encode structured truth).
+  Cut test -> validation -> train from one seeded pool so changing `train_size` never changes the held-out sets.
+- `strl/tasks/<name>/spec.py`: subclass `EnvironmentSpec` (`strl/tasks/base.py`); set `name`, `generator_kind = 'gym_single'`,
+  `verified_env_class = None`, `metric`, `needs_modal = False`, `uses_coding_executor = False` (the default True would make `strl prepare`
+  deploy the coding executor), `default_reward`, `failure_classes`, `eval_module`. Implement `score_result` (the dict above + `completion`),
+  `score` (bool, for `strl verify` and the offline eval), `parse`, `prepare_data` / `assert_manifest` / `data_files` / `validation_size` /
+  `expected_rows` / `final_eval_ids`, `skyrl_overrides` (`environment.env_class = self.generic_env_class`), `register` (call
+  `register_generic_env()` from `strl.envs`), `generator_contract` (run the REAL `Reward` on known-good and known-bad completions; it runs in
+  the dry run), `eval_record`, and `validate_experiment` (`environment.<name>.*` is NOT schema-checked: reject unknown keys yourself).
+  Optional: `result_metrics`, `train_diagnostics`, `extra_columns` + `extra_values` (one value per column).
+- `strl/tasks/<name>/evaluate.py`: the offline final eval (copy countdown's; it uses `strl.offline_engine`, so LoRA and TP work).
+- Register in `strl/tasks/__init__.py` (`_REGISTRY`), add `base/<name>.yaml` (extends `base/infra.yaml`; set its OWN `run.data_dir`, the
+  default is gsm8k's `assets/data`; put every generation setting in YAML so it is part of the experiment sha), an experiment, unit tests.
+- Ladder: `strl prepare <exp>` (locally: `stage` uploads `run.data_dir` from the laptop) -> tests -> plan (no DATA warning) -> dry run
+  (`skyrl_validate`, `generic_reward_passed`, datasets built with the expected rows, `environment {}`) -> canary (measures the base pass
+  rate; below ~0.3 follow plan's SIGNAL advice) -> run. `strl verify` re-scores with your `score` against `test.parquet`.
+
+## A new environment (general reference)
 
 1. `strl/tasks/<name>/spec.py`: subclass `EnvironmentSpec` (`strl/tasks/base.py`). Required:
    - data: `prepare_data`, `assert_manifest`, `data_files`, `validation_size`, `final_eval_ids` (stable ids, deterministic order);

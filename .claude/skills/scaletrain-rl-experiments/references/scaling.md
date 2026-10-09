@@ -42,6 +42,19 @@ budget: {save_optimizer_state: true}   # false: no FSDP checkpoints, exactly one
   to the model prefix with a sha256 manifest; `stage` uses it when the model is not local; pods fetch > 10 GB models with 16
   threads + multipart. Sharded HF exports (`model.safetensors.index.json`) are adapted for vLLM shard by shard.
 
+## Mixture-of-experts (MoE) models (planned and dry-run proven, not GPU-run)
+
+Measured by a fresh agent on Qwen3-30B-A3B (61 GB bf16, `qwen3_moe` profile), full fine-tuning on coding_exec, 2 x 8 (`fd-dry-q3moe-a-fb`
+dry run passed: 2-node Ray, native `Qwen3MoeForCausalLM`, validate_cfg with fsdp_size 8 + cpu_offload + TP2):
+- Memory counts every expert (all are resident). TP1 does not fit the vLLM weights (KV room negative): use TP2+ (the offline final eval uses
+  the same TP). Full FT fits only with HSDP 8 + `cpu_offload` (~27-31 GB/GPU, ~45 GB host RAM per GPU); without offload the FSDP layer
+  buffers push it over the limit.
+- HSDP 8 x 2 has the SAME per-GPU memory as 1 node with full shard 8: the second node buys only data-parallel/rollout throughput and costs
+  ~22 s per optimizer step of cross-node gradient all-reduce over sockets (plan prints the estimate). Start on 1 x 8; go to 2 nodes when a
+  canary shows the step is generation-bound.
+- No expert parallelism (that needs Megatron); HF MoE layers loop over experts in Python, so training steps are slow. LoRA on expert linears
+  through the image's vLLM is unverified: canary it before relying on it.
+
 ## More nodes (`strl/multinode.py`, `strl/probe.py`; ported from the verified two-node qwen35-grpo run)
 
 - `limits.max_nodes` gates it (default 1); `compute.nodes: N` renders `num_instances: N`, charges `N x gpus/8` node-seconds per

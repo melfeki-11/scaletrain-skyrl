@@ -17,8 +17,10 @@ checkpoints, evaluation, monitoring) is derived and validated by `strl plan` bef
    Never submit one job and wait. Never lower the priority.
 3. **Judge on the task metric, never the training reward.** `eval/task_metric` (per domain: `eval/<d>/task_metric`) and the paired
    held-out result `test/*` with its CI. A shaping term that rises while the task metric is flat is being gamed.
-4. **Budget is real.** Each program has a ledger (`budget.ledger`); `strl launch --watch` records every attempt. A new GPU program needs the
-   user's authorization and its own ledger file. Never edit recorded ledger entries.
+4. **Budget is real.** Each program has a ledger (`budget.ledger`); its `total_seconds` is THE budget (the experiment's `budget.total_seconds`
+   only bounds `attempt_max_seconds`). `strl launch --watch` records every attempt (dry runs too, uncharged). Use a ledger only for the program
+   the user authorized it for; a new GPU program needs the user's authorization and its own ledger file. Never edit recorded entries without
+   the user's say-so. `strl plan` prints `BUDGET: no GPU mode fits` before you waste a stage.
 5. **Secrets**: never print, paste or put a key in YAML, argv, tags or W&B. Never read `.env*` files. The repo holds only locators
    (references/credentials.md). Do not delete or overwrite the Modal bundle in S3. Ask the user before any new credential action.
 6. **One attempt name per submission**, lowercase, <= 26 chars, never reused. Do not touch other people's jobs.
@@ -27,7 +29,7 @@ checkpoints, evaluation, monitoring) is derived and validated by `strl plan` bef
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements-local.txt
-.venv/bin/python -m unittest discover -s tests -t .          # ~300 tests; they also plan every file under experiments/
+.venv/bin/python -m unittest discover -s tests -t .          # ~350 tests (~45 s); they also plan every file under experiments/
 aws sts get-caller-identity --profile production-developer     # S3 staging; ScaleTrain CLI: scale-train --version
 ```
 
@@ -38,11 +40,14 @@ Use `AWS_PROFILE=production-developer` for every `stage`/`launch`/`monitor`/`ver
 | Start from | When |
 | --- | --- |
 | `experiments/gsm8k-qwen35.yaml` | single-turn math, no external services (fastest loop) |
+| `experiments/countdown-qwen35.yaml` | the newest environment (`strl/tasks/countdown/`, added from extending.md): the template for adding your own |
 | `experiments/mbpp-qwen35-binary.yaml` | single-turn coding, tests executed in Modal |
 | `experiments/harbor-qwen35.yaml` | multi-turn agent (Terminus-2) in Modal sandboxes |
 | `experiments/mimo-qwen35-0p8b-smoke.yaml` | MiMo agentic suite, 0.8B, 1 GPU (cheap end-to-end) |
 | `experiments/mimo-phi4-mini-lora-verify.yaml` | MiMo subset, a non-Qwen model, LoRA, shaped reward, durable checkpoints, retention eval |
+| `experiments/mimo-qwen3-8b-lora-2node.yaml` | a mid-size dense model on 2 x 8 H100, LoRA, a MiMo subset (cyber + code) |
 | `experiments/mimo-qwen38-27b-lora.yaml` / `-full.yaml` | 27B on 2 x 8 H100, LoRA / full |
+| `experiments/mimo-example-music-code-full.yaml` | template for a NEW MiMo program (own data dir, ledger, full fine-tuning, custom shaping term) |
 
 ```bash
 cp experiments/mimo-phi4-mini-lora-verify.yaml experiments/my-exp.yaml       # set name, description, tracking.group, then the axis you study
@@ -59,9 +64,12 @@ AWS_PROFILE=production-developer .venv/bin/python -m strl launch experiments/my-
 (`... > evidence/launch-myexp-a1.log 2>&1 &`) and follow the log for `WINNER`, `preempt`, `Traceback`, `next:`.
 
 Extra preparation by case:
+- **Model revision**: `curl -s https://huggingface.co/api/models/<id> | python3 -c 'import sys,json;print(json.load(sys.stdin)["sha"])'`.
 - **Model weights**: up to ~10 GB, `strl fetch` downloads locally and `stage` uploads them. Above ~10 GB (e.g. a 7B in bf16 is 15 GB) skip the
   local download: `strl stage-model experiments/my-exp.yaml --attempt myexp-sm --team gen_ai.agent_training_foundation`, then
-  `strl submit evidence/myexp-sm/job.json` (a CPU job copies HF -> S3 with a sha256 manifest, ~12 min for 55 GB). Already staged? Read-only:
+  `strl submit evidence/myexp-sm/job.json` (a CPU job copies HF -> S3 with a sha256 manifest: 16 GB ~2 min, 61 GB ~5 min; free, not
+  ledgered); follow it with `strl status <job_id>` until COMPLETED. `stage` (dry runs included: the pod skips the weights but the manifest must
+  exist) refuses until the model is local or staged. Already staged? Read-only:
   `aws s3 ls s3://scale-ml/tmp/mohamedelfeki/scaletrain/qwen35-grpo-v2/models/<name>@<rev12>/ --profile production-developer`.
 - **Coding envs**: `strl executor deploy` once. **Harbor/MiMo**: `strl overlay` once (Modal/Harbor packages for the image).
 - **MiMo data**: `run.data_dir` holds the prepared tasks. Shipped: `assets/mimo/data` (all 5 domains, 24 train / 24 test), `data-smoke`
@@ -77,9 +85,9 @@ Extra preparation by case:
 | --- | --- | --- |
 | **Model** | `model.id`, `model.revision` (a commit sha). Leave `model.local_path` and `model.profile` unset (auto). | `--set model.id=microsoft/Phi-4-mini-instruct --set model.revision=cfbefacb99257ffa30c83adab238a50856ac3083` |
 | **Fine-tuning** | `finetune.mode: lora\|full` (full ignores an inherited `finetune.lora`), `finetune.lora.{rank,alpha,target_modules}` (rank must be a vLLM rank: 8/16/32/64/128/256). lr: LoRA 1e-5; full 2e-6 at <= 2B (verified on 0.8B), 1e-6 at 7B+ | `--set finetune.mode=full --set algorithm.lr=1e-6` |
-| **Environment** | `environment.name` (`gsm8k`, `coding_exec`, `coding_harbor`, `mimo`); for mimo `environment.mimo.domains.<d>.{train,test,weight,filters,max_turns,max_agent_sec}` | `--set environment.mimo.domains.code.train=0 --set environment.mimo.domains.code.test=0` (off) |
+| **Environment** | `environment.name` (`gsm8k`, `coding_exec`, `coding_harbor`, `mimo`, `countdown`, or your own: extending.md); for mimo `environment.mimo.domains.<d>.{train,test,weight,filters,max_turns,max_agent_sec}` | `--set environment.mimo.domains.code.train=0 --set environment.mimo.domains.code.test=0` (off) |
 | **Reward** | `reward.components`: weighted named terms or `module:function` from `user_rewards/` | see below |
-| **Scale** | `compute.nodes`, `compute.gpus_per_node` (1/2/4/8), `inference.tensor_parallel_size`, `limits.max_nodes` | `--set compute.gpus_per_node=8 --set inference.tensor_parallel_size=2` |
+| **Scale** | `compute.nodes` (+ `limits.max_nodes` >= it), `compute.gpus_per_node` (1/2/4/8), `inference.tensor_parallel_size` (raise it until `plan` shows KV room > ~10 GB: bf16 weights / TP must fit in `gpu_memory_utilization` x 80 GB; the offline final eval uses the same TP) | `--set compute.nodes=2 --set limits.max_nodes=2 --set inference.tensor_parallel_size=2` |
 | **GRPO** | `algorithm.{prompts_per_step,n_samples,lr,temperature,max_generate_length,max_steps,use_kl_loss}` | `--set algorithm.n_samples=8` |
 | **Evaluation** | `evaluation.{interval_steps,retention,durable_checkpoints}`, `environment.mimo.eval_repeats`, `run.ceiling_per_domain` (dry) | `--set evaluation.retention.limit=200` |
 
@@ -120,7 +128,11 @@ one route and started first on another; dry runs start in seconds on `fb`.
   (+ `budget.save_optimizer_state: true`; in-loop-result envs such as mimo) so the relaunch resumes from S3 (verified: `v2res2-fb`);
   or `--routes ro,fo` to avoid borrowing. Launch exit codes: 0 ok, 2 no capacity, 3 a job unsettled/unrecorded (fix the ledger by hand
   as printed), 4 preempted with no relaunch left, 5 the watched job ended FAILED or CANCELED.
-- Keep CPU work (prepare, image prebuild, dry runs, docs) going while a GPU job queues. `strl capacity` (read-only, `ml-admin`) explains waits.
+- Keep CPU work (prepare, image prebuild, dry runs, docs) going while a GPU job queues. `strl capacity` explains waits but needs the
+  `ml-admin` profile, which only the user may authorize: agents skip it (the race does not need it).
+- Canary jobs are capped at 3600 s whatever `budget.canary_max_seconds` says (plan warns `CANARY`); a 2 x 8 canary therefore books up to
+  7200 node-s. Size per-domain caps so step-0 eval + 2 steps fit, or go straight to a short `train` attempt (`max_steps` 2-4, small
+  `attempt_max_seconds`): train mode applies the same step-2 canary rule.
 Details: references/launch-and-capacity.md.
 
 ## What to monitor
@@ -156,6 +168,15 @@ for judged domains; check `retention/*` did not drop (general ability) and compa
 dry run with `--set run.ceiling_per_domain=2`). A few updates are infrastructure evidence, not a training effect: say so.
 Details: references/monitoring.md, references/decision-points.md.
 
+**Reading `plan`.** "Clean" means no errors. Every `!` line is advisory and must be read; expected ones: `MODEL` (new family), `SIGNAL`,
+`SPEED`, `REWARD` (you added shaping), `MIMO`, `LORA_SYNC` / `NETWORK` (multi-node). Act on: `DATA` (run prepare), `LEDGER` / `BUDGET`
+(no GPU mode fits), `MEMORY` (fits=False), `CANARY`, `HARBOR` (turns will not merge: correct but several times more training tokens; no YAML
+fix exists yet). Step-time estimates marked UNCALIBRATED come from another model/env: size `max_steps` / `attempt_max_seconds` as start-up
+(5-16 min) + step-0 eval + steps x step time + final eval, then let the canary or a short run measure it.
+
+**After a dry run** `strl launch --watch` prints the gates it passed (`model_code`, validated layout, environment checks, W&B, critic, durable
+checkpoint I/O, ceiling, shaping). An environment with no external services shows `environment {}`: that is normal.
+
 ## Checklists by experiment type
 
 - **New OSS model**: revision sha -> `plan` (profile, memory, warnings) -> `fetch` or `stage-model` -> `check-template` (agentic) -> dry
@@ -168,6 +189,8 @@ Details: references/monitoring.md, references/decision-points.md.
 - **Scale up (more GPUs / 2+ nodes)**: `plan` shows the layout (multi-node LoRA = HSDP automatically); dry with the target `compute.nodes`
   (rendezvous + validate_cfg at that GPU count) -> a 0.8B smoke at the same shape (`experiments/mimo-qwen35-0p8b-2node-smoke.yaml`) -> the run.
   Cross-node NCCL runs over sockets (~0.69 GB/s): LoRA is fine, full fine-tuning of large models is slow (references/scaling.md).
+- **New environment (single-turn, verifiable)**: references/extending.md "A new single-turn environment" (worked example: countdown):
+  package under `strl/tasks/<name>/`, one registry line, `base/<name>.yaml` with its own `run.data_dir`, `strl prepare`, unit tests, plan, dry run.
 - **New MiMo-style suite**: references/extending.md ("A new MiMo-style suite"): graders, nop/tamper gates, judge outside the sandbox.
 - **Resume / continue**: `--set run.resume_from=<attempt> --set algorithm.max_steps=<more>` on an attempt run with durable checkpoints
   (same GPU count); its paired result keeps the earlier attempt's step-0 base.
