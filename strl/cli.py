@@ -56,6 +56,24 @@ def readiness_warnings(cfg: dict) -> list[str]:
         out.append(f"DATA: {cfg['run'].get('data_dir')} is not prepared for this selection ({' '.join(str(error).split())[:240]}): run "
                    '`strl prepare <exp>` (or `strl fetch`). Lowering train/test counts reuses a prepared dir; more tasks, other filters or another seed need a prepare.')
     ledger = cfg['budget'].get('ledger')
+    b = cfg['budget']
+    if int(b['canary_max_seconds']) + 600 > 3600:
+        out.append(f"CANARY: budget.canary_max_seconds={b['canary_max_seconds']} + 600 s exceeds the 3600 s canary job cap: the canary job gets "
+                   '3600 s (a slow step-0 eval + 2 steps of agentic trials may not fit: lower the per-domain caps or the step deadline for it)')
+    if ledger and Path(ledger).is_file():
+        from .budget import node_fraction, remaining_seconds, reserved_seconds
+        from .stage import CANARY_OVERLAY, canary_overlay_for
+        data = json.loads(Path(ledger).read_text())
+        left = remaining_seconds(data['attempts'], data['total_seconds']) - reserved_seconds(data)
+        charge = node_fraction(cfg)
+        canary_charge = 1 / 8 if canary_overlay_for(cfg) == CANARY_OVERLAY else charge
+        need_train = int((b['final_eval_reserve_seconds'] + 901) * charge)
+        need_canary = int(900 * canary_charge)
+        if left < min(need_train, need_canary):
+            out.append(f'BUDGET: {left} node-s available in {ledger}: no GPU mode fits (a train attempt needs > {need_train}, a canary >= '
+                       f'{need_canary}); dry runs still work. More GPU budget needs the user\'s authorization and a new ledger.')
+        elif left < need_train:
+            out.append(f'BUDGET: {left} node-s available in {ledger}: a canary fits, a train attempt does not (needs > {need_train}).')
     if ledger and not Path(ledger).is_file():
         out.append(f'LEDGER: budget.ledger {ledger} does not exist, so stage will refuse. A new GPU program needs the user\'s authorization; then create '
                    'the file (references/launch-and-capacity.md, "New program, new budget") and set budget.total_seconds to match.')
@@ -67,7 +85,11 @@ def cmd_plan(a):
     from .experiment import diff
     cfg = _load(a.experiment, a.set)
     try:
-        report = plan(cfg, json.loads(Path(a.network).read_text()) if a.network else None)
+        network = json.loads(Path(a.network).read_text()) if a.network else None
+        if network is None and int(cfg['compute']['nodes']) > 1:   # the last measured multi-node probe (strl/profiles.json networks)
+            measured = json.loads((ROOT / 'strl/profiles.json').read_text()).get('networks') or []
+            network = dict(measured[-1]) if measured else None
+        report = plan(cfg, network)
     except RuntimeError as error:   # model detection (gated / offline config, contradicting profile, unmapped VLM wrapper)
         print(f'experiment {a.experiment} cannot be planned:\n- {error}', file=sys.stderr)
         raise SystemExit(2)
@@ -89,7 +111,8 @@ def cmd_plan(a):
           + f"(fits={e['memory']['fits']}); from profile {e['profile']}"
           + ("" if e.get('calibrated') else " (UNCALIBRATED: different environment/model; the canary measures the real step time)"))
     lay, mem = report['layout'], e['memory']
-    print(f"  layout       {lay['mode']} | FSDP group {lay['fsdp_group']} x {lay['replicas']} replica(s), cpu_offload={lay['cpu_offload']} | "
+    print(f"  layout       {lay['mode']} | FSDP group {lay['fsdp_group']} x {lay['replicas']} replica(s), cpu_offload={lay['cpu_offload']}"
+          + (f" (host RAM {mem['host_offload_gb_per_gpu']} GB/GPU)" if mem.get('host_offload_gb_per_gpu') else '') + " | "
           f"vLLM TP{lay['tp']} x {lay['engines']} engine(s) | per-GPU train {lay['train_gb_per_gpu']} GB, rollout {lay['rollout_gb_per_gpu']} GB "
           f"(weights {mem['engine_weights_gb']}, KV room {mem['kv_room_gb']})"
           + (f", LoRA {mem['lora_params_m']}M params" if mem['lora_params_m'] else '') + f"; recommended: {lay['recommended']['reason']}")
