@@ -325,7 +325,7 @@ class ThirdReview(unittest.TestCase):
         self.assertEqual(out['winner'], 'run1-rb')
         self.assertIn(('run1', 'run1-fb'), released)
 
-    def test_a_submit_error_releases_the_booking_before_raising(self):
+    def test_an_ambiguous_submit_error_keeps_the_booking(self):
         fake = FakeScaleTrain({})
         api = fake.api()
         released = []
@@ -336,7 +336,7 @@ class ThirdReview(unittest.TestCase):
         api.submit = boom
         with self.assertRaises(OSError):
             L.race('exp.yaml', 'run1', 'train', api, poll=5)
-        self.assertEqual(released, ['run1-fb'])
+        self.assertEqual(released, [])   # the job may exist: never free a live job's booking on an ambiguous failure
 
 
 if __name__ == '__main__':

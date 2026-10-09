@@ -231,11 +231,9 @@ def _submit_routes(api, experiment, attempt, mode, chosen, overrides, jobs, rece
         api.log(f'staging {name} (payload, data and any local model files are uploaded: a few GB take minutes)')
         receipts[name] = api.stage(experiment, attempt=name, mode=mode, team=team, allow_borrowing=borrow, overrides=[*(overrides or []), *extra],
                                    reservation=attempt)   # the routes of one race share one budget reservation
-        try:
-            job_id = api.submit(receipts[name]['job_file'])
-        except BaseException:
-            api.release(experiment, attempt, name)   # never submitted: its booking must not outlive this launch
-            raise
+        # api.submit returns None ONLY when the job definitely does not exist (validation failed, or the reconcile listing succeeded without
+        # it); an ambiguous failure raises, and then the booking is kept (the job may be live): TTL or `strl ledger --release` frees it
+        job_id = api.submit(receipts[name]['job_file'])
         if job_id:
             jobs[name] = job_id
             api.log(f'submitted {name}: team={team} borrowing={borrow} job={job_id}')
@@ -320,8 +318,11 @@ def real_api(user_id: str, overrides: list[str] | None = None) -> Api:
         out = cli._scaletrain('submit', job_file, '--user-id', user_id, '--receipt', receipt)
         if out.returncode == 0:
             return json.loads(out.stdout.strip().splitlines()[-1])['id']
-        listing = json.loads(cli._scaletrain('list', '--user-id', user_id, '--limit', '30').stdout or '[]')   # reconcile, never resubmit
-        match = [j for j in listing if j['name'] == job['job_name']]
+        listed = cli._scaletrain('list', '--user-id', user_id, '--limit', '30')   # reconcile by name, never resubmit
+        if listed.returncode:
+            raise RuntimeError(f"submit of {job['job_name']} failed and the reconcile listing failed too: the job may exist; check "
+                               f'`strl status --list` before relaunching (its budget booking is kept)')
+        match = [j for j in json.loads(listed.stdout or '[]') if j['name'] == job['job_name']]
         return match[0]['id'] if match else None
 
     def get(job_id: str) -> dict:

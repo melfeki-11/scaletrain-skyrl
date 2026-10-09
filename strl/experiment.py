@@ -256,6 +256,9 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
     if retention:
         if not retention.get('experiment'):
             problems.append('evaluation.retention.experiment: the experiment whose held-out set measures retention (e.g. base/gsm8k.yaml)')
+        if int(i.get('tensor_parallel_size') or 1) > gpn:
+            problems.append(f'evaluation.retention needs inference.tensor_parallel_size <= gpus_per_node ({gpn}): the retention eval serves the model '
+                            'with that TP on one node')
         if retention.get('limit') is not None and (not isinstance(retention['limit'], int) or retention['limit'] < 1):
             problems.append('evaluation.retention.limit must be a positive integer (number of held-out examples)')
     if (e.get('durable_checkpoints') or (cfg.get('run') or {}).get('resume_from')) and not b.get('save_optimizer_state', True):

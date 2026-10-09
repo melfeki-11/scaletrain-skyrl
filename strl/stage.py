@@ -255,7 +255,7 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
     lock.close()                          # writes the reservation
     try:
         return _stage_after_budget(experiment_path, cfg, env, profile, attempt, mode, team, allow_borrowing, output, s3, now, snapshot,
-                                   remaining, worker_seconds, gpu_fraction, nodes, gpus, charge)
+                                   remaining, worker_seconds, gpu_fraction, nodes, gpus, charge, ledger_path)
     except BaseException:
         if charge and not already_booked:
             release_reservation(ledger_path, group, attempt)
@@ -279,7 +279,7 @@ def touch_reservation(ledger_path, group: str) -> None:
 
 
 def _stage_after_budget(experiment_path, cfg, env, profile, attempt, mode, team, allow_borrowing, output, s3, now, ledger_data, remaining,
-                        worker_seconds, gpu_fraction, nodes, gpus, charge):
+                        worker_seconds, gpu_fraction, nodes, gpus, charge, ledger_path):
     st = cfg['storage']
     bucket, base_prefix = st['bucket'], st['prefix']
     stamp = time.strftime('%y%m%d%H%M%S', now or time.gmtime())
@@ -396,7 +396,7 @@ def _stage_after_budget(experiment_path, cfg, env, profile, attempt, mode, team,
                'node_seconds_per_second': charge, 'canary_overlay': cfg['_meta'].get('canary_overlay'), 'team': job['team'],
                'allow_borrowing': job['allow_borrowing'], 'wandb_run_id': wandb_run_id, 'artifact_uri': artifact_uri, 'job_file': output,
                'profile': profile.name, 'overrides': cfg['_meta'].get('overrides', []), 'staging_dir': str(staging),
-               'ledger': str(Path(cfg['budget']['ledger']))}
+               'ledger': str(ledger_path)}
     if estimate is not None:
         receipt['plan_step_seconds'] = estimate
     return receipt

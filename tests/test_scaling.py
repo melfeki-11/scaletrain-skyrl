@@ -364,6 +364,10 @@ class Staging(unittest.TestCase):
         self.assertIsNone(out['recorded']['allocated_at'])
         self.assertEqual(json.loads((TMP / 'ledger.json').read_text()).get('reservations'), {})
 
+    def test_the_receipt_names_the_ledger_actually_booked(self):
+        receipt = self._stage_as('mn-l1')
+        self.assertEqual(Path(receipt['ledger']).resolve(), (TMP / 'ledger.json').resolve())   # the explicit --ledger, not the YAML's
+
     def test_a_failed_stage_releases_its_reservation(self):
         class Broken(FakeS3):
             def put_object(self, **kw):
@@ -850,6 +854,11 @@ class Retention(unittest.TestCase):
         self.assertEqual(rcfg['model'], cfg['model'])
         self.assertEqual((rcfg['_retention_limit'], rcfg['evaluation']['eval_shards_per_model']), (300, 1))
         self.assertIsNone(retention_config(load('experiments/mimo-qwen38-27b-lora.yaml')))
+
+    def test_retention_rejects_a_tp_larger_than_the_node(self):
+        with self.assertRaises(ExperimentError):
+            load('experiments/mimo-qwen35-0p8b-smoke.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}',
+                                                                         'inference.tensor_parallel_size=2'])
 
     def test_retention_follows_this_pods_gpus_and_reserves_time(self):
         from strl.experiment import eval_layout, retention_config

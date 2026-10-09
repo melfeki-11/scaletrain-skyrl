@@ -261,11 +261,14 @@ def cmd_submit(a):
         raise SystemExit(check.stderr or check.stdout)
     out = _scaletrain('submit', a.job, '--user-id', a.user_id, '--receipt', receipt)
     if out.returncode:  # never resubmit blindly: reconcile by exact job name
-        listing = json.loads(_scaletrain('list', '--user-id', a.user_id, '--limit', '20').stdout or '[]')
-        match = [j for j in listing if j['name'] == job['job_name']]
-        print(json.dumps({'submit_error': (out.stderr or out.stdout).strip()[-300:], 'reconciled_by_name': match[:1]}, indent=1))
+        listed = _scaletrain('list', '--user-id', a.user_id, '--limit', '20')
+        listing = json.loads(listed.stdout or '[]') if not listed.returncode else None
+        match = [j for j in listing or [] if j['name'] == job['job_name']]
+        print(json.dumps({'submit_error': (out.stderr or out.stdout).strip()[-300:], 'reconciled_by_name': match[:1],
+                          'listing_ok': listing is not None}, indent=1))
         receipt_file = Path(a.job).parent / 'stage.json'
-        if not match and receipt_file.is_file() and json.loads(receipt_file.read_text()).get('ledger'):   # rejected: free its booking
+        definitely_absent = listing is not None and not match   # an ambiguous failure keeps the booking (the job may be live)
+        if definitely_absent and receipt_file.is_file() and json.loads(receipt_file.read_text()).get('ledger'):   # rejected: free its booking
             from .stage import release_reservation
             release_reservation(ROOT / json.loads(receipt_file.read_text())['ledger'], None, job['job_name'])
         return
