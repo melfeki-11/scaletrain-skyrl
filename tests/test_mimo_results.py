@@ -622,6 +622,23 @@ class FailFastRules(FailFastBase):
         with self.assertRaisesRegex(RuntimeError, r'Fail-fast \(step_slow\).*150|Fail-fast \(step_slow\).*x the plan'):
             self.step(2, seconds=170.0)
 
+    def test_uncalibrated_estimate_and_last_step_only_alert(self):
+        # v3smk2-fb: an extrapolated 39 s estimate stopped a healthy 2 x 8 run after its last step
+        self.rules(step_slow_factor=1.5, domain_masked=0.15)
+        self.callback.plan_step_seconds = 39.0
+        self.callback.plan_calibrated = False
+        for s in (1, 2, 3):
+            self.step(s, seconds=250.0)                             # never raises
+        self.assertEqual(len([a for a in self.alerts if 'advisory' in str(a)]), 1)   # one advisory alert, not one per step
+        self.callback.plan_calibrated = True
+        self.callback._slow_steps = []
+        self.step(99, seconds=250.0)
+        self.step(100, seconds=250.0)                               # max_training_steps=100: the last step only alerts
+        self.callback._slow_steps = []
+        self.step(10, seconds=250.0)
+        with self.assertRaises(RuntimeError):
+            self.step(11, seconds=250.0)                            # calibrated and not the last step: stops
+
     def test_step_slow_not_consecutive_fast_unknown_or_no_plan(self):
         self.rules(step_slow_factor=1.5)
         self.callback.plan_step_seconds = 100.0

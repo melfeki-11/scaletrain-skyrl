@@ -169,6 +169,15 @@ print('Verified pinned payload, model and data staging',flush=True)
             '/opt/skyrl-venv/bin/python -c ' + shlex.quote(bootstrap) + '\nexec /opt/skyrl-venv/bin/python -m strl.worker\n')
 
 
+def plan_step_calibrated(cfg: dict) -> bool:
+    """Is the plan's step estimate from a measured profile of this environment/model (not extrapolated)? Only a calibrated estimate may stop a run."""
+    try:
+        from .derive import estimate_step_seconds, params_and_config
+        return bool(estimate_step_seconds(cfg, params_and_config(cfg)[2] or 1.0).get('calibrated'))
+    except Exception:
+        return False
+
+
 def plan_step_seconds(cfg: dict) -> float | None:
     """`strl plan`'s per-step estimate (seconds), or None when it cannot be derived (model config unavailable, no profile)."""
     try:
@@ -296,6 +305,7 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
     estimate = plan_step_seconds(cfg)
     if estimate is not None:   # the plan's step estimate: the live monitor (STEP_SLOW) and in-run fail-fast compare measured step times to it
         runtime['plan_step_seconds'] = estimate
+        runtime['plan_step_calibrated'] = plan_step_calibrated(cfg)
     (staging / 'runtime.json').write_text(json.dumps(runtime, indent=2))
     save_resolved(cfg, staging / 'resolved.json', root=POD_ROOT)
 

@@ -49,9 +49,11 @@ def estimate_step_seconds(cfg: dict, params_b: float) -> dict[str, float]:
     if cfg['environment']['name'] == 'coding_harbor' and p['environment'] != 'coding_harbor':
         hb = cfg['environment'].get('harbor') or {}
         gen = max(gen * int(hb.get('max_turns', 8)) * 0.5, 60.0)                  # multi-turn agent + sandbox startup (uncalibrated)
-    if cfg['environment']['name'] == 'mimo' and p['environment'] != 'mimo':
+    if cfg['environment']['name'] == 'mimo':
+        # a step waits for its slowest agent episodes: sandbox + agent wall time, not model size (measured generate / step deadline:
+        # 0.37 for 0.8B on 2 x 8, v3smk2-fb; 0.46 for 27B, run1-n1-a). Scaling a 27B profile down by params gave 39 s for a 250-350 s step.
         deadline = float((cfg['environment'].get('mimo') or {}).get('step_deadline_sec') or 1200)
-        gen = max(gen, 0.6 * deadline)                                            # a step waits for its slowest agent episodes (uncalibrated)
+        gen = max(gen, (0.35 if p['environment'] == 'mimo' else 0.6) * deadline)
     calibrated = p['environment'] == cfg['environment']['name'] and p['model'] == cfg['model']['id'] and cfg['compute']['nodes'] == 1
     return {'generate_s': round(gen, 1), 'train_s': round(train, 1), 'other_s': round(other, 1),
             'step_s': round(gen + train + other, 1), 'profile': p['name'],

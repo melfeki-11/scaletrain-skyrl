@@ -373,8 +373,10 @@ def make_callback_class():
             self.failfast = json.loads(os.environ.get('STRL_FAILFAST') or '{}')     # {} = no rules (environments that do not opt in)
             plan = os.environ.get('STRL_PLAN_STEP_SECONDS')
             self.plan_step_seconds = float(plan) if plan else None
+            self.plan_calibrated = os.environ.get('STRL_PLAN_STEP_CALIBRATED', '1') != '0'   # extrapolated estimates only alert
             self._slow_steps: list[int] = []                    # consecutive-step bookkeeping per rule / domain
             self._hot_domains: dict[str, int] = {}
+            self._advised: set[str] = set()
             self._mem_checked = False
             self._mem_seen: float | None = None
             self.memory = MemorySampler().start() if self.failfast.get('mem_gb') is not None else None
@@ -421,6 +423,15 @@ def make_callback_class():
                                            'for 2 consecutive steps: the run would not reach its planned steps inside the allocation')
             if reason is not None:
                 name, text = reason
+                last = int(getattr(trainer.cfg.trainer, 'max_training_steps', 0) or 0)
+                # Advisory only (alert, keep going) when stopping cannot help or the evidence is weak. v3smk2-fb: an UNCALIBRATED 39 s estimate
+                # (no measured profile for this env/model/shape) stopped a healthy 2 x 8 run after its LAST step, losing its eval and export.
+                advisory = (step >= last > 0 and 'the last planned step') or (name == 'step_slow' and not self.plan_calibrated and 'an uncalibrated plan estimate')
+                if advisory:
+                    if name not in self._advised:
+                        self._advised.add(name)
+                        alert(f'Fail-fast (advisory): {name}', f'{text}; not stopping: {advisory} ({os.environ.get("GRPO_RUN_NAME")})')
+                    return
                 alert(f'Fail-fast: {name}', f'{text} ({os.environ.get("GRPO_RUN_NAME")})')
                 try:
                     target = Path(trainer.cfg.trainer.export_path).parent / 'failfast.json'

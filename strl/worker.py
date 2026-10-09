@@ -447,6 +447,7 @@ def main():
             os.environ['STRL_FAILFAST'] = json.dumps(rules)
         if runtime.get('plan_step_seconds'):
             os.environ['STRL_PLAN_STEP_SECONDS'] = str(runtime['plan_step_seconds'])
+            os.environ['STRL_PLAN_STEP_CALIBRATED'] = '1' if runtime.get('plan_step_calibrated', True) else '0'
         interface = os.environ['NETWORK_INTERFACE_NAME']
         port = os.environ.get('LEADER_PORT', '6379')
         if multi:
