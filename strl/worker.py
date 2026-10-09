@@ -20,6 +20,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import traceback
 
@@ -47,9 +48,11 @@ def train_reserve_seconds(cfg: dict, mode: str) -> int:
     was killed mid-export, the attempt failed and the paired result was never written)."""
     if mode != 'train':
         return 120
+    from .experiment import RETENTION_RESERVE_SECONDS
+    retention = RETENTION_RESERVE_SECONDS if cfg['evaluation'].get('retention') else 0
     if cfg['evaluation']['final_eval']:
-        return int(cfg['budget']['final_eval_reserve_seconds'])
-    return CHILD_HARD_STOP_SECONDS + 120
+        return int(cfg['budget']['final_eval_reserve_seconds']) + retention
+    return CHILD_HARD_STOP_SECONDS + 120 + retention
 
 
 class Stalled(RuntimeError):
@@ -60,12 +63,73 @@ def _progress_mtime(progress: Path | None) -> float | None:
     return progress.stat().st_mtime if progress is not None and progress.is_file() else None
 
 
+def previous_prefix(prefix: str, previous: str) -> str:
+    """s3://b/<p>/attempts/<this>/artifacts -> s3://b/<p>/attempts/<previous>/artifacts"""
+    head, sep, _ = prefix.rpartition('/attempts/')
+    if not sep:
+        raise RuntimeError(f'cannot derive the previous attempt prefix from {prefix}')
+    return f'{head}/attempts/{previous}/artifacts'
+
+
+def prepare_resume(prefix: str, run_name: str, previous: str, root: Path) -> dict:
+    """Continue ``previous`` (a preempted/stopped attempt with durable checkpoints): point SkyRL at its latest checkpoint (STRL_RESUME_PATH,
+    read by strl.overrides in the training child), and carry over its in-loop eval records (the step-0 eval stays the base of the paired
+    result) and its canary record (the canary rule ran in the earlier attempt)."""
+    import boto3
+    old = previous_prefix(prefix, previous)   # the EARLIER attempt's prefix (run_name is this attempt: its prefix is empty)
+    bucket, key = split_uri(f'{old}/checkpoints/latest_ckpt_global_step.txt')
+    s3 = boto3.client('s3')
+    try:
+        step = int(s3.get_object(Bucket=bucket, Key=key)['Body'].read().decode().strip())
+    except Exception as error:
+        raise RuntimeError(f'run.resume_from={previous}: no durable checkpoint at {old}/checkpoints ({type(error).__name__}); '
+                           'only attempts run with evaluation.durable_checkpoints: true can be resumed') from error
+    os.environ['STRL_RESUME_PATH'] = f'{old}/checkpoints/global_step_{step}'
+    carried = []
+    for rel, target in ((f'{previous}/exports/evaluation_samples.jsonl', root / 'exports' / 'evaluation_samples.jsonl'),
+                        (f'{previous}/canary.json', root / 'canary.json')):
+        b, k = split_uri(f'{old}/{rel}')
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            s3.download_file(b, k, str(target))
+            carried.append(rel)
+        except Exception:
+            pass
+    return {'attempt': previous, 'step': step, 'checkpoint': os.environ['STRL_RESUME_PATH'], 'carried': carried}
+
+
+def gather_exports(root, prefix):
+    """Multi-node: SkyRL writes HF exports from FSDP rank 0, which is on a random node (bundles are ordered by Ray NodeID). Upload every
+    node's exports to S3, then fetch onto the head whatever the head lacks, so selection, merge, final eval and the S3 copy of the trained
+    model never depend on where rank 0 landed."""
+    from .storage import download_prefix, sync_cluster
+    rel = Path(root).relative_to('artifacts')
+    target = f"{prefix}/{rel}/exports"
+    try:
+        report = sync_cluster(str(Path(root).resolve() / 'exports'), target)
+    except Exception as error:
+        return {'error': f'{type(error).__name__}: {error}'}
+    try:
+        download_prefix(target, Path(root) / 'exports')
+    except Exception as error:
+        return {'nodes': report, 'download_error': f'{type(error).__name__}: {error}'}
+    return {'nodes': report}
+
+
+def _background_sync():
+    """The periodic artifacts upload. A transient S3 error must never kill training: it is logged and retried on the next cycle."""
+    try:
+        sync_local('artifacts', os.environ['GRPO_ARTIFACT_URI'], exclude=SYNC_EXCLUDE)
+    except Exception as error:
+        print(f'[strl] artifacts sync failed (retried next cycle): {type(error).__name__}: {error}', file=sys.stderr, flush=True)
+
+
 def child(args, log, deadline, canary_path=None, canary_seconds=1200, env=None, progress=None, stall_seconds=None, abort=None):
     """``abort``: optional callable returning a reason to stop (multi-node liveness watcher)."""
     started = time.time()
     with Path(log).open('w') as output:
         process = subprocess.Popen(args, stdout=output, stderr=subprocess.STDOUT, start_new_session=True, env=env)
-        last_sync = 0
+        last_sync, sync_thread = 0, None
         try:
             while process.poll() is None:
                 now = time.time()
@@ -83,7 +147,9 @@ def child(args, log, deadline, canary_path=None, canary_seconds=1200, env=None, 
                     Path('artifacts/heartbeat.json').write_text(json.dumps({
                         'at': now, 'child_alive': True, 'elapsed_seconds': now - started, 'last_progress_at': seen,
                         'log_bytes': Path(log).stat().st_size if Path(log).exists() else 0}))
-                    sync_local('artifacts', os.environ['GRPO_ARTIFACT_URI'], exclude=SYNC_EXCLUDE)
+                    if sync_thread is None or not sync_thread.is_alive():   # never block the deadline / liveness checks on an upload
+                        sync_thread = threading.Thread(target=_background_sync, daemon=True)
+                        sync_thread.start()
                     last_sync = now
                 time.sleep(5)
             if process.returncode:
@@ -184,6 +250,20 @@ def dry_run_gates(cfg, runtime, env_spec, receipt):
     gates['environment'] = env_spec.dry_run_checks(cfg)
     from .services import wandb as wandb_service
     gates['wandb'] = wandb_service.smoke(cfg, runtime['wandb_run_id'] + 'd')
+    from .overrides import durable
+    if durable(cfg):   # the exact write path of a durable checkpoint (SkyRL io to the S3 ckpt_path), incl. the patched LoRA adapter save
+        from skyrl.backends.skyrl_train.utils.io import io as skyrl_io
+        from safetensors.torch import load as st_load, save as st_save
+        import torch
+        probe = f"{runtime['artifact_uri']}/checkpoints/_strl_dry_probe/adapter_model.safetensors"
+        with skyrl_io.open_file(probe, 'wb') as f:
+            f.write(st_save({'probe': torch.ones(2)}))
+        with skyrl_io.open_file(probe, 'rb') as f:
+            ok = bool(st_load(f.read())['probe'].sum().item() == 2.0)
+        skyrl_io.remove(probe)
+        if not ok:
+            raise RuntimeError(f'durable checkpoint io round trip failed at {probe}')
+        gates['durable_checkpoint_io'] = {'path': probe, 'round_trip': ok}
     if receipt.get('critic') == 'enabled':
         from .monitor import critic
         critic.configure({**cfg['tracking']['critic'], 'enabled': True})
@@ -193,22 +273,75 @@ def dry_run_gates(cfg, runtime, env_spec, receipt):
     return gates
 
 
-def evaluate_test_split(cfg, env_spec, base_model, trained_model, eval_dir, deadline):
-    """Base on GPUs [0, n), trained on GPUs [n, 2n), n shards each, concurrently; reassemble in canonical id order."""
+def evaluate_test_split(cfg, env_spec, base_model, trained_model, eval_dir, deadline, limit=None, resolved=None):
+    """Base on GPUs [0, n), trained on GPUs [n, 2n), n shards each, concurrently; reassemble in canonical id order. ``resolved``: a
+    different resolved config for the eval processes (the retention environment); ``limit``: the first N held-out examples."""
     from .finalize import merge_shards, read_jsonl
     n = cfg['evaluation']['eval_shards_per_model']
+    Path(eval_dir).mkdir(parents=True, exist_ok=True)
     jobs = []
     for offset, (label, model) in enumerate([('base', base_model), ('candidate', trained_model)]):
         for shard in range(n):
             env = os.environ.copy()
             env.pop('RAY_ADDRESS', None)
             env['CUDA_VISIBLE_DEVICES'] = str(offset * n + shard)
+            if resolved:
+                env['STRL_RESOLVED'] = str(resolved)
             args = [sys.executable, '-m', env_spec.eval_module, '--model', str(model), '--output', str(eval_dir / f'{label}-{shard}.jsonl'),
-                    '--rank', str(shard), '--world-size', str(n)]
+                    '--rank', str(shard), '--world-size', str(n), *(['--limit', str(limit)] if limit else [])]
             jobs.append((args, eval_dir / f'{label}-{shard}.log', env))
     run_parallel(jobs, deadline)
     ids = env_spec.final_eval_ids(cfg)
+    ids = ids[:limit] if limit else ids
     return {label: merge_shards([read_jsonl(eval_dir / f'{label}-{s}.jsonl') for s in range(n)], ids) for label in ('base', 'candidate')}
+
+
+def latest_export(root: Path) -> Path | None:
+    steps = sorted((int(p.name.split('_')[-1]), p / 'policy') for p in (Path(root) / 'exports').glob('global_step_*') if (p / 'policy').is_dir())
+    return steps[-1][1] if steps else None
+
+
+def retention_in_pod(cfg, resolved='retention-resolved.json'):
+    """The retention experiment as STAGED (retention-resolved.json, paths re-rooted at the pod): the pod payload ships only that file and
+    its data, never the retention experiment's YAML chain (v3smk3-fb: `experiment file not found: base/gsm8k.yaml`)."""
+    from .experiment import load_resolved, retention_config
+    return load_resolved(resolved) if Path(resolved).is_file() else retention_config(cfg)
+
+
+def run_retention(cfg, runtime, root, trained, deadline):
+    """evaluation.retention: base vs trained on another environment's held-out set (e.g. GSM8K for a MiMo run). Never raises: the result
+    or the reason it is missing goes to artifacts/final_eval/retention/result.json and W&B retention/<env>/*."""
+    from .tasks import get_environment
+    out_dir = Path('artifacts/final_eval/retention')
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        rcfg = retention_in_pod(cfg)
+        if trained is None:
+            raise RuntimeError('no trained export to evaluate')
+        renv = get_environment(rcfg['environment']['name'])
+        rows = evaluate_test_split(rcfg, renv, cfg['model']['local_path'], trained, out_dir, deadline, limit=rcfg.get('_retention_limit'),
+                                   resolved=Path('retention-resolved.json').resolve())
+        stats = renv.paired_result(rows['base'], rows['candidate'], rcfg)
+        result = {'environment': renv.name, 'experiment': cfg['evaluation']['retention']['experiment'], 'trained': str(trained),
+                  'examples': len(rows['base']), 'test': stats.get('test'), 'flips': stats.get('flips')}
+    except Exception as error:
+        traceback.print_exc()
+        result = {'environment': None, 'error': f'{type(error).__name__}: {error}'[:400]}
+    (out_dir / 'result.json').write_text(json.dumps(result, indent=2, default=str))
+    try:
+        t = result.get('test') or {}
+        if t and os.environ.get('WANDB_API_KEY'):
+            import wandb
+            run = wandb.init(project=cfg['tracking']['project'], entity=cfg['tracking']['entity'], id=runtime['wandb_run_id'], resume='allow', reinit=True)
+            name = result['environment']
+            scalars = {f'retention/{name}/base': t.get('baseline_accuracy'), f'retention/{name}/trained': t.get('candidate_accuracy'),
+                       f'retention/{name}/delta': t.get('accuracy_delta'), f'retention/{name}/ci_lower': t.get('ci_lower'),
+                       f'retention/{name}/ci_upper': t.get('ci_upper'), f'retention/{name}/examples': result['examples']}
+            run.summary.update({k: v for k, v in scalars.items() if v is not None})
+            run.finish()
+    except Exception as error:
+        print(f'retention W&B logging skipped: {type(error).__name__}: {error}', flush=True)
+    return result
 
 
 def in_loop_finish(cfg, runtime, env_spec, root, steps):
@@ -230,8 +363,17 @@ def in_loop_finish(cfg, runtime, env_spec, root, steps):
             run = wandb.init(project=cfg['tracking']['project'], entity=cfg['tracking']['entity'], id=runtime['wandb_run_id'], resume='allow', reinit=True)
             run.log({'optimizer_step': steps, **scalars})
             run.summary.update({**scalars, 'test/trained_step': result['trained_step'], 'test/selection': result['selection']})
+            from .inloop import FLIP_COLUMNS
+            from .finalize import read_jsonl
+            for kind in ('fixed', 'broken'):   # the qualitative "what changed" tables, as the offline path logs them
+                path = eval_dir / f'{kind}_by_training.jsonl'
+                if path.is_file():
+                    table = wandb.Table(columns=list(FLIP_COLUMNS))
+                    for row in read_jsonl(path):
+                        table.add_data(*[row.get(c) for c in FLIP_COLUMNS])
+                    run.log({f'qualitative/{kind}_by_training': table})
             artifact = wandb.Artifact(runtime['run_name'] + '-evidence', type='evaluation')
-            for name in ('result.json', 'README.md', 'base.jsonl', 'candidate.jsonl'):
+            for name in ('result.json', 'README.md', 'base.jsonl', 'candidate.jsonl', 'fixed_by_training.jsonl', 'broken_by_training.jsonl'):
                 if (eval_dir / name).is_file():
                     artifact.add_file(str(eval_dir / name))
             run.log_artifact(artifact)
@@ -304,6 +446,8 @@ def main():
             raise RuntimeError('Incorrect worker allocation: expected exactly ' + ('one node' if nodes == 1 else f'{nodes} nodes'))
         begin = budget(runtime, cfg)
         identity['budget'] = begin
+        identity['model_code'] = {**models.prefer_native_code(cfg['model']['local_path']), **models.model_code_check(cfg['model']['local_path'])}
+        print(json.dumps({'model_code': identity['model_code']}), flush=True)
         reserve = train_reserve_seconds(cfg, mode)
         os.environ.update(
             GRPO_WORKER_BEGAN_EPOCH=str(begin['started_at']), STRL_GPU_FRACTION=str(begin['gpu_fraction']),
@@ -323,6 +467,7 @@ def main():
             os.environ['STRL_FAILFAST'] = json.dumps(rules)
         if runtime.get('plan_step_seconds'):
             os.environ['STRL_PLAN_STEP_SECONDS'] = str(runtime['plan_step_seconds'])
+            os.environ['STRL_PLAN_STEP_CALIBRATED'] = '1' if runtime.get('plan_step_calibrated', True) else '0'
         interface = os.environ['NETWORK_INTERFACE_NAME']
         port = os.environ.get('LEADER_PORT', '6379')
         if multi:
@@ -381,6 +526,14 @@ def main():
             print(json.dumps({'probe': identity['network']}), flush=True)
         if mode == 'dry':  # CPU rehearsal of every gate the GPU run depends on; never starts training
             gates = dry_run_gates(cfg, runtime, env_spec, identity['services'])
+            per_domain = int((cfg.get('run') or {}).get('ceiling_per_domain') or 0)
+            if per_domain and env_spec.name == 'mimo':   # the reference agent's ceiling, run where the LiteLLM key already is (never the laptop)
+                from .evals import mimo as ceiling
+                try:
+                    gates['ceiling'] = ceiling(cfg, 'test', per_domain, (cfg.get('run') or {}).get('ceiling_model', 'openai/gpt-6-luna'), 8192,
+                                               ((cfg.get('services') or {}).get('litellm') or {}).get('project_id', '696011502a26dc4a64b24f55'))
+                except Exception as error:
+                    gates['ceiling'] = {'error': f'{type(error).__name__}: {error}'[:400]}
             dry = dict(identity, status='dry_run_passed', phases=phases, gates=gates, train_deadline=float(os.environ['GRPO_TRAIN_DEADLINE']),
                        skyrl_commit=cfg['runtime']['skyrl_commit'])
             put_json(prefix + '/dry-run.json', dry)
@@ -389,6 +542,9 @@ def main():
             print(json.dumps(dry, default=str), flush=True)
             return
         root = Path('artifacts') / runtime['run_name']
+        if (cfg.get('run') or {}).get('resume_from'):
+            identity['resumed_from'] = prepare_resume(prefix, runtime['run_name'], cfg['run']['resume_from'], root)
+            put_json(prefix + '/worker-started.json', identity)
         stalled = None
         if multi:   # head-side liveness: a lost peer aborts training instead of hanging in NCCL until the deadline
             ray.init(address=address)
@@ -406,6 +562,7 @@ def main():
         if multi:
             watcher.stop()
             shard_reports = cluster_shards(root, nodes * gpus) if save_optimizer_state(cfg) else None
+            identity['exports_gathered'] = gather_exports(root, prefix)
             ray.shutdown()
         subprocess.run([RAY, 'stop', '--force'], check=False)
         progress = json.loads((root / 'training_completed.json').read_text()) if (root / 'training_completed.json').is_file() else \
@@ -413,13 +570,15 @@ def main():
         steps = int(progress.get('optimizer_steps', progress.get('optimizer_step', 0)))
         if steps < 2 or not (root / 'canary.json').is_file():
             raise RuntimeError('Missing successful real training canary' + (f' ({stalled})' if stalled else ''))
-        extra = {'nodes': nodes, 'network': identity.get('network')} if multi else {}
+        extra = {'nodes': nodes, 'network': identity.get('network'), 'exports_gathered': identity.get('exports_gathered')} if multi else {}
         if mode == 'canary' or not cfg['evaluation']['final_eval']:
             final = dict(status='completed', mode=mode, optimizer_steps=steps, stalled=stalled, phases=phases,
                          elapsed_seconds=time.time() - begin['started_at'], gpus=gpus, experiment_sha=cfg['_meta']['sha'], **extra)
             if mode == 'train':   # no offline final eval: pair the first (step-0) and last in-loop evals
                 final['paired_result'] = in_loop_finish(cfg, runtime, env_spec, root, steps)
                 final['selected_step'] = final['paired_result'].get('selected_step')
+                if cfg['evaluation'].get('retention'):
+                    final['retention'] = run_retention(cfg, runtime, root, latest_export(root), begin['deadline'] - 60)
             sync_local('artifacts', prefix, exclude=SYNC_EXCLUDE)
             put_json(prefix + '/completion.json', final)
             print(json.dumps(final), flush=True)
@@ -440,9 +599,8 @@ def main():
             extra['adapter'] = keep_adapter(export, root / 'reload' / f'global_step_{selected}', cfg['model']['id'], cfg['model']['revision'],
                                             cfg['model']['local_path'])
             change = verify_adapter_change(export)
-            merged = root / 'merged' / f'global_step_{selected}'
-            change['merge'] = merge_adapter(cfg['model']['local_path'], export, merged)
-            export = merged
+            # evaluate the ADAPTER (served by vLLM on the bf16 base, as in training): a bf16 merge rounds a small RL update away
+            change['served'] = 'vllm-lora'
         else:
             export = profile.prepare_export_for_vllm(cfg['model']['local_path'], export, root / 'reload' / f'global_step_{selected}')
             change = None
@@ -483,21 +641,25 @@ def main():
                      experiment_sha=cfg['_meta']['sha'], environment=env_spec.name, metric=env_spec.metric, model=cfg['model']['id'], **extra)
         (eval_dir / 'result.json').write_text(json.dumps(final, indent=2))
         import wandb
-        run = wandb.init(project=cfg['tracking']['project'], entity=cfg['tracking']['entity'], id=runtime['wandb_run_id'], resume='must')
-        run.log({'optimizer_step': steps, **{'test/' + k: v for k, v in result.items()}, **{'test/flips_' + k: v for k, v in counts.items()},
-                 **{f'test/{src}/{k}': v for src, d in by_source.items() for k, v in d.items()},
-                 'checkpoint/reload_passed': True, 'distributed/nodes': cfg['compute']['nodes'], 'distributed/gpus': gpus})
-        cols = ['sample_id', 'prompt', 'ground_truth', 'base_failure_mode', 'base_completion', 'trained_completion']
-        table = wandb.Table(columns=cols)
-        for r in fixed:
-            table.add_data(r['sample_id'], str(r['prompt']), str(r['ground_truth']), r['base_failure_mode'], r['base_completion'], r['trained_completion'])
-        run.log({'qualitative/fixed_by_training': table})
-        artifact = wandb.Artifact(runtime['run_name'] + '-evidence', type='evaluation')
-        for name in ['result.json', 'base.jsonl', 'candidate.jsonl', 'fixed_by_training.jsonl', 'broken_by_training.jsonl']:
-            artifact.add_file(str(eval_dir / name))
-        run.log_artifact(artifact)
-        run.summary.update({k: v for k, v in final.items() if k != 'validation_by_step'})
-        run.finish()
+        try:   # the evaluation is complete and on disk: a W&B outage must not turn a finished attempt into a failed one
+            run = wandb.init(project=cfg['tracking']['project'], entity=cfg['tracking']['entity'], id=runtime['wandb_run_id'], resume='must')
+            run.log({'optimizer_step': steps, **{'test/' + k: v for k, v in result.items()}, **{'test/flips_' + k: v for k, v in counts.items()},
+                     **{f'test/{src}/{k}': v for src, d in by_source.items() for k, v in d.items()},
+                     'checkpoint/reload_passed': True, 'distributed/nodes': cfg['compute']['nodes'], 'distributed/gpus': gpus})
+            cols = ['sample_id', 'prompt', 'ground_truth', 'base_failure_mode', 'base_completion', 'trained_completion']
+            table = wandb.Table(columns=cols)
+            for r in fixed:
+                table.add_data(r['sample_id'], str(r['prompt']), str(r['ground_truth']), r['base_failure_mode'], r['base_completion'], r['trained_completion'])
+            run.log({'qualitative/fixed_by_training': table})
+            artifact = wandb.Artifact(runtime['run_name'] + '-evidence', type='evaluation')
+            for name in ['result.json', 'base.jsonl', 'candidate.jsonl', 'fixed_by_training.jsonl', 'broken_by_training.jsonl']:
+                artifact.add_file(str(eval_dir / name))
+            run.log_artifact(artifact)
+            run.summary.update({k: v for k, v in final.items() if k != 'validation_by_step'})
+            run.finish()
+        except Exception as error:
+            final['wandb_error'] = f'{type(error).__name__}: {error}'
+            print(f'[strl] W&B logging of the final evaluation failed (results are in S3): {final["wandb_error"]}', file=sys.stderr, flush=True)
         sync_local('artifacts', prefix, exclude=SYNC_EXCLUDE)
         put_json(prefix + '/completion.json', final)
         print(json.dumps(final), flush=True)

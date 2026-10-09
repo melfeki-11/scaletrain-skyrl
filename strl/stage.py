@@ -169,6 +169,15 @@ print('Verified pinned payload, model and data staging',flush=True)
             '/opt/skyrl-venv/bin/python -c ' + shlex.quote(bootstrap) + '\nexec /opt/skyrl-venv/bin/python -m strl.worker\n')
 
 
+def plan_step_calibrated(cfg: dict) -> bool:
+    """Is the plan's step estimate from a measured profile of this environment/model (not extrapolated)? Only a calibrated estimate may stop a run."""
+    try:
+        from .derive import estimate_step_seconds, params_and_config
+        return bool(estimate_step_seconds(cfg, params_and_config(cfg)[2] or 1.0).get('calibrated'))
+    except Exception:
+        return False
+
+
 def plan_step_seconds(cfg: dict) -> float | None:
     """`strl plan`'s per-step estimate (seconds), or None when it cannot be derived (model config unavailable, no profile)."""
     try:
@@ -216,6 +225,12 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
         worker_seconds = remaining - cfg['budget']['bootstrap_margin_seconds']
     else:   # multi-node dry runs also wait for every peer's preflight + Ray join and run the CPU probe
         dry_seconds = env_dry_seconds(env) + (600 if nodes > 1 else 0)
+        if (cfg.get('run') or {}).get('ceiling_per_domain'):   # the reference agent runs the held-out tasks within the experiment's caps
+            from .tasks.mimo.data import mimo_config
+            from .tasks.mimo.export import DOMAIN_SPECS
+            caps = [int(d.get('max_agent_sec') or DOMAIN_SPECS[n].agent_timeout_sec) + int(d.get('max_verifier_sec') or DOMAIN_SPECS[n].verifier_timeout_sec)
+                    for n, d in mimo_config(cfg)['domains'].items() if d.get('test')]
+            dry_seconds += max(caps or [0]) * int(cfg['run']['ceiling_per_domain']) + 600
         remaining, worker_seconds = dry_seconds, dry_seconds - 100
 
     st = cfg['storage']
@@ -237,8 +252,27 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
         if s3.get_object(Bucket=bucket, Key=ledger_key)['Body'].read() != ledger_bytes:
             raise RuntimeError(f'attempt {attempt} was already staged against a different budget ledger; use a new attempt name') from None
 
+    previous = (cfg.get('run') or {}).get('resume_from')
+    if previous:   # SkyRL can only load a checkpoint written with the same world size; the earlier attempt must have one
+        receipt_path = REPO_ROOT / 'evidence' / previous / 'stage.json'
+        if not receipt_path.is_file():
+            raise RuntimeError(f'run.resume_from={previous}: no evidence/{previous}/stage.json (was it staged from this checkout?)')
+        old = json.loads(receipt_path.read_text())
+        if (old.get('nodes'), old.get('gpu_fraction')) != (nodes, gpu_fraction):
+            raise RuntimeError(f"run.resume_from={previous}: it ran on {old.get('nodes')} node(s) x {old.get('gpu_fraction')} of 8 GPUs, this attempt "
+                               f'on {nodes} x {gpu_fraction}: a checkpoint resumes only at the same world size')
+        try:
+            s3.head_object(Bucket=bucket, Key=f'{base_prefix}/attempts/{previous}/artifacts/checkpoints/latest_ckpt_global_step.txt')
+        except Exception as error:
+            raise RuntimeError(f'run.resume_from={previous}: no durable checkpoint in S3 (run it with evaluation.durable_checkpoints: true)') from error
     model_dir = Path(cfg['model']['local_path'])
     mprefix = model_prefix(base_prefix, cfg)
+    from .models import snapshot_identity
+    identity, message = snapshot_identity(cfg['model'])
+    if identity == 'mismatch':   # never upload one model's weights under another model's S3 prefix
+        raise RuntimeError(message)
+    if identity == 'unknown':
+        print(f'WARNING: {message}', flush=True)
 
     def upload(path: Path) -> dict:
         digest = file_sha256(path)
@@ -271,6 +305,7 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
     estimate = plan_step_seconds(cfg)
     if estimate is not None:   # the plan's step estimate: the live monitor (STEP_SLOW) and in-run fail-fast compare measured step times to it
         runtime['plan_step_seconds'] = estimate
+        runtime['plan_step_calibrated'] = plan_step_calibrated(cfg)
     (staging / 'runtime.json').write_text(json.dumps(runtime, indent=2))
     save_resolved(cfg, staging / 'resolved.json', root=POD_ROOT)
 
@@ -281,6 +316,13 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
     entries = [(REPO_ROOT / 'strl', 'strl'), (staging / 'resolved.json', 'resolved.json'), (staging / 'runtime.json', 'runtime.json'),
                (Path(cfg['run']['data_dir']), relative(cfg['run']['data_dir'])), (REPO_ROOT / 'assets/runtime', 'assets/runtime'),
                (staging / 'model-manifest.json', 'assets/model-manifest.json')]
+    from .experiment import retention_config
+    rcfg = retention_config(cfg)
+    if rcfg is not None:   # the retention environment's held-out data and its resolved config travel with the payload
+        if not Path(rcfg['run']['data_dir']).exists():
+            raise RuntimeError(f"evaluation.retention: {rcfg['run']['data_dir']} is missing: run `strl prepare {cfg['evaluation']['retention']['experiment']}`")
+        save_resolved(rcfg, staging / 'retention-resolved.json', root=POD_ROOT)
+        entries += [(Path(rcfg['run']['data_dir']), relative(rcfg['run']['data_dir'])), (staging / 'retention-resolved.json', 'retention-resolved.json')]
     from .rewards import custom_payload_paths
     entries += [(REPO_ROOT / top, top) for top in custom_payload_paths(cfg['reward']['components'])]   # user 'module:function' code
     overlay_ref = None

@@ -1,14 +1,21 @@
 # Scaling up
 
-Verified in this repo: one node (1-8 H100, slices included), colocated sync GRPO, FSDP, TP1 vLLM engines. Everything below is
-the path to more scale; each step needs the same proof ladder (dry -> canary -> bounded run) before a long run.
+Verified status (2026-10-08): one node at 1-8 H100 with slices, for Qwen3.5-0.8B, Qwen3-1.7B, Phi-4-mini and Qwen3.8-27B (LoRA, TP2 x 4 engines,
+62 GB peak). Two nodes x 8 H100 for Qwen3.5-0.8B LoRA (16-rank NCCL, LoRA sync across hosts, export gathered from every node, 2 updates).
+Two nodes x 8 for Qwen3.8-27B up to the step-0 eval only (load over 16 GPUs, 8 TP2 engines). Never GPU-run: full fine-tuning above 0.8B
+on 2 nodes, more than 2 nodes, MoE models, Megatron, the fully-async trainer. Each new rung needs the proof ladder
+(dry -> canary -> bounded run) before a long run.
 
 ## Bigger models on one node
 
 - Change `model.*`; `strl plan` shows the memory estimate per phase. Above ~4B full-parameter on 8 H100, raise
   `inference.tensor_parallel_size` (engines become gpus/TP; plan re-derives) and lower `micro_train_per_gpu`.
 - Long contexts: `max_prompt_tokens + max_generate_length` is the vLLM `max_model_len`; memory grows with it.
-- Megatron / MoE are SkyRL-supported but not wired here (`trainer.strategy=megatron` + `megatron_config.*`).
+- MoE (`Qwen3MoeForCausalLM`, `Qwen3_5MoeForConditionalGeneration`) has profiles (`qwen3_moe`, `qwen3_5_moe`) and the plan counts
+  TOTAL parameters for memory (all experts are resident) with a `MOE` warning; FSDP over experts works but is slow and unverified.
+  Expert parallelism needs Megatron (`trainer.strategy=megatron` + `megatron_config.*`), SkyRL-supported but not wired here.
+- Memory: `strl plan` estimates weights + optimizer + KV cache, and prints the MEASURED peak from `strl/profiles.json` when a run of the
+  same model exists (`memory: ... measured peak 62 GB`). With no measurement it warns `MEMORY unknown`: the 1-node canary is the check.
 
 ## LoRA vs full fine-tuning, FSDP layout (experiment keys; defaults render nothing)
 
@@ -29,7 +36,8 @@ budget: {save_optimizer_state: true}   # false: no FSDP checkpoints, exactly one
   (recorded in `_meta.overrides`, part of the experiment sha).
 - LoRA is enabled on the vLLM side by pinned SkyRL itself (`enable_lora`, `max_lora_rank` from `trainer.policy.model.lora.rank`).
   LoRA exports are PEFT adapters: the worker keeps them (`reload/`, `adapter.json` names the base id/revision), checks a
-  nonzero `lora_B`, and evaluates a merged copy (`merged/`, W + alpha/r B A, shard by shard).
+  nonzero `lora_B`, and the offline evaluator SERVES the adapter on the frozen base through vLLM (`enable_lora` + `LoRARequest`,
+  `strl/offline_engine.py`; `served: vllm-lora` in the result), exactly as in training: no bf16 merge, no rounding drift.
 - Large models: `strl stage-model <exp> --attempt A` renders a CPU job that snapshot-downloads in the pod (16 workers) and uploads
   to the model prefix with a sha256 manifest; `stage` uses it when the model is not local; pods fetch > 10 GB models with 16
   threads + multipart. Sharded HF exports (`model.safetensors.index.json`) are adapted for vLLM shard by shard.
@@ -44,6 +52,13 @@ budget: {save_optimizer_state: true}   # false: no FSDP checkpoints, exactly one
   (30 tries). The head waits for N nodes x G GPUs on distinct hosts and runs the probe: TCP both ways, NCCL all-reduce, 1 GiB
   all-gather GB/s intra- and cross-node, NCCL transport (NET/OFI efa, IB, Socket), /dev/shm, cgroup memory, GPUs per node.
   EFA (verbs device + aws-ofi-nccl + fi_info) sets `FI_PROVIDER=efa FI_EFA_USE_DEVICE_RDMA=1`; its absence only warns.
+- Exports and artifacts on multi-node: SkyRL writes checkpoint shards and the HF export on whichever node holds the rank; before Ray stops
+  the head runs `gather_exports` (every node uploads its `exports/` to S3, the head downloads them; `identity.exports_gathered`). A 60 s
+  background sync on every node never raises into training.
+- Network: the probe's `network.json` (transport, GB/s) feeds `strl plan --network` and W&B `infra/*`. Measured on p5 pairs:
+  NCCL over TCP sockets at ~0.69 GB/s cross-node (the image lacks aws-ofi-nccl although the pods expose EFA devices). That is why
+  multi-node LoRA defaults to HSDP (`fsdp_size = gpus_per_node`, automatic): only the adapter gradient crosses nodes. Full fine-tuning
+  over sockets needs HSDP + `cpu_offload` and will be slow; installing aws-ofi-nccl in the image is the real fix (not done).
 - Liveness: head `head-heartbeat.json` every 60 s and a Ray watcher that aborts training when a node is lost; peers write
   `peer-<rank>-heartbeat.json`, exit 0 on `completion.json`, nonzero when the head is silent > 300 s (`monitor`: PEER_STALE,
   NETWORK). Each node lists its own checkpoint shards over Ray (nothing is copied to the head).

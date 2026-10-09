@@ -26,11 +26,10 @@ def _download(cfg: dict, attempt: str, dest: Path) -> Path:
                       'metrics.jsonl': f'{attempt}/metrics.jsonl', 'runtime.json': 'runtime.json', 'network.json': 'network.json',
                       'completion.json': 'completion.json', 'evaluation_timing.jsonl': f'{attempt}/evaluation_timing.jsonl'}.items():
         target = dest / name
-        if not target.is_file():
-            try:
-                s3.download_file(st['bucket'], f'{base}/{key}', str(target))
-            except Exception:
-                pass
+        try:   # always refresh: a file fetched while the run was live (metrics, completion) would otherwise stay stale forever
+            s3.download_file(st['bucket'], f'{base}/{key}', str(target))
+        except Exception:
+            pass
     return dest
 
 

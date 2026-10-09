@@ -212,3 +212,13 @@ class AllExperiments(unittest.TestCase):
                 self.assertEqual(canary[axis], cfg[axis], (path, axis))
             self.assertEqual(canary['compute']['gpus_per_node'], 1)
             self.assertFalse(canary['evaluation']['final_eval'])
+
+
+class GSM8KTerminalTokens(unittest.TestCase):
+    """Generality audit: parse_final_answer returned None for every non-Qwen model (it stripped only <|endoftext|> and <|im_end|>)."""
+
+    def test_every_common_family_terminator_is_stripped(self):
+        from strl.tasks.gsm8k.answers import parse_final_answer
+        for end in ('', '<|im_end|>', '<|eot_id|>', '</s>', '<end_of_turn>', '<eos>', '<|end|>', '<｜end▁of▁sentence｜>', '<|im_end|><|endoftext|>'):
+            self.assertEqual(parse_final_answer('2 + 2 = 4\n#### 4' + end), '4', repr(end))
+        self.assertIsNone(parse_final_answer('#### 4</s> trailing'))       # only a trailing run is removed

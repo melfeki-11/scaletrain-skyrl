@@ -284,9 +284,11 @@ async def run_trajectory(deps: Any, prompt: str, trajectory_id: Any, *, cache_sa
     rollout = getattr(getattr(results, 'agent_result', None), 'rollout_details', None) if has_rollout(results) else None
     placeholder = False
     if rollout is None and phase != 'eval':   # training needs the tokens; evaluation only needs the verdict
-        if exc == 'AgentTimeoutError':
-            # A trial that ran out of time left Harbor no tokens, but it IS a scored failure (the verifier ran): keep it in its group as a
-            # tokenless placeholder (reward in the GRPO baseline, loss mask 0) instead of masking every sibling (SkyRL's default).
+        if exc == 'AgentTimeoutError' or exc in POLICY_LIMIT:
+            # A trial that ran out of time (or overflowed its output/context budget) left Harbor no tokens, but it IS a scored failure of the
+            # policy: keep it in its group as a tokenless placeholder (reward in the GRPO baseline, loss mask 0) instead of masking every
+            # sibling (SkyRL's default). v3smk-fb: 0.8B music replies overflowing max_generate_length were masked as no_rollout, read as an
+            # environment failure (88% of music groups) and the domain_masked fail-fast stopped a healthy 2 x 8 run.
             placeholder = True
         else:
             _warn(f'mimo masked {domain}/{name} rep={rep}: no_rollout (exception {exc})')
@@ -354,7 +356,8 @@ def reward_terms(cfg: dict | None) -> list[dict]:
         if c['fn'] == 'verifier_score' or not c.get('weight', 1.0):
             continue
         out.append({'name': c['fn'], 'fn': resolve_component(mimo_spec.MimoSpec(), c['fn']), 'weight': float(c.get('weight', 1.0)),
-                    'params': {k: v for k, v in c.items() if k not in ('fn', 'weight')}})
+                    'params': {k: v for k, v in c.items() if k not in ('fn', 'weight')},
+                    'max_generate_length': int(((cfg or {}).get('algorithm') or {}).get('max_generate_length') or 1024)})
     return out
 
 
@@ -369,7 +372,8 @@ def shape_reward(result: dict, native: float, native_w: float, terms: list[dict]
     """Training reward = native_w x native + sum(weight x term(result, ctx, **params)). Returns (reward, {term name: its weighted value}).
     ``result``: domain, task, reward (the native grader score), metric, passed, components, turns, tokens, seconds, stop, artifact."""
     from ...rewards import RewardContext
-    ctx = RewardContext(extras={'domain': result.get('domain')})
+    # ctx for mimo: extras.domain and the per-turn generation cap; there is no completion string (use result['tokens'], not ctx.count_tokens)
+    ctx = RewardContext(extras={'domain': result.get('domain')}, max_generate_length=int(terms[0].get('max_generate_length', 1024)) if terms else 1024)
     parts = {}
     total = native_w * native
     for t in terms:
@@ -468,11 +472,14 @@ def rollout_metrics(summaries: list[dict], group_ids: list[str] | None = None, *
         out[f'{p}/num_timeout'] = float(sum(s['stop'] in ('agent_timeout', 'verifier_timeout') for s in rows))
         out[f'{p}/num_deadline'] = float(sum(s.get('mask_reason') == 'deadline' for s in rows))
         out[f'{p}/num_context_exceeded'] = float(sum(s['stop'] == 'context_length' for s in rows))
+        out[f'{p}/num_output_exceeded'] = float(sum(s['stop'] == 'output_length' for s in rows))
         out[f'{p}/judge_masked'] = float(sum(s.get('mask_reason') == 'judge' for s in rows))
         if valid:
             out[f'{p}/reward_mean'] = sum(float(s['reward']) for s in valid) / len(valid)
             if any('reward_native' in s for s in valid):   # shaped training: the native score next to it exposes reward hacking
                 out[f'{p}/reward_native_mean'] = sum(float(s.get('reward_native', s['reward'])) for s in valid) / len(valid)
+                for term in sorted({t for s in valid for t in (s.get('reward_terms') or {})}):   # every weighted shaping term, per domain
+                    out[f'{p}/reward_terms/{term}'] = sum(float((s.get('reward_terms') or {}).get(term, 0.0)) for s in valid) / len(valid)
             out[f'{p}/pass_rate'] = sum(bool(s['passed']) for s in valid) / len(valid)
             out[f'{p}/avg_turns'] = sum(s['turns'] for s in valid) / len(valid)
             out[f'{p}/tokens'] = sum(s['tokens'] for s in valid) / len(valid)
@@ -484,6 +491,11 @@ def rollout_metrics(summaries: list[dict], group_ids: list[str] | None = None, *
             out[f'environment/{domain}/{name}'] = value
     for name, value in group_fractions(summaries, groups).items():
         out[f'environment/{name}'] = value
+    shaped = [s for s in summaries if not s['masked'] and 'reward_native' in s]
+    if shaped:   # the same key the other environments use (environment/reward_components/<fn>), so W&B panels are shared
+        out['environment/reward_components/verifier_score'] = sum(float(s['reward_native']) for s in shaped) / len(shaped)
+        for term in sorted({t for s in shaped for t in (s.get('reward_terms') or {})}):
+            out[f'environment/reward_components/{term}'] = sum(float((s.get('reward_terms') or {}).get(term, 0.0)) for s in shaped) / len(shaped)
     return out
 
 
@@ -492,7 +504,8 @@ def public_summary(summary: dict) -> dict:
     judge = summary.get('judge')
     return {**{k: v for k, v in summary.items() if k != 'judge'},
             'judge': judge and {'final': judge['final'], 'scores': judge['scores'], 'rationale': judge['rationale'][:600],
-                                'cost_usd': judge['meta']['cost_usd'], 'latency_s': judge['meta']['latency_s']}}
+                                'cost_usd': judge['meta']['cost_usd'], 'latency_s': judge['meta']['latency_s'],
+                                'vote_variance': judge['meta'].get('vote_variance')}}
 
 
 def remember(phase: str, trajectory_id: Any, summary: dict, env_extra: dict | None = None) -> None:

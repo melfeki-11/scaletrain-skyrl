@@ -14,6 +14,11 @@ before anything else: it validates, derives the infrastructure, estimates time/c
 | `mimo-qwen38-27b-lora.yaml` | environment `mimo` (five MiMo domains), model, LoRA, 2 nodes | multi-domain agentic RL, Qwen3.8-27B, LoRA r64; `strl prepare` first |
 | `mimo-qwen38-27b-full.yaml` | finetune mode | the same, full fine-tuning (full shard over 16 GPUs) |
 | `mimo-qwen35-0p8b-smoke.yaml` | model, compute: 1 GPU | cheap end-to-end check of the mimo path (also the 1-GPU canary arm) |
+| `mimo-qwen35-0p8b-2node-smoke.yaml` | model, compute: 2 x 8 | multi-node smoke at 0.8B (rendezvous, 16-rank NCCL, LoRA sync, export gather, retention) |
+| `mimo-qwen38-27b-lora-run1.yaml` / `-run1-1node.yaml` | selection, budget | the 27B main run on 2 x 8 and its 1 x 8 fallback |
+| `mimo-example-music-code-full.yaml` | domains, finetune mode, reward (shaping) | template for a new MiMo program: subset, full fine-tuning, custom shaping term |
+| `mimo-phi4-mini-lora-verify.yaml` | model (non-Qwen), LoRA, reward, eval | Phi-4-mini on music+cyber: shaped reward, durable checkpoints (resume), GSM8K retention |
+| `gsm8k-qwen35-2node-smoke.yaml` / `-full.yaml` | compute: 2 nodes | multi-node smoke on GSM8K, LoRA / full |
 
 Merge rules for `extends:`:
 - Mappings merge key by key.

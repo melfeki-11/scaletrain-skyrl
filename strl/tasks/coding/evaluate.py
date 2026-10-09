@@ -35,12 +35,10 @@ def evaluate(model, output, limit=None, rank=0, world_size=1):
     tokenizer = AutoTokenizer.from_pretrained(cfg['model']['local_path'])
     prompts = [tokenizer.apply_chat_template([{'role': 'user', 'content': t.prompt}], tokenize=False, add_generation_prompt=True,
                                              **profile.chat_kwargs(cfg)) for t in tasks]
-    engine = LLM(model=str(model), tokenizer=cfg['model']['local_path'], tensor_parallel_size=1, dtype=cfg['model']['dtype'],
-                 enforce_eager=cfg['inference']['enforce_eager'], gpu_memory_utilization=0.75,
-                 max_model_len=max_model_len(cfg), max_num_seqs=128, disable_log_stats=True,
-                 **profile.vllm_kwargs(cfg))
+    from ... import offline_engine
+    engine, lora = offline_engine.build(cfg, profile, model, max_model_len=max_model_len(cfg))
     params = SamplingParams(temperature=a['eval_temperature'], top_p=a['top_p'], max_tokens=a['max_generate_length'], seed=a['seed'])
-    results = engine.generate(prompts, params)
+    results = offline_engine.generate(engine, lora, prompts, params)
     codes = [extract_code(r.outputs[0].text) for r in results]
     runnable = [i for i, c in enumerate(codes) if c is not None]
     verdicts = dict(zip(runnable, executor.score_many([tasks[i].job(codes[i]) for i in runnable])))

@@ -32,8 +32,8 @@ evaluation:
 
 budget:
   total_seconds: 21600
-  attempt_max_seconds: 1500
-  final_eval_reserve_seconds: 300
+  attempt_max_seconds: 1800
+  final_eval_reserve_seconds: 600   # >= 600: the training child is hard-killed 480 s before the deadline
   canary_max_seconds: 1200
   ledger: evidence/ledgers/mimo-27b.json
 

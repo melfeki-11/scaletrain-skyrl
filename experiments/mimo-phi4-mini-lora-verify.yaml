@@ -1,0 +1,76 @@
+# Hardening-round verification (2026-10-08): a NON-Qwen family (Phi-4-mini, dense profile) with LoRA on a MiMo subset (music single-shot +
+# cyber Terminus-2), a SHAPED reward (native verifier + turn-efficiency bonus), durable S3 checkpoints (resume test: run it again with
+# --set run.resume_from=<attempt> --set algorithm.max_steps=4), and a GSM8K RETENTION eval served through the adapter. 2 GPUs, 2 updates.
+# Data: assets/mimo/data-2node (16 train + 4 held-out per domain), prepared by `strl prepare experiments/mimo-qwen35-0p8b-2node-smoke.yaml`.
+name: mimo-phi4-mini-lora-verify
+description: MiMo music+cyber, Phi-4-mini-instruct LoRA r16, shaped reward, durable checkpoints, GSM8K retention, 2 GPUs
+extends: base/mimo.yaml
+
+model:
+  id: microsoft/Phi-4-mini-instruct
+  revision: cfbefacb99257ffa30c83adab238a50856ac3083
+
+finetune:
+  mode: lora
+  lora: {rank: 16, alpha: 32, dropout: 0.0, target_modules: all-linear}
+
+environment:
+  harbor: {max_seq_len: 16384, max_concurrency: 64, max_turns: 10}
+  mimo:
+    eval_repeats: 1
+    canary: 2
+    step_deadline_sec: 600
+    domains:
+      music:   {train: 16, test: 4, max_agent_sec: 240, max_verifier_sec: 120}
+      cyber:   {train: 16, test: 4, max_agent_sec: 300, max_verifier_sec: 120, max_turns: 10}
+      code:    {train: 0, test: 0}
+      general: {train: 0, test: 0}
+      webdev:  {train: 0, test: 0}
+
+reward:
+  components:
+    - {fn: verifier_score, weight: 1.0}
+    - {fn: 'user_rewards.examples:turn_efficiency_bonus', weight: 1.0, bonus: 0.05, max_turns: 10}
+
+compute:
+  nodes: 1
+  gpus_per_node: 2
+
+inference:
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.5
+
+algorithm:
+  prompts_per_step: 8                   # 4 per domain x 4 samples = 32 rollouts = 16 per GPU
+  minibatch_prompts: 8
+  n_samples: 4
+  micro_train_per_gpu: 1
+  micro_forward_per_gpu: 1
+  lr: 1.0e-05
+  max_steps: 2
+  max_generate_length: 4096           # v1phi2-fb: 75% of Phi-4-mini's single-shot ABC pieces overflowed 2048 tokens
+
+evaluation:
+  interval_steps: 2
+  checkpoint_interval_steps: 2
+  durable_checkpoints: true
+  retention: {experiment: base/gsm8k.yaml, limit: 200}
+
+budget:
+  total_seconds: 14400
+  attempt_max_seconds: 3600
+  stall_seconds: 1800
+  save_optimizer_state: true
+  ledger: evidence/ledgers/platform-hardening.json
+
+limits:
+  max_nodes: 1
+  max_attempt_seconds: 3600
+  gpus_per_node: [1, 2, 4, 8]
+
+tracking:
+  group: platform-hardening
+  tags: ['nodes:1', 'finetune:lora', 'verify', 'model:phi4-mini']
+
+run:
+  data_dir: assets/mimo/data-2node

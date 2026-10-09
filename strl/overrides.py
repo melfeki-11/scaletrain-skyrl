@@ -69,6 +69,27 @@ def scaling_values(cfg: dict[str, Any], steps: int) -> dict[str, Any]:
     return out
 
 
+def durable(cfg: dict[str, Any]) -> bool:
+    """evaluation.durable_checkpoints: resumable FSDP checkpoints (model + optimizer + dataloader state) written straight to the attempt's S3
+    prefix every checkpoint_interval_steps, so a preempted attempt can be continued by a new one (`run.resume_from`)."""
+    return bool(cfg['evaluation'].get('durable_checkpoints')) or bool((cfg.get('run') or {}).get('resume_from'))
+
+
+def durability_values(cfg: dict[str, Any], stage: str) -> dict[str, Any]:
+    """Pod-side (the artifact URI and the resume checkpoint are only known there: GRPO_ARTIFACT_URI, STRL_RESUME_PATH)."""
+    if not durable(cfg):
+        return {}
+    import os
+    out: dict[str, Any] = {'trainer.ckpt_interval': 1 if stage == 'canary' else cfg['evaluation']['checkpoint_interval_steps']}
+    uri = os.environ.get('GRPO_ARTIFACT_URI')
+    if uri:
+        out['trainer.ckpt_path'] = f'{uri}/checkpoints'
+    resume = os.environ.get('STRL_RESUME_PATH')
+    if resume:   # continue the earlier attempt: its weights, optimizer, step counter and data position; its step-0 eval is the base
+        out.update({'trainer.resume_mode': 'from_path', 'trainer.resume_path': resume, 'trainer.eval_before_train': False})
+    return out
+
+
 def skyrl_values(cfg: dict[str, Any], *, stage: str, run_name: str, learning_rate: float | None = None,
                  max_steps: int | None = None, profile: models.ModelProfile | None = None) -> dict[str, Any]:
     if stage not in {'canary', 'train'}:
@@ -158,6 +179,7 @@ def skyrl_values(cfg: dict[str, Any], *, stage: str, run_name: str, learning_rat
         **env.skyrl_overrides(cfg, stage),
     })
     values.update(scaling_values(cfg, steps))
+    values.update(durability_values(cfg, stage))
     return values
 
 

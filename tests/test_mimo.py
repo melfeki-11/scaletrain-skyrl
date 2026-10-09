@@ -124,6 +124,16 @@ class ShapedReward(unittest.TestCase):
                 else:
                     self.assertNotIn('reward_native', summary)
 
+    def test_each_shaping_term_is_logged(self):
+        def row(domain, native, bonus):
+            return {'domain': domain, 'masked': False, 'mask_reason': None, 'stop': 'complete', 'reward': native + bonus, 'passed': native >= 1,
+                    'turns': 2, 'tokens': 5, 'judge': None, 'reward_native': native, 'reward_terms': {'user_rewards.examples:turn_efficiency_bonus': bonus}}
+        out = generator.rollout_metrics([row('code', 1.0, 0.1), row('code', 0.0, 0.0)], ['a', 'a'])
+        self.assertAlmostEqual(out['generate/code/reward_terms/user_rewards.examples:turn_efficiency_bonus'], 0.05)
+        self.assertAlmostEqual(out['environment/reward_components/user_rewards.examples:turn_efficiency_bonus'], 0.05)
+        self.assertAlmostEqual(out['environment/reward_components/verifier_score'], 0.5)
+        self.assertAlmostEqual(out['generate/code/reward_native_mean'], 0.5)
+
     def test_validation_accepts_one_native_term_plus_custom_terms_only(self):
         from strl.experiment import resolve
         from strl.tasks.mimo import spec
@@ -446,6 +456,9 @@ class Judge(unittest.TestCase):
         result = run(judge.Judge(fast(votes=3, eval_votes=3), chat=chat).score({**RUBRIC, 'items': RUBRIC['items'][:1], 'total_weight': 0.7}, votes=3))
         self.assertEqual(result['scores']['a'], 1.0)                              # median(1, 0, 1); the garbage reply was retried
         self.assertEqual(len(chat.calls), 4)
+        self.assertAlmostEqual(result['meta']['vote_variance'], 2 / 9, places=4)   # the judge noise eval/<d>/judge_variance reports
+        single = run(judge.Judge(fast(), chat=FakeChat([verdict('a', 1), verdict('b', 0)])).score(RUBRIC))
+        self.assertIsNone(single['meta']['vote_variance'])                         # one vote: no noise estimate
 
     def test_failures_raise_judge_unavailable(self):
         for replies in (['x', 'y', 'z'], [judge.litellm.LiteLLMError('LiteLLM HTTP 500')] * 3,
@@ -783,6 +796,12 @@ class Generator(unittest.TestCase):
             env.queue = [fake_results(exc='OutputLengthExceededError', reward=None, trial_dir=env_dir(env))]
             out, summary = env.go(phase='train')
             self.assertEqual((out['reward'], out['stop_reason'], summary['masked'], summary['stop']), (0.0, 'output_length', False, 'output_length'))
+            env = Env(temp + '/out-notok')      # v3smk-fb: an overflow that left NO tokens is a scored placeholder, never an infrastructure mask
+            env.queue = [fake_results(exc='OutputLengthExceededError', reward=None, rollout=False, trial_dir=env_dir(env))]
+            out, summary = env.go(phase='train')
+            self.assertEqual((summary['masked'], summary['placeholder'], summary['stop'], out['reward']), (False, True, 'output_length', 0.0))
+            self.assertEqual(generator.rollout_metrics([summary], ['g'])['environment/music/masked_group_fraction'] if summary['domain'] == 'music'
+                             else generator.group_fractions([summary], ['g'])['masked_group_fraction'], 0.0)
             env = Env(temp + '/mask-eval', settings={'timeout_policy': 'mask'})   # the user asked to mask timeouts: still masked in eval
             env.queue = [fake_results(exc='AgentTimeoutError', reward=None, rollout=False)]
             self.assertTrue(env.go(phase='eval')[1]['masked'])
@@ -1745,3 +1764,27 @@ class DeadlineAndEvalValidation(unittest.TestCase):
             self.load('algorithm.eval_temperature=0.0')
         self.assertIn('eval_repeats > 1', str(caught.exception))
         self.load('algorithm.eval_temperature=0.0', 'environment.mimo.eval_repeats=1')   # a single greedy eval is fine
+
+
+class ShapingContract(unittest.TestCase):
+    """The dry run calls every shaping term (forward test: a custom mimo term first ran at the canary before this)."""
+
+    def test_a_term_returning_nan_fails_the_dry_run_contract(self):
+        from unittest import mock
+        from strl.experiment import load
+        from strl.tasks.mimo import generator, spec
+        cfg = load(str(Path(__file__).resolve().parents[1] / 'experiments/mimo-phi4-mini-lora-verify.yaml'))
+        good = spec.shaping_contract(cfg, ['music'])
+        self.assertGreater(good['music']['passed'], good['music']['failed'])
+        bad = [{'name': 'nan_term', 'fn': lambda result, ctx: float('nan'), 'weight': 1.0, 'params': {}, 'max_generate_length': 2048}]
+        with mock.patch.object(generator, 'reward_terms', lambda cfg: bad):
+            with self.assertRaises(RuntimeError):
+                spec.shaping_contract(cfg, ['music'])
+
+    def test_terms_see_the_experiment_generation_cap(self):
+        seen = {}
+        terms = [{'name': 't', 'fn': lambda result, ctx: seen.setdefault('cap', ctx.max_generate_length) and 0.0, 'weight': 1.0, 'params': {},
+                  'max_generate_length': 2048}]
+        from strl.tasks.mimo.generator import shape_reward
+        shape_reward({'domain': 'music'}, 1.0, 1.0, terms)
+        self.assertEqual(seen['cap'], 2048)

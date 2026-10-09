@@ -26,25 +26,41 @@ def get_json(uri):
 
 
 def sync_local(root, prefix, exclude=()):
+    """Upload new/changed files under ``root`` to ``prefix``. Skips every path with a component starting with '.' (SkyRL stages HF exports
+    in ``.tmp-hf-export-*`` and renames them into place: uploading the staging dir raced the rename and raised FileNotFoundError), and files
+    that vanish between listing and upload. Returns the number of files uploaded."""
     root = Path(root)
+    if not root.exists():
+        return 0
     files = []
     for path in root.rglob('*'):
-        if exclude and any(part in str(path.relative_to(root)) for part in exclude):
+        rel = path.relative_to(root)
+        if any(part.startswith('.') for part in rel.parts):
             continue
-        if path.is_file() and not path.name.startswith('.'):
-            stat = path.stat()
-            signature = (stat.st_size, stat.st_mtime_ns)
-            files.append((path, signature))
+        if exclude and any(part in str(rel) for part in exclude):
+            continue
+        try:
+            if path.is_file():
+                stat = path.stat()
+                files.append((path, (stat.st_size, stat.st_mtime_ns)))
+        except FileNotFoundError:
+            continue
     cache = getattr(sync_local, '_cache', {})
+    uploaded = 0
     for path, signature in files:
         target = prefix.rstrip('/')+'/'+str(path.relative_to(root))
         if cache.get(target) != signature:
-            upload_file(path, target)
+            try:
+                upload_file(path, target)
+            except FileNotFoundError:
+                continue
             cache[target] = signature
+            uploaded += 1
     sync_local._cache = cache
+    return uploaded
 
 
-def sync_cluster(root, prefix):
+def sync_cluster(root, prefix, timeout=1800):
     import ray
     from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
     nodes = [n for n in ray.nodes() if n['Alive']]
@@ -52,7 +68,7 @@ def sync_cluster(root, prefix):
     def sync_one(root, prefix):
         sync_local(root, prefix)
         return {'node_id': ray.get_runtime_context().get_node_id(), 'synced': True}
-    return ray.get([sync_one.options(scheduling_strategy=NodeAffinitySchedulingStrategy(node_id=n['NodeID'],soft=False)).remote(root,prefix) for n in nodes], timeout=240)
+    return ray.get([sync_one.options(scheduling_strategy=NodeAffinitySchedulingStrategy(node_id=n['NodeID'],soft=False)).remote(root,prefix) for n in nodes], timeout=timeout)
 
 
 def download_prefix(prefix, root):

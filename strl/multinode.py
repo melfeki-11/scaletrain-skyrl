@@ -141,17 +141,24 @@ class Watcher(threading.Thread):
     """Calls ``check`` every ``interval`` seconds; the first message it returns (twice in a row: one missed poll is tolerated)
     becomes ``failure`` and the training loop aborts on it."""
 
-    def __init__(self, check: Callable[[], str | None], interval: float = 30.0, strikes: int = 2):
+    def __init__(self, check: Callable[[], str | None], interval: float = 30.0, strikes: int = 2, error_strikes: int = 8):
         super().__init__(daemon=True)
-        self.check, self.interval, self.strikes = check, interval, strikes
+        self.check, self.interval, self.strikes, self.error_strikes = check, interval, strikes, error_strikes
         self.failure: str | None = None
+        self.errors = 0
         self._stop_event = threading.Event()
 
     def poll(self, misses: int) -> int:
+        """A node reported lost twice in a row aborts; the check itself failing (a flaky Ray control plane) is NOT evidence of a lost node and
+        is tolerated for ``error_strikes`` consecutive polls (4 min at 30 s) before it aborts."""
         try:
             message = self.check()
         except Exception as error:
-            message = f'liveness check failed: {type(error).__name__}: {error}'
+            self.errors += 1
+            if self.errors >= self.error_strikes:
+                self.failure = f'liveness check failed {self.errors} times in a row: {type(error).__name__}: {error}'
+            return misses
+        self.errors = 0
         misses = misses + 1 if message else 0
         if message and misses >= self.strikes:
             self.failure = message
@@ -204,15 +211,24 @@ def peer_wait(prefix: str, rank: int, deadline: float, *, s3=None, identity: dic
     """Keep this peer's Ray node up until the head finishes. Returns the head's completion record; raises HeadStale when the
     head stopped writing records, TimeoutError at the attempt deadline."""
     beat_uri, last_beat, started = f'{prefix}/peer-{rank}-heartbeat.json', None, clock()
+    last_ok = started
     while clock() < deadline:
         now = clock()
-        if last_beat is None or now - last_beat >= heartbeat:
-            put_record(beat_uri, {'at': now, 'rank': rank, 'hostname': socket.gethostname(), **(identity or {})}, s3)
-            last_beat = now
-        final = get_record(f'{prefix}/completion.json', s3)
-        if final is not None:
-            return final
-        age = head_age(prefix, now, s3)
+        try:   # one S3 hiccup on a peer must not take the whole job down: errors are tolerated for the stale window
+            if last_beat is None or now - last_beat >= heartbeat:
+                put_record(beat_uri, {'at': now, 'rank': rank, 'hostname': socket.gethostname(), **(identity or {})}, s3)
+                last_beat = now
+            final = get_record(f'{prefix}/completion.json', s3)
+            if final is not None:
+                return final
+            age = head_age(prefix, now, s3)
+            last_ok = now
+        except Exception as error:
+            print(f'peer {rank}: S3 record error (tolerated for {stale:.0f}s): {type(error).__name__}: {error}', flush=True)
+            if now - last_ok > stale:
+                raise HeadStale(f'S3 records unreadable for {now - last_ok:.0f}s (> {stale:.0f}s): leaving the cluster') from error
+            sleep(poll)
+            continue
         if (age if age is not None else now - started) > stale:
             raise HeadStale(f'head silent for {age if age is not None else now - started:.0f}s (> {stale:.0f}s): leaving the cluster')
         sleep(poll)

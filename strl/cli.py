@@ -11,6 +11,8 @@
   check-template <exp>                     does the model's chat template keep step-wise trajectories mergeable (SkyRL prefix merge)?
   stage-model <exp> --attempt A            render a CPU job that downloads the model in a pod and uploads it to S3 (large models)
   submit    <job.json> [--user-id U]       submit once; receipt written before the POST
+  launch    <exp> --attempt A --mode M [--set K=V] [--routes fb,rb,ro,fo] [--max-wait-hours H] [--watch] [--relaunch-on-preempt N]
+                                           stage + submit one job per capacity route, keep the first that starts, cancel the rest (USE THIS)
   status    <job_id> | --list              job state
   monitor   <exp> --attempt A [--job-id J] live status line + alerts until the attempt finishes
   ledger    <exp> --attempt A --job-id J   record a terminal attempt's allocated interval in the program budget ledger
@@ -44,13 +46,34 @@ def _load(path: str, overrides: list[str] | None = None) -> dict:
         raise SystemExit(2)
 
 
+def readiness_warnings(cfg: dict) -> list[str]:
+    """What `plan` cannot derive from the YAML alone: is the data prepared for THIS selection, and does the budget ledger exist?"""
+    out = []
+    from .tasks import get_environment
+    try:
+        get_environment(cfg['environment']['name']).assert_manifest(cfg)
+    except Exception as error:   # missing dir, fewer prepared tasks than configured, other filters/seed/revision
+        out.append(f"DATA: {cfg['run'].get('data_dir')} is not prepared for this selection ({' '.join(str(error).split())[:240]}): run "
+                   '`strl prepare <exp>` (or `strl fetch`). Lowering train/test counts reuses a prepared dir; more tasks, other filters or another seed need a prepare.')
+    ledger = cfg['budget'].get('ledger')
+    if ledger and not Path(ledger).is_file():
+        out.append(f'LEDGER: budget.ledger {ledger} does not exist, so stage will refuse. A new GPU program needs the user\'s authorization; then create '
+                   'the file (references/launch-and-capacity.md, "New program, new budget") and set budget.total_seconds to match.')
+    return out
+
+
 def cmd_plan(a):
     from .derive import plan
     from .experiment import diff
     cfg = _load(a.experiment, a.set)
-    report = plan(cfg, json.loads(Path(a.network).read_text()) if a.network else None)
+    try:
+        report = plan(cfg, json.loads(Path(a.network).read_text()) if a.network else None)
+    except RuntimeError as error:   # model detection (gated / offline config, contradicting profile, unmapped VLM wrapper)
+        print(f'experiment {a.experiment} cannot be planned:\n- {error}', file=sys.stderr)
+        raise SystemExit(2)
     if a.against:
         report['diff_vs'] = {a.against: [{'key': k, 'from': x, 'to': y} for k, x, y in diff(_load(a.against), cfg)]}
+    report['warnings'] += readiness_warnings(cfg)
     if a.json:
         print(json.dumps(report, indent=2, default=str))
         return
@@ -62,7 +85,8 @@ def cmd_plan(a):
           f"({d['rollouts_per_gpu']}/GPU, {d['micro_batches_per_gpu']} micro-batches), max_model_len {d['max_model_len']}, env_class {d['skyrl_env_class']}")
     print(f"  estimates    step ~{e['step_s']}s (generate {e['generate_s']} + train {e['train_s']} + other {e['other_s']}), ~{e['steps_in_attempt']} steps/attempt, "
           f"{e['node_hours']:.2f} node-h; memory train {e['memory']['training_phase_gb']} GB / rollout {e['memory']['rollout_phase_gb']} GB "
-          f"(fits={e['memory']['fits']}); from profile {e['profile']}"
+          + (f"[measured peak {e['memory']['measured_peak_gb']} GB in {e['memory']['measured_in']}] " if e['memory'].get('measured_peak_gb') else '')
+          + f"(fits={e['memory']['fits']}); from profile {e['profile']}"
           + ("" if e.get('calibrated') else " (UNCALIBRATED: different environment/model; the canary measures the real step time)"))
     lay, mem = report['layout'], e['memory']
     print(f"  layout       {lay['mode']} | FSDP group {lay['fsdp_group']} x {lay['replicas']} replica(s), cpu_offload={lay['cpu_offload']} | "
@@ -94,7 +118,11 @@ def cmd_plan(a):
 def cmd_fetch(a):
     cfg = _load(a.experiment)
     from huggingface_hub import snapshot_download
+    from .models import snapshot_identity, write_identity
+    if snapshot_identity(cfg['model'])[0] == 'mismatch':
+        raise SystemExit(snapshot_identity(cfg['model'])[1])
     snapshot_download(cfg['model']['id'], revision=cfg['model']['revision'], local_dir=cfg['model']['local_path'])
+    write_identity(cfg['model'])
     from .runtime import ROUTER_SHA256, ROUTER_WHEEL
     import hashlib
     runtime = ROOT / 'assets/runtime'
@@ -167,7 +195,11 @@ def cmd_stage(a):
 def cmd_check_template(a):
     from .models import template_check
     cfg = _load(a.experiment, a.set)
-    result = template_check.check(cfg, online=True)
+    try:
+        result = template_check.check(cfg, online=True)
+    except RuntimeError as error:
+        print(f'cannot check {a.experiment}:\n- {error}', file=sys.stderr)
+        raise SystemExit(2)
     print(json.dumps(result or {'ok': None, 'detail': 'tokenizer unavailable'}, indent=1))
 
 
@@ -245,35 +277,68 @@ def allocation_start(cfg: dict, attempt: str, s3=None) -> float | None:
     return float(json.loads(body)['started_at']) - POD_START_SLACK_SECONDS
 
 
-def cmd_ledger(a):
-    cfg = _load(a.experiment)
-    ledger_path = Path(a.ledger) if a.ledger else ROOT / cfg['budget']['ledger']
-    ledger = json.loads(ledger_path.read_text())
-    if any(x['job_id'] == a.job_id for x in ledger['attempts']):
-        raise SystemExit(f'{a.job_id} already recorded')
-    job = json.loads(_scaletrain('get', a.job_id).stdout)
+def record_attempt(experiment: str, attempt: str, job_id: str, *, terminal_at: str | None = None, never_started: bool = False,
+                   ledger: str | None = None, job: dict | None = None, overrides: list[str] | None = None,
+                   allocated_floor: float | None = None) -> dict:
+    """Append one terminal attempt to the program ledger. Returns {'recorded', 'remaining_node_seconds'}; raises ValueError when it must not.
+
+    Charged from the pod start (budget.json started_at - slack) when a worker ran; otherwise from ``allocated_floor`` (the launcher's first
+    observation of the job leaving the queue, minus one poll) when known, else conservatively from created_at. ``never_started`` (positive
+    evidence that no pod ran) records it uncharged for ANY terminal status. ``overrides`` are the launch's --set values (ledger, storage).
+    The read-modify-write is serialized with a file lock and an atomic replace: concurrent launchers share one ledger."""
+    import fcntl
+    import os
+    cfg = _load(experiment, overrides)
+    ledger_path = Path(ledger) if ledger else ROOT / cfg['budget']['ledger']
+    job = job or json.loads(_scaletrain('get', job_id).stdout)
     if job['status'] not in {'COMPLETED', 'FAILED', 'CANCELED', 'CANCELLED'}:
-        raise SystemExit(f'job is {job["status"]}; record it only after a terminal state')
-    stage_receipt = json.loads(Path(f'evidence/{a.attempt}/stage.json').read_text())
-    entry = {'job_id': a.job_id, 'attempt': a.attempt, 'status': job['status'], 'allocated_at': str(job['created_at']).replace(' ', 'T')[:19] + 'Z',
-             'terminal_at': a.terminal_at or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'gpu_fraction': stage_receipt['gpu_fraction'],
+        raise ValueError(f'job is {job["status"]}; record it only after a terminal state')
+    stage_receipt = json.loads(Path(f'evidence/{attempt}/stage.json').read_text())
+    created = str(job['created_at']).replace(' ', 'T')[:19] + 'Z'
+    entry = {'job_id': job_id, 'attempt': attempt, 'status': job['status'], 'allocated_at': created,
+             'terminal_at': terminal_at or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'gpu_fraction': stage_receipt['gpu_fraction'],
              'nodes': int(stage_receipt.get('nodes', 1)),
              'evidence': 'conservative: job created_at to first terminal observation (includes queue/pod start)'}
-    started = None if a.never_started else allocation_start(cfg, a.attempt)
-    if started is not None:   # a worker ran: charge the time the pods were up, never the time the job waited in the queue
-        created = datetime.fromisoformat(entry['allocated_at'].replace('Z', '+00:00')).timestamp()
-        entry.update(allocated_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(max(created, started))),
-                     evidence=f'worker budget.json started_at - {POD_START_SLACK_SECONDS} s (pods up) to the terminal observation; queue time (created_at {entry["allocated_at"]}) is not charged')
-    if a.never_started:   # cancelled while QUEUED: no pod, no GPU time -> not charged (budget.remaining_seconds skips an unallocated terminal job)
-        if job['status'] not in {'CANCELED', 'CANCELLED'}:
-            raise SystemExit('--never-started applies only to a cancelled job')
-        if worker_started(cfg, a.attempt) or allocation_start(cfg, a.attempt) is not None:   # budget.json is written before rendezvous: pods were up
-            raise SystemExit(f'{a.attempt} has worker-started.json or budget.json: a pod ran, so it is charged (omit --never-started)')
-        entry.update(allocated_at=None, evidence='cancelled while QUEUED; no worker-started.json in the attempt artifacts: the pod never started (not charged)')
-    ledger['attempts'].append(entry)
-    ledger_path.write_text(json.dumps(ledger, indent=2) + '\n')
+    created_s = datetime.fromisoformat(created.replace('Z', '+00:00')).timestamp()
+    if never_started:   # no pod, no GPU time -> not charged (budget.remaining_seconds skips an unallocated terminal job)
+        if worker_started(cfg, attempt) or allocation_start(cfg, attempt) is not None:   # budget.json is written before rendezvous: pods were up
+            raise ValueError(f'{attempt} has worker-started.json or budget.json: a pod ran, so it is charged (omit --never-started)')
+        entry.update(allocated_at=None, evidence=f"{job['status']} without a pod: no worker-started.json / budget.json in the attempt artifacts (not charged)")
+    else:
+        started = allocation_start(cfg, attempt)
+        if started is not None:   # a worker ran: charge the time the pods were up, never the time the job waited in the queue
+            entry.update(allocated_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(max(created_s, started))),
+                         evidence=f'worker budget.json started_at - {POD_START_SLACK_SECONDS} s (pods up) to the terminal observation; queue time (created_at {created}) is not charged')
+        elif allocated_floor is not None:   # allocated but no worker trace yet (a cancelled loser, a bootstrap failure)
+            entry.update(allocated_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(max(created_s, allocated_floor))),
+                         evidence='no worker trace: charged from the launcher\'s first observation of the job leaving the queue (minus one poll) '
+                                  f'to the terminal observation; queue time (created_at {created}) is not charged')
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(str(ledger_path) + '.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        data = json.loads(ledger_path.read_text())
+        if any(x['job_id'] == job_id for x in data['attempts']):
+            raise ValueError(f'{job_id} already recorded')
+        data['attempts'].append(entry)
+        tmp = Path(str(ledger_path) + '.tmp')
+        tmp.write_text(json.dumps(data, indent=2) + '\n')
+        os.replace(tmp, ledger_path)
     from .budget import remaining_seconds
-    print(json.dumps({'recorded': entry, 'remaining_node_seconds': remaining_seconds(ledger['attempts'], ledger['total_seconds'])}, indent=1))
+    return {'recorded': entry, 'remaining_node_seconds': remaining_seconds(data['attempts'], data['total_seconds'])}
+
+
+def cmd_ledger(a):
+    try:
+        out = record_attempt(a.experiment, a.attempt, a.job_id, terminal_at=a.terminal_at, never_started=a.never_started, ledger=a.ledger,
+                             overrides=a.set)
+    except ValueError as error:
+        raise SystemExit(str(error))
+    print(json.dumps(out, indent=1))
+
+
+def cmd_launch(a):
+    from .launch import main_launch
+    raise SystemExit(main_launch(a))
 
 
 def cmd_verify(a):
@@ -300,6 +365,9 @@ def cmd_eval_llm(a):
     from . import evals
     cfg = _load(a.experiment)
     project = ((cfg.get('services') or {}).get('litellm') or {}).get('project_id', '696011502a26dc4a64b24f55')
+    if cfg['environment']['name'] == 'mimo':   # the ceiling of a mimo selection: --split test|canary, --limit = tasks per domain
+        print(json.dumps(evals.mimo(cfg, a.split if a.split != 'validation' else 'test', a.limit, a.model, a.max_completion_tokens, project), indent=1))
+        return
     fn = evals.coding_harbor if cfg['environment']['name'] == 'coding_harbor' or a.harbor else evals.coding_exec
     if fn is evals.coding_exec:
         from .services.modal import local_profile
@@ -336,6 +404,13 @@ def main(argv=None):
     s = sub.add_parser('overlay'); s.add_argument('--force', action='store_true')
     s = sub.add_parser('capacity'); s.add_argument('--nodes', type=int, default=1); s.add_argument('--gpus-per-node', default='8,4,2,1')
     s.add_argument('--output', default='evidence/capacity.json')
+    s = sub.add_parser('launch'); s.add_argument('experiment'); s.add_argument('--attempt', required=True)
+    s.add_argument('--mode', choices=['dry', 'canary', 'train'], required=True); s.add_argument('--set', action='append', default=[])
+    s.add_argument('--routes', default='all', help='comma list of fb (foundation+borrowing), rb (research+borrowing), ro (research own quota), fo (foundation own quota)')
+    s.add_argument('--poll', type=float, default=15.0); s.add_argument('--max-wait-hours', type=float, default=None)
+    s.add_argument('--watch', action='store_true', help='follow the winner to its end, record it, detect preemption')
+    s.add_argument('--relaunch-on-preempt', type=int, default=0); s.add_argument('--user-id', default=USER)
+    s.add_argument('--fallback-set', action='append', default=[], help='after --max-wait-hours with no capacity, race again with these overrides (e.g. compute.nodes=1)')
     s = sub.add_parser('stage'); s.add_argument('experiment'); s.add_argument('--attempt', required=True)
     s.add_argument('--mode', choices=['dry', 'canary', 'train'], required=True); s.add_argument('--team'); s.add_argument('--allow-borrowing', action='store_true'); s.add_argument('--no-borrowing', action='store_true', help='own-quota route only (not reclaimable): sets compute.allow_borrowing=false')
     s.add_argument('--output'); s.add_argument('--ledger', help='program budget ledger (default: budget.ledger of the experiment)')
@@ -349,7 +424,8 @@ def main(argv=None):
     s.add_argument('--interval', type=float, default=60); s.add_argument('--once', action='store_true')
     s = sub.add_parser('ledger'); s.add_argument('experiment'); s.add_argument('--attempt', required=True); s.add_argument('--job-id', required=True)
     s.add_argument('--terminal-at', help='ISO time of the terminal observation (default: now)')
-    s.add_argument('--never-started', action='store_true', help='a CANCELLED job that never left the queue (verified: no worker-started.json): not charged')
+    s.add_argument('--never-started', action='store_true', help='a terminal job whose pod never ran (verified: no worker-started.json / budget.json): not charged')
+    s.add_argument('--set', action='append', default=[], metavar='KEY=VALUE', help="the launch's --set overrides (ledger, storage)")
     s.add_argument('--ledger', help='program budget ledger (default: budget.ledger of the experiment)')
     s = sub.add_parser('verify'); s.add_argument('experiment'); s.add_argument('--attempt', required=True)
     s = sub.add_parser('compare'); s.add_argument('runs', nargs='+', help='experiment.yaml:attempt')
@@ -362,7 +438,7 @@ def main(argv=None):
     os.chdir(ROOT)
     {'plan': cmd_plan, 'fetch': cmd_fetch, 'prepare': cmd_prepare, 'executor': cmd_executor, 'overlay': cmd_overlay, 'capacity': cmd_capacity,
      'stage': cmd_stage, 'stage-model': cmd_stage_model, 'check-template': cmd_check_template, 'submit': cmd_submit, 'status': cmd_status, 'monitor': cmd_monitor, 'ledger': cmd_ledger, 'verify': cmd_verify,
-     'compare': cmd_compare, 'report': cmd_report, 'eval-llm': cmd_eval_llm, 'critic': cmd_critic}[a.cmd](a)
+     'compare': cmd_compare, 'report': cmd_report, 'eval-llm': cmd_eval_llm, 'critic': cmd_critic, 'launch': cmd_launch}[a.cmd](a)
 
 
 if __name__ == '__main__':

@@ -237,6 +237,17 @@ def make_trajectory_logger_class():
     return GroupTrajectoryLogger
 
 
+def infra_metrics(network: dict) -> dict:
+    """network.json (strl/probe.py) -> W&B infra/* scalars."""
+    bw = network.get('bandwidth_gbps') or {}
+    out = {'infra/nodes': float(network.get('nodes') or 0), 'infra/efa_available': float(bool(network.get('efa_available'))),
+           'infra/nccl_socket_transport': float(network.get('transport') == 'socket'), 'infra/probe_passed': float(bool(network.get('passed')))}
+    for k in ('intra_node', 'cross_node', 'global'):
+        if isinstance(bw.get(k), (int, float)):
+            out[f'infra/{k}_busbw_GBps'] = float(bw[k])
+    return out
+
+
 def env_failure_fraction(metrics: dict, prompts_per_step: int) -> float | None:
     """Share of GRPO groups masked because the environment failed (not the model): coding_exec logs it directly; Harbor's
     generator reports masked instances (any failed trial masks its whole group)."""
@@ -362,8 +373,10 @@ def make_callback_class():
             self.failfast = json.loads(os.environ.get('STRL_FAILFAST') or '{}')     # {} = no rules (environments that do not opt in)
             plan = os.environ.get('STRL_PLAN_STEP_SECONDS')
             self.plan_step_seconds = float(plan) if plan else None
+            self.plan_calibrated = os.environ.get('STRL_PLAN_STEP_CALIBRATED', '1') != '0'   # extrapolated estimates only alert
             self._slow_steps: list[int] = []                    # consecutive-step bookkeeping per rule / domain
             self._hot_domains: dict[str, int] = {}
+            self._advised: set[str] = set()
             self._mem_checked = False
             self._mem_seen: float | None = None
             self.memory = MemorySampler().start() if self.failfast.get('mem_gb') is not None else None
@@ -410,6 +423,15 @@ def make_callback_class():
                                            'for 2 consecutive steps: the run would not reach its planned steps inside the allocation')
             if reason is not None:
                 name, text = reason
+                last = int(getattr(trainer.cfg.trainer, 'max_training_steps', 0) or 0)
+                # Advisory only (alert, keep going) when stopping cannot help or the evidence is weak. v3smk2-fb: an UNCALIBRATED 39 s estimate
+                # (no measured profile for this env/model/shape) stopped a healthy 2 x 8 run after its LAST step, losing its eval and export.
+                advisory = (step >= last > 0 and 'the last planned step') or (name == 'step_slow' and not self.plan_calibrated and 'an uncalibrated plan estimate')
+                if advisory:
+                    if name not in self._advised:
+                        self._advised.add(name)
+                        alert(f'Fail-fast (advisory): {name}', f'{text}; not stopping: {advisory} ({os.environ.get("GRPO_RUN_NAME")})')
+                    return
                 alert(f'Fail-fast: {name}', f'{text} ({os.environ.get("GRPO_RUN_NAME")})')
                 try:
                     target = Path(trainer.cfg.trainer.export_path).parent / 'failfast.json'
@@ -433,6 +455,12 @@ def make_callback_class():
         def on_step_end(self, trainer, callback_input, control) -> None:
             step = int(callback_input.global_step)
             metrics = callback_input.metrics or {}
+            if not getattr(self, 'infra_logged', False):   # the worker's network probe -> W&B infra/* once (multi-node runs)
+                self.infra_logged = True
+                try:
+                    trainer.tracker.log(infra_metrics(json.loads(Path('artifacts/network.json').read_text())), step=step, commit=False)
+                except Exception:
+                    pass
             for key, value in metrics.items():
                 if isinstance(value, Real) and not math.isfinite(float(value)):
                     alert('Non-finite metric', f'{key}={value} at step {step} ({os.environ.get("GRPO_RUN_NAME")})')

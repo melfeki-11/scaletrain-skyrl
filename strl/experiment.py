@@ -29,6 +29,13 @@ class ExperimentError(ValueError):
         super().__init__('\n'.join(f'- {p}' for p in self.problems))
 
 
+def default_model_dir(model: dict) -> str:
+    """assets/models/<name>@<revision[:12]>: the same naming as the S3 model prefix, so a child experiment that only changes model.id can never
+    read (or upload!) the parent's snapshot."""
+    return f"assets/models/{str(model.get('id', 'model')).split('/')[-1]}@{str(model.get('revision', 'unpinned'))[:12]}"
+
+
+MIN_FINAL_EVAL_RESERVE = 600     # strl.worker.CHILD_HARD_STOP_SECONDS (480) + 120 s for the shortest final eval
 FAILFAST_KEYS = ('mem_gb', 'domain_masked', 'step_slow_factor', 'min_steps')   # budget.failfast rules (see strl/tracking.py failfast_config)
 
 # Allowed keys per section. A value of None means "free-form mapping" (validated elsewhere).
@@ -50,7 +57,8 @@ SCHEMA: dict[str, Any] = {
     'evaluation': {
         'interval_steps': int, 'checkpoint_interval_steps': int, 'max_checkpoints': int, 'eval_batch_size': int,
         'fixed_qualitative_samples': int, 'training_groups_to_log': int, 'bootstrap_samples': int, 'bootstrap_seed': int,
-        'ci_level': (int, float), 'eval_shards_per_model': int, 'final_eval': bool,
+        'ci_level': (int, float), 'eval_shards_per_model': int, 'final_eval': bool, 'durable_checkpoints': bool,
+        'retention': dict,
     },
     'compute': {'nodes': int, 'gpus_per_node': int, 'instance_type': str, 'team': str, 'product': str, 'priority': str,
                 'allow_borrowing': bool, 'image': str, 'training': dict},
@@ -62,7 +70,7 @@ SCHEMA: dict[str, Any] = {
                  'alerts': bool},
     'storage': {'bucket': str, 'prefix': str, 'profile': str, 'region': str},
     'limits': {'max_nodes': int, 'gpus_per_node': list, 'max_attempt_seconds': int, 'models': list},
-    'run': {'data_dir': str, 'artifact_dir': str},
+    'run': {'data_dir': str, 'artifact_dir': str, 'resume_from': str, 'ceiling_per_domain': int, 'ceiling_model': str},
     'services': {'modal': None, 'litellm': None},
 }
 # Scaling knobs. Defaults live here (not in the resolved config), so experiments that do not set them keep their sha and
@@ -75,6 +83,9 @@ TRAINING_TYPES = {'fsdp_size': (int, type(None)), 'cpu_offload': bool, 'reshard_
                   'max_tokens_per_microbatch': (int, type(None)), 'gradient_checkpointing': bool}
 
 
+VLLM_LORA_RANKS = frozenset({1, 8, 16, 32, 64, 128, 256, 320, 512})   # vllm/config/lora.py MaxLoRARanks at v0.26.0 (the image's vLLM)
+
+
 def finetune(cfg: dict) -> dict:
     """The experiment's finetune section with defaults (mode full; LoRA settings only meaningful in lora mode)."""
     raw = cfg.get('finetune') or {}
@@ -82,8 +93,13 @@ def finetune(cfg: dict) -> dict:
 
 
 def training(cfg: dict) -> dict:
-    """compute.training with defaults (fsdp_size None = full shard over every GPU)."""
-    return {**TRAINING_DEFAULTS, **(cfg['compute'].get('training') or {})}
+    """compute.training with defaults. fsdp_size unset: full shard over every GPU, EXCEPT multi-node LoRA, where the frozen base is sharded
+    within each node (HSDP, fsdp_size = gpus_per_node) so only the small adapter gradients cross the (socket-only, 0.69 GB/s measured)
+    inter-node link. Set fsdp_size explicitly to override."""
+    out = {**TRAINING_DEFAULTS, **(cfg['compute'].get('training') or {})}
+    if out.get('fsdp_size') is None and int(cfg['compute'].get('nodes', 1)) > 1 and finetune(cfg)['mode'] == 'lora':
+        out['fsdp_size'] = int(cfg['compute']['gpus_per_node'])
+    return out
 
 
 def save_optimizer_state(cfg: dict) -> bool:
@@ -227,6 +243,22 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
         problems.append('budget.attempt_max_seconds cannot exceed budget.total_seconds')
     if b['final_eval_reserve_seconds'] + 900 >= b['attempt_max_seconds'] and e.get('final_eval', True):
         problems.append('budget leaves no training time: attempt_max_seconds must exceed final_eval_reserve_seconds + 900')
+    retention = e.get('retention')
+    if retention:
+        if not retention.get('experiment'):
+            problems.append('evaluation.retention.experiment: the experiment whose held-out set measures retention (e.g. base/gsm8k.yaml)')
+        if gpn < 2:
+            problems.append('evaluation.retention needs >= 2 GPUs per node (base and trained are evaluated concurrently, one GPU each)')
+        if retention.get('limit') is not None and (not isinstance(retention['limit'], int) or retention['limit'] < 1):
+            problems.append('evaluation.retention.limit must be a positive integer (number of held-out examples)')
+    if (e.get('durable_checkpoints') or (cfg.get('run') or {}).get('resume_from')) and not b.get('save_optimizer_state', True):
+        problems.append('evaluation.durable_checkpoints / run.resume_from need budget.save_optimizer_state: true (a resumable checkpoint carries the optimizer)')
+    if (e.get('durable_checkpoints') or (cfg.get('run') or {}).get('resume_from')) and e.get('final_eval', True):
+        problems.append('evaluation.durable_checkpoints / run.resume_from are supported only with the in-loop result (evaluation.final_eval: false, '
+                        'e.g. mimo): the offline final eval selects checkpoints from the local checkpoint dir, which durable checkpoints move to S3')
+    if e.get('final_eval', True) and b['final_eval_reserve_seconds'] < MIN_FINAL_EVAL_RESERVE:
+        problems.append(f'budget.final_eval_reserve_seconds={b["final_eval_reserve_seconds"]} < {MIN_FINAL_EVAL_RESERVE}: the training child is hard-killed '
+                        '480 s before the deadline, so a smaller reserve kills a run that reaches its deadline before its final eval')
     for key, value in (b.get('failfast') or {}).items():
         if key not in FAILFAST_KEYS:
             problems.append(f'budget.failfast.{key}: unknown rule; allowed {list(FAILFAST_KEYS)}')
@@ -247,13 +279,15 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
             problems.append(f'minibatch_prompts*n_samples={expanded} must divide evenly into {gpus} GPUs x micro_train_per_gpu={a["micro_train_per_gpu"]} '
                             f'(per-GPU rollouts {expanded / gpus:g})')
         full = a['prompts_per_step'] * a['n_samples']
-        if full % gpus or (expanded // gpus) % a['micro_forward_per_gpu']:
+        if full % gpus or (full // gpus) % a['micro_forward_per_gpu']:
             problems.append(f'prompts_per_step*n_samples={full} must divide evenly into {gpus} GPUs x micro_forward_per_gpu={a["micro_forward_per_gpu"]}')
     shards = e['eval_shards_per_model']
     if e.get('final_eval', True) and (shards < 1 or shards * 2 > gpn):
         problems.append(f'evaluation.eval_shards_per_model={shards}: parallel final eval needs one GPU per shard for both models (<= {gpn // 2}); '
                         'set evaluation.final_eval: false to skip it')
-    if e['checkpoint_interval_steps'] % e['interval_steps']:
+    if e['interval_steps'] < 1 or e['checkpoint_interval_steps'] < 1:
+        problems.append('evaluation.interval_steps and checkpoint_interval_steps must be >= 1')
+    elif e['checkpoint_interval_steps'] % e['interval_steps']:
         problems.append('evaluation.checkpoint_interval_steps should be a multiple of interval_steps (only exported steps can be selected)')
     if not 0 < i['gpu_memory_utilization'] < 1:
         problems.append('inference.gpu_memory_utilization must be in (0, 1)')
@@ -273,6 +307,10 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
                 problems.append(f'reward component {x["fn"]!r}: weight must be a number')
         if not any(isinstance(x.get('weight', 1.0), (int, float)) and x.get('weight', 1.0) != 0 for x in components):
             problems.append('reward.components: at least one component needs a non-zero weight')
+    from .models import snapshot_identity
+    state, message = snapshot_identity(cfg['model'])
+    if state == 'mismatch':
+        problems.append(f'model.local_path: {message}')
     if check_registries:
         from . import rewards
         from .tasks import EnvironmentNotFound, get_environment
@@ -304,8 +342,9 @@ def _scaling_problems(cfg: dict, gpus: int) -> list[str]:
     if isinstance(rank, int) and not isinstance(rank, bool):
         if mode == 'lora' and rank <= 0:
             problems.append('finetune.mode lora needs finetune.lora.rank > 0')
-        if mode == 'full' and rank > 0:
-            problems.append('finetune.lora.rank > 0 is only valid with finetune.mode: lora')
+        elif mode == 'lora' and rank not in VLLM_LORA_RANKS:   # SkyRL passes the rank to vLLM as max_lora_rank; other values crash engine start
+            problems.append(f'finetune.lora.rank={rank} is not a vLLM max_lora_rank (vLLM 0.26 accepts {sorted(VLLM_LORA_RANKS)})')
+        # mode full ignores finetune.lora entirely (an inherited LoRA block must not block `--set finetune.mode=full`)
     if isinstance(lora.get('dropout', 0.0), (int, float)) and not 0 <= lora.get('dropout', 0.0) < 1:
         problems.append('finetune.lora.dropout must be in [0, 1)')
     tr = cfg['compute'].get('training') or {}
@@ -331,6 +370,23 @@ def _scaling_problems(cfg: dict, gpus: int) -> list[str]:
     return problems
 
 
+RETENTION_RESERVE_SECONDS = 900   # vLLM startup x 2 models + a few hundred held-out examples
+
+
+def retention_config(cfg: dict) -> dict | None:
+    """evaluation.retention = {experiment, limit}: that experiment's held-out set, evaluated with THIS experiment's model (the base and the
+    trained weights), one GPU per model. None when not configured."""
+    spec = (cfg.get('evaluation') or {}).get('retention')
+    if not spec:
+        return None
+    rcfg = load(spec['experiment'])
+    rcfg['model'] = dict(cfg['model'])
+    rcfg['inference'] = {**rcfg['inference'], 'enforce_eager': cfg['inference'].get('enforce_eager', rcfg['inference'].get('enforce_eager'))}
+    rcfg['evaluation'] = {**rcfg['evaluation'], 'eval_shards_per_model': 1}
+    rcfg['_retention_limit'] = spec.get('limit')
+    return rcfg
+
+
 def load(path: str | Path, *, check_registries: bool = True, overrides: list[str] | None = None) -> dict:
     """Resolve, apply ``--set`` overrides (dotted KEY=VALUE, YAML-parsed, recorded in _meta and the sha), fill defaults, validate."""
     raw = resolve(path)
@@ -345,7 +401,7 @@ def load(path: str | Path, *, check_registries: bool = True, overrides: list[str
         raise ExperimentError(problems)
     cfg['run'].setdefault('data_dir', 'assets/data')
     cfg['run'].setdefault('artifact_dir', 'artifacts')
-    cfg['model'].setdefault('local_path', 'assets/model')
+    cfg['model'].setdefault('local_path', default_model_dir(cfg['model']))   # one directory per id@revision: never another model's snapshot
     cfg['model'].setdefault('dtype', 'bfloat16')
     cfg['model'].setdefault('profile', 'auto')
     cfg['limits'].setdefault('models', ['*'])

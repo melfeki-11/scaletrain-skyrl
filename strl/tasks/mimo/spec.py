@@ -250,6 +250,7 @@ class MimoSpec(CodingHarborSpec):
         if abs(judge.combine(request, {'a': 1.0}) - 1.0) > 1e-9 or abs(judge.combine(request, {'a': 0.0}) - 0.25) > 1e-9:
             raise RuntimeError('judge combine contract failed')
         receipt['judge_combine_passed'] = True
+        receipt['shaping'] = shaping_contract(cfg, list(receipt['domains']))
         return receipt
 
     def _one_per_domain(self, cfg: dict) -> dict[str, str]:
@@ -304,7 +305,7 @@ class MimoSpec(CodingHarborSpec):
                 'token_count': mimo.get('tokens'), 'finish_reason': item.get('stop_reason'), 'domain': domain, 'rep': rep, 'task': task,
                 'task_metric': (reward if metric is None and not masked else metric), 'passed': bool(mimo.get('passed')) if mimo else reward >= 1.0,
                 'masked': masked, 'mask_reason': mimo.get('mask_reason'), 'stop': mimo.get('stop'), 'judge_rationale': judged.get('rationale'),
-                'judge_variance': None, 'verifier_components': json.dumps(mimo.get('components') or {}, sort_keys=True)[:1000],
+                'judge_variance': judged.get('vote_variance'), 'verifier_components': json.dumps(mimo.get('components') or {}, sort_keys=True)[:1000],
                 'artifact': (mimo.get('artifact') or '')[:metrics.ARTIFACT_CHARS], 'screenshot': mimo.get('screenshot'), 'turns': 1,
                 'extra': {'artifact_full': mimo.get('artifact'), **({'judge_request': mimo['judge_request']} if mimo.get('judge_request') else {})}}   # 'extra' is never a table column (EvidenceCallback.on_eval_end)
 
@@ -426,3 +427,24 @@ def make_dataset_class() -> type:
 
     _DATASET_CLASS.append(MimoTaskDataset)
     return MimoTaskDataset
+
+
+def shaping_contract(cfg: dict, domains: list[str]) -> dict:
+    """Call every shaping term of reward.components on a synthetic passed and failed trial per domain, through the real shape_reward
+    (in the dry run: in the pod, with the shipped user_rewards). A term that raises or returns a non-finite value fails the dry run
+    instead of the first GPU step."""
+    import math
+    from .generator import native_weight, reward_terms, shape_reward
+    terms = reward_terms(cfg)
+    out: dict[str, Any] = {'terms': [t['name'] for t in terms]}
+    for domain in domains:
+        row = {}
+        for case, native in (('passed', 1.0), ('failed', 0.0)):
+            result = {'domain': domain, 'task': 'contract', 'reward': native, 'metric': native, 'passed': native >= 0.999, 'components': {},
+                      'turns': 3, 'tokens': 500, 'seconds': 30.0, 'stop': 'complete', 'artifact': ''}
+            shaped, parts = shape_reward(result, native, native_weight(cfg), terms)
+            if not math.isfinite(shaped) or not all(math.isfinite(v) for v in parts.values()):
+                raise RuntimeError(f'shaping contract failed for {domain}/{case}: {parts}')
+            row[case] = round(shaped, 6)
+        out[domain] = row
+    return out

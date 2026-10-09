@@ -3,6 +3,7 @@ memory model, sharded/LoRA exports, canary overlay choice, exact-source SkyRL pa
 import ast
 import io
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -177,9 +178,9 @@ class Overrides(unittest.TestCase):
                 load(SMOKE, overrides=bad)
 
     def test_existing_experiments_render_nothing_new(self):
-        for path in sorted(Path(ROOT / 'experiments').glob('*.yaml')) + [ROOT / 'base/gsm8k.yaml']:
-            if '2node' in path.name or path.name.startswith('mimo'):   # scaling experiments: LoRA / multi-node by design
-                continue
+        # the GPU-verified single-node experiments that predate LoRA / multi-node (an explicit list: new experiments may use LoRA freely)
+        legacy = ['gsm8k-qwen35', 'mbpp-qwen35-binary', 'mbpp-qwen35-partial', 'mbpp-qwen35-custom-reward', 'mbpp-qwen3-1p7b', 'harbor-qwen35']
+        for path in [ROOT / 'experiments' / f'{name}.yaml' for name in legacy] + [ROOT / 'base/gsm8k.yaml']:
             cfg = load(str(path))
             self.assertEqual(scaling_values(cfg, 10), {}, path)
             self.assertNotIn('finetune', cfg)
@@ -467,6 +468,36 @@ class SkyRLPatches(unittest.TestCase):
             self.assertEqual(path.read_text(), once)
             return once
 
+    def test_resume_from_an_s3_path_keeps_the_double_slash(self):
+        from strl.runtime import RESUME_FROM_CLOUD_PATH, scaling_patches
+        from strl.experiment import load
+        source = self.apply('pinned-trainer.py', RESUME_FROM_CLOUD_PATH)            # pinned SkyRL a9564572 source
+        fn = next(n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef) and n.name == 'load_checkpoints')
+        text = ast.unparse(fn)
+        self.assertNotIn('Path(self.cfg.trainer.resume_path)', text)
+        path = 's3://b/p/attempts/a/artifacts/checkpoints/global_step_2'
+        self.assertEqual(str(path or ''), path)                                       # what the patched line now keeps
+        self.assertIn('global_step_', os.path.basename(path.rstrip('/')))
+        cfg = load(str(ROOT / 'experiments/mimo-phi4-mini-lora-verify.yaml'), overrides=['run.resume_from=v1phi4-fb'])
+        merged = scaling_patches(cfg)
+        self.assertIn('skyrl/train/trainer.py', merged)
+        self.assertIn('skyrl/backends/skyrl_train/distributed/fsdp_strategy.py', merged)
+
+    def test_lora_adapter_save_goes_through_cloud_io(self):
+        from strl.runtime import LORA_ADAPTER_CLOUD_SAVE, scaling_patches
+        from strl.experiment import load
+        source = self.apply('pinned-fsdp_strategy.py', LORA_ADAPTER_CLOUD_SAVE)     # pinned SkyRL a9564572 source
+        fn = next(n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef) and n.name == '_save_lora_adapters')
+        text = ast.unparse(fn)
+        self.assertNotIn('save_file(lora_params', text)
+        self.assertIn("io.open_file(os.path.join(lora_save_path, 'adapter_model.safetensors'), 'wb')", text)
+        import safetensors.torch, torch
+        tensors = {'a.lora_A.weight': torch.ones(2, 3)}
+        self.assertTrue(torch.equal(safetensors.torch.load(safetensors.torch.save(tensors))['a.lora_A.weight'], tensors['a.lora_A.weight']))
+        durable_lora = load(str(ROOT / 'experiments/mimo-phi4-mini-lora-verify.yaml'))
+        self.assertIn(next(iter(LORA_ADAPTER_CLOUD_SAVE)), scaling_patches(durable_lora))
+        self.assertNotIn(next(iter(LORA_ADAPTER_CLOUD_SAVE)), scaling_patches(load(str(ROOT / 'experiments/mimo-qwen35-0p8b-2node-smoke.yaml'))))
+
     def test_lora_sync_per_host(self):
         from strl.runtime import LORA_SYNC_PER_HOST
         source = self.apply('pinned-fsdp_worker.py', LORA_SYNC_PER_HOST)
@@ -611,3 +642,213 @@ class NeverStartedJobs(unittest.TestCase):
         self.assertEqual(outcome_status(SystemExit(15)), 'preempted')
         self.assertEqual(outcome_status(SystemExit(1)), 'failed')
         self.assertEqual(outcome_status(RuntimeError('x')), 'failed')
+
+
+class ModelIdentity(unittest.TestCase):
+    """Generality audit: a child that changed only model.id inherited assets/model (Qwen3.5-0.8B), planned it as Qwen3.5 and would have uploaded
+    and trained those weights under the new name. One directory per id@revision, an identity marker, and a forced-profile check close it."""
+
+    def test_default_directory_is_per_id_and_revision(self):
+        from strl.experiment import default_model_dir
+        self.assertEqual(default_model_dir({'id': 'meta-llama/Llama-3.1-8B-Instruct', 'revision': '0e9e39f249a16976918f6564b8830bc894c89659'}),
+                         'assets/models/Llama-3.1-8B-Instruct@0e9e39f249a1')
+
+    def test_identity_marker(self):
+        import json
+        import tempfile
+        from strl.models import snapshot_identity, write_identity
+        with tempfile.TemporaryDirectory() as temp:
+            model = {'id': 'org/a', 'revision': 'r1', 'local_path': temp}
+            self.assertEqual(snapshot_identity(model)[0], 'absent')
+            (Path(temp) / 'config.json').write_text('{}')
+            self.assertEqual(snapshot_identity(model)[0], 'unknown')
+            write_identity(model)
+            self.assertEqual(snapshot_identity(model)[0], 'match')
+            state, message = snapshot_identity({**model, 'id': 'org/b'})
+            self.assertEqual(state, 'mismatch')
+            self.assertIn('org/a', message)
+            self.assertEqual(json.loads((Path(temp) / 'strl-model.json').read_text())['id'], 'org/a')
+
+    def test_forced_profile_contradicting_the_architecture_is_rejected(self):
+        from strl.models import detect
+        with self.assertRaises(RuntimeError) as error:
+            detect({'id': 'meta-llama/x', 'profile': 'qwen3_5'}, hf_config={'architectures': ['LlamaForCausalLM']})
+        self.assertIn('auto-detect', str(error.exception))
+        self.assertEqual(detect({'id': 'q', 'profile': 'qwen3_5'}, hf_config={'architectures': ['Qwen3_5ForConditionalGeneration']})[0].name, 'qwen3_5')
+
+
+class ModelRegistry(unittest.TestCase):
+    def test_families_map_to_profiles(self):
+        from strl.models import detect
+        for arch, name in (('Qwen3MoeForCausalLM', 'qwen3_moe'), ('Qwen3_5MoeForConditionalGeneration', 'qwen3_5_moe'), ('MistralForCausalLM', 'dense'),
+                           ('Olmo2ForCausalLM', 'dense'), ('Phi3ForCausalLM', 'dense'), ('Qwen2ForCausalLM', 'dense'), ('SomethingNewForCausalLM', 'generic_causal_lm')):
+            self.assertEqual(detect({'id': 'x'}, hf_config={'architectures': [arch]})[0].name, name, arch)
+        self.assertTrue(detect({'id': 'x'}, hf_config={'architectures': ['Qwen3MoeForCausalLM']})[0].thinking_flag)   # thinking off like dense Qwen3
+
+    def test_unmapped_vision_language_wrapper_is_refused(self):
+        from strl.models import detect
+        with self.assertRaises(RuntimeError) as error:
+            detect({'id': 'google/gemma-3-12b-it'}, hf_config={'architectures': ['Gemma3ForConditionalGeneration']})
+        self.assertIn('vision-language', str(error.exception))
+
+    def test_moe_parameter_count_includes_every_expert(self):
+        from strl.derive import params_from_id
+        from strl.models import ModelProfile
+        qwen3_30b_a3b = {'num_hidden_layers': 48, 'hidden_size': 2048, 'vocab_size': 151936, 'intermediate_size': 6144, 'num_attention_heads': 32,
+                         'num_key_value_heads': 4, 'head_dim': 128, 'num_experts': 128, 'moe_intermediate_size': 768}
+        self.assertAlmostEqual(ModelProfile().param_estimate_b(qwen3_30b_a3b), 30.1, delta=0.5)
+        self.assertEqual(params_from_id('mistralai/Mixtral-8x7B-v0.1'), 56.0)
+
+
+class AutoLayout(unittest.TestCase):
+    def test_multi_node_lora_defaults_to_hsdp_within_a_node(self):
+        from strl.experiment import training
+        base = {'compute': {'nodes': 2, 'gpus_per_node': 8, 'training': {}}, 'finetune': {'mode': 'lora'}}
+        self.assertEqual(training(base)['fsdp_size'], 8)
+        self.assertIsNone(training({**base, 'finetune': {'mode': 'full'}})['fsdp_size'])          # full: full shard unless set
+        self.assertIsNone(training({**base, 'compute': {'nodes': 1, 'gpus_per_node': 8}})['fsdp_size'])
+        self.assertEqual(training({**base, 'compute': {'nodes': 2, 'gpus_per_node': 8, 'training': {'fsdp_size': 16}}})['fsdp_size'], 16)
+
+
+class Resume(unittest.TestCase):
+    """A preempted attempt (borrowed capacity was reclaimed twice) can be continued by a new attempt from its durable checkpoint."""
+
+    def test_overrides_point_skyrl_at_s3_and_the_resume_checkpoint(self):
+        import os
+        from strl.overrides import durability_values
+        cfg = {'evaluation': {'durable_checkpoints': True, 'checkpoint_interval_steps': 2}, 'run': {}}
+        self.assertEqual(durability_values({'evaluation': {}, 'run': {}}, 'train'), {})
+        old = {k: os.environ.get(k) for k in ('GRPO_ARTIFACT_URI', 'STRL_RESUME_PATH')}
+        try:
+            os.environ['GRPO_ARTIFACT_URI'] = 's3://b/p/attempts/run1-p1-fb/artifacts'
+            os.environ.pop('STRL_RESUME_PATH', None)
+            self.assertEqual(durability_values(cfg, 'train'), {'trainer.ckpt_interval': 2, 'trainer.ckpt_path': 's3://b/p/attempts/run1-p1-fb/artifacts/checkpoints'})
+            os.environ['STRL_RESUME_PATH'] = 's3://b/p/attempts/run1-fb/artifacts/checkpoints/global_step_2'
+            out = durability_values({**cfg, 'run': {'resume_from': 'run1-fb'}}, 'train')
+            self.assertEqual((out['trainer.resume_mode'], out['trainer.eval_before_train']), ('from_path', False))
+            self.assertTrue(out['trainer.resume_path'].endswith('run1-fb/artifacts/checkpoints/global_step_2'))
+        finally:
+            for k, v in old.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+    def test_previous_prefix_and_validation(self):
+        from strl.worker import previous_prefix
+        self.assertEqual(previous_prefix('s3://b/p/attempts/run1-p1-fb/artifacts', 'run1-fb'), 's3://b/p/attempts/run1-fb/artifacts')
+        with self.assertRaises(ExperimentError) as error:
+            load(SMOKE, overrides=['evaluation.durable_checkpoints=true', 'budget.save_optimizer_state=false'])
+        self.assertIn('save_optimizer_state', str(error.exception))
+
+
+class ResumePrefix(unittest.TestCase):
+    def test_prepare_resume_reads_the_previous_attempt_not_this_one(self):
+        # review: prepare_resume passed run_name where it meant previous, so every resume looked in its own (empty) prefix
+        from unittest import mock
+        from strl import worker
+        asked = []
+
+        class S3:
+            def get_object(self, Bucket, Key):
+                asked.append(Key)
+                if '/attempts/run1-fb/' not in Key:
+                    raise KeyError(Key)
+                return {'Body': io.BytesIO(b'2\n')}
+
+            def download_file(self, b, k, target):
+                raise KeyError(k)
+        with tempfile.TemporaryDirectory() as temp, mock.patch('boto3.client', lambda *a, **k: S3()), mock.patch.dict(os.environ, {}):
+            out = worker.prepare_resume('s3://b/p/attempts/run1-p1-fb/artifacts', 'run1-p1-fb', 'run1-fb', Path(temp))
+            self.assertEqual(os.environ['STRL_RESUME_PATH'], 's3://b/p/attempts/run1-fb/artifacts/checkpoints/global_step_2')
+        self.assertEqual(out['step'], 2)
+        self.assertTrue(asked[0].startswith('p/attempts/run1-fb/'))
+
+    def test_lora_rank_must_be_a_vllm_rank(self):
+        from strl.experiment import ExperimentError
+        with self.assertRaises(ExperimentError):
+            load('experiments/mimo-phi4-mini-lora-verify.yaml', overrides=['finetune.lora.rank=24'])
+        load('experiments/mimo-phi4-mini-lora-verify.yaml', overrides=['finetune.lora.rank=32'])
+
+    def test_durable_checkpoints_need_the_in_loop_result(self):
+        from strl.experiment import ExperimentError
+        with self.assertRaises(ExperimentError):
+            load('experiments/gsm8k-qwen35.yaml', overrides=['evaluation.durable_checkpoints=true'])
+        load('experiments/mimo-phi4-mini-lora-verify.yaml')     # final_eval: false: fine
+
+
+class Retention(unittest.TestCase):
+    """Plan P15: base vs trained on another environment's held-out set, with THIS experiment's model."""
+
+    def test_the_pod_uses_the_staged_retention_config_not_the_yaml(self):
+        # v3smk3-fb: the pod has no base/gsm8k.yaml; it must read the staged retention-resolved.json
+        import os as _os
+        from strl.experiment import retention_config, save_resolved
+        from strl import worker
+        cfg = load('experiments/mimo-qwen38-27b-lora.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml, limit: 300}'])
+        staged = retention_config(cfg)
+        with tempfile.TemporaryDirectory() as temp:
+            save_resolved(staged, Path(temp) / 'retention-resolved.json', root='/workspace/strl-run')
+            here = _os.getcwd()
+            _os.chdir(temp)
+            try:
+                cfg['evaluation']['retention']['experiment'] = 'base/does-not-exist-in-the-pod.yaml'
+                got = worker.retention_in_pod(cfg)
+            finally:
+                _os.chdir(here)
+        self.assertEqual((got['environment']['name'], got['_retention_limit'], got['model']['id']), ('gsm8k', 300, cfg['model']['id']))
+
+    def test_retention_config_uses_the_experiment_model(self):
+        from strl.experiment import retention_config
+        cfg = load('experiments/mimo-qwen38-27b-lora.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml, limit: 300}'])
+        rcfg = retention_config(cfg)
+        self.assertEqual(rcfg['environment']['name'], 'gsm8k')
+        self.assertEqual(rcfg['model'], cfg['model'])
+        self.assertEqual((rcfg['_retention_limit'], rcfg['evaluation']['eval_shards_per_model']), (300, 1))
+        self.assertIsNone(retention_config(load('experiments/mimo-qwen38-27b-lora.yaml')))
+
+    def test_retention_needs_two_gpus_and_reserves_time(self):
+        from strl.worker import train_reserve_seconds
+        with self.assertRaises(ExperimentError):
+            load('experiments/mimo-qwen35-0p8b-smoke.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])   # 1 GPU
+        cfg = load('experiments/mimo-qwen38-27b-lora.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])
+        self.assertEqual(train_reserve_seconds(cfg, 'train') - train_reserve_seconds(load('experiments/mimo-qwen38-27b-lora.yaml'), 'train'), 900)
+
+
+class RemoteCode(unittest.TestCase):
+    """SkyRL loads with trust_remote_code=True: a stale bundled modeling file (Phi-4-mini under transformers 5) must yield to the native class."""
+
+    def _dir(self, config):
+        import json as _json
+        import tempfile as _tempfile
+        d = Path(_tempfile.mkdtemp())
+        (d / 'config.json').write_text(_json.dumps(config))
+        return d
+
+    def test_native_architecture_drops_auto_map_and_keeps_the_original(self):
+        from strl import models
+        d = self._dir({'model_type': 'phi3', 'architectures': ['Phi3ForCausalLM'],
+                       'auto_map': {'AutoConfig': 'configuration_phi3.Phi3Config', 'AutoModelForCausalLM': 'modeling_phi3.Phi3ForCausalLM'}})
+        out = models.prefer_native_code(d)
+        self.assertEqual(out['status'], 'remote_code_dropped')
+        self.assertNotIn('auto_map', json.loads((d / 'config.json').read_text()))
+        self.assertIn('auto_map', json.loads((d / 'config.json.remote').read_text()))
+        self.assertEqual(models.model_code_check(d), {'class': 'Phi3ForCausalLM', 'source': models.model_code_check(d)['source']})
+        self.assertEqual(models.prefer_native_code(d)['status'], 'native')       # idempotent on a second node / a retry
+
+    def test_unknown_architecture_keeps_its_remote_code(self):
+        from strl import models
+        d = self._dir({'model_type': 'brand_new', 'architectures': ['BrandNewForCausalLM'], 'auto_map': {'AutoModelForCausalLM': 'm.BrandNewForCausalLM'}})
+        self.assertEqual(models.prefer_native_code(d)['status'], 'remote_code')
+        self.assertIn('auto_map', json.loads((d / 'config.json').read_text()))
+
+    def test_unloadable_model_fails_the_check(self):
+        from strl import models
+        d = self._dir({'model_type': 'brand_new', 'architectures': ['BrandNewForCausalLM']})
+        with self.assertRaises(RuntimeError):
+            models.model_code_check(d)
+
+
+class FullModeSwitch(unittest.TestCase):
+    def test_set_full_on_a_lora_experiment_needs_no_rank_reset(self):
+        from strl.experiment import load
+        from strl.overrides import scaling_values
+        cfg = load(str(ROOT / 'experiments/mimo-phi4-mini-lora-verify.yaml'), overrides=['finetune.mode=full', 'algorithm.lr=1e-6'])
+        self.assertFalse(any(k.startswith('trainer.policy.model.lora') for k in scaling_values(cfg, 10)))

@@ -6,27 +6,48 @@ updates, every W&B table) -> a real run. Do not skip rungs for a new axis value.
 
 ## A new model (most models need only YAML)
 
-1. In an experiment: set `model.id`, `model.revision` (a commit sha, never a branch: `curl -s https://huggingface.co/api/models/<id> | python3 -c 'import sys,json;print(json.load(sys.stdin)["sha"])'`) and `model.local_path: assets/models/<name>`.
-2. `python -m strl fetch <exp>` (downloads the pinned snapshot; data is reused if its manifest verifies).
-3. `python -m strl plan <exp>` shows the detected profile and its verification level. Detection reads `config.json` from
-   `model.local_path`; when that snapshot is missing, plan fetches only `config.json` from the HF hub at the pinned revision
-   (needs network). Offline and unstaged, set `model.profile` explicitly. Profiles:
-   - `Qwen3_5ForConditionalGeneration` -> `qwen3_5` (GPU-verified), `Qwen3ForCausalLM` -> `qwen3`, `LlamaForCausalLM` -> `llama`,
-     anything else -> `generic_causal_lm` (no special overrides).
-4. If the architecture needs special handling, add `strl/models/<name>.py` with a `ModelProfile` subclass and register it in
-   `strl/models/__init__.py` (`_PROFILES` + `_ARCH_TO_PROFILE`). Hooks:
+1. In an experiment: set `model.id` and `model.revision` (a commit sha, never a branch:
+   `curl -s https://huggingface.co/api/models/<id> | python3 -c 'import sys,json;print(json.load(sys.stdin)["sha"])'`). Leave
+   `model.local_path` and `model.profile` UNSET: the snapshot goes to `assets/models/<name>@<rev12>` with a `strl-model.json` identity
+   marker (stage refuses to upload a snapshot whose marker names another model), and the profile is detected from `config.json`.
+2. `python -m strl plan <exp>` (reads `config.json` from the hub at the pinned revision when nothing is local; needs network) shows the
+   profile, its verification level, LoRA/full layout, memory and warnings (`MODEL never-run`, `MOE`, `MEMORY unknown`, `HARBOR unchecked template`).
+3. `python -m strl fetch <exp>` (small models: pinned snapshot to the local dir) or `python -m strl stage-model <exp> --attempt <x>-sm`
+   (large models: a CPU job copies HF -> S3 with a sha256 manifest; then `stage` never uploads from the laptop).
+4. Profiles shipped (`strl/models/__init__.py` `_ARCH_TO_PROFILE`):
+
+   | Architecture | Profile | Verified |
+   | --- | --- | --- |
+   | `Qwen3_5ForConditionalGeneration` / `ForCausalLM` (Qwen3.5, Qwen3.6, Qwen3.8) | `qwen3_5` (language_model_only, wrapped export) | gpu |
+   | `Qwen3_5Moe*` | `qwen3_5_moe` | none |
+   | `Qwen3ForCausalLM` | `qwen3` | canary |
+   | `Qwen3MoeForCausalLM` | `qwen3_moe` | none |
+   | `LlamaForCausalLM` | `llama` | preflight |
+   | Qwen2, Mistral, OLMo/OLMo2, Phi3 (Phi-4-mini), Gemma2/3 text, Granite, Cohere2, GLM4 | `dense` | none (Phi-4-mini: see validation.md) |
+   | any other `*ForCausalLM` | `generic_causal_lm` | none |
+   | an unmapped `*ForConditionalGeneration` (a VLM wrapper, e.g. Gemma3 VLM) | REFUSED by plan | - |
+
+   A forced `model.profile` that contradicts the architecture is refused. Gated models (Llama, Gemma) need the license accepted on HF.
+5. If the architecture needs special handling, add `strl/models/<name>.py` with a `ModelProfile` subclass and register it in
+   `strl/models/__init__.py` (`_PROFILES` + `_ARCH_TO_PROFILE`, or `register_profile(name, 'module:Class', architectures)`). Hooks:
    - `trainer_overrides` (FSDP wrap class, packing, language_model_only),
    - `generator_overrides` (vLLM engine kwargs),
    - `chat_kwargs` (e.g. `enable_thinking=False`), `vllm_kwargs` (offline eval),
    - `prepare_export_for_vllm` (if SkyRL's HF export does not reload in vLLM as is; see `qwen3_5_export.py`),
+   - nothing for bundled remote code: when `config.json` has `auto_map` and transformers knows the architecture, the worker uses the
+     native class (`strl.models.prefer_native_code`; SkyRL itself always passes `trust_remote_code=True`),
    - set `verified` honestly (`preflight` until a canary passes, `canary`, then `gpu` after a measured held-out improvement).
-4b. Agentic/Harbor environments: run `strl check-template <exp>`. SkyRL merges a trajectory's turns into one training sequence only if
+6. Agentic/Harbor environments: run `strl check-template <exp>`. SkyRL merges a trajectory's turns into one training sequence only if
    `prompt_i + response_i` is a token prefix of `prompt_i+1`; templates that render history differently from the generation prompt
    (Qwen3.5 drops `<think>\n\n</think>\n\n` from history) get one sequence per turn: several times more training tokens. Measure
    on real transcripts before trusting it (Qwen3.5: 811 turns -> 811 sequences; Qwen3.8, thinking off: -> 209, 86% of merge points).
-   Fix with a template that keeps history verbatim, not by changing the trainer.
-5. Terminal EOS markers differ by family (`<|im_end|>` Qwen, `<|eot_id|>` Llama): scorers strip only known terminal markers.
-6. Add the model to `limits.models` only if your config uses an allowlist (the default is `["*"]`).
+   Fix with a template that keeps history verbatim, not by changing the trainer. Measured merge on the probe: Phi-4, OLMo2, Qwen2.5 merge;
+   Mistral and DeepSeek-R1 distills do not.
+7. Terminal EOS markers differ by family (`<|im_end|>` Qwen, `<|eot_id|>` Llama, `<|end|>` Phi, `</s>` Mistral): the GSM8K scorer strips
+   the known list (`strl/tasks/gsm8k/answers.py` `TERMINAL_TOKENS`); add a new family's marker there.
+8. Ladder for a new model: plan -> dry -> canary on the smallest GPU slice that fits (LoRA) -> run. Add a row to `strl/profiles.json` from the
+   canary (step seconds, tokens/s, memory peak) so later plans are calibrated.
+9. Add the model to `limits.models` only if your config uses an allowlist (the default is `["*"]`).
 
 ## A new reward design (YAML, or one Python function)
 
@@ -109,3 +130,20 @@ Switching a domain off takes both `train: 0` and `test: 0` (`train: 0` alone kee
 small model set `inference.tensor_parallel_size: 1`, `environment.harbor.max_seq_len` (16k is enough for a 2B), and size `compute.training.fsdp_size`
 to the GPUs of one node; read the plan's UNCALIBRATED step estimate as a placeholder and let a canary measure it.
 Every file under `experiments/` must plan: the test suite loads them all.
+
+
+## A new MiMo-style suite: what is generic and what is MiMo-specific (honest list)
+
+Generic (reuse as is): the Harbor generator subclass (`strl/tasks/mimo/generator.py`: placeholders for timed-out trials, deadline
+masking, per-domain metrics, shaping terms, judge hook), the judge (`judge.py`: rubric + vision, votes, variance, outside the sandbox), the
+in-loop paired result (`strl/inloop.py`), `honest_power` statistics, the hardened shared `test.sh`, the agents (`SingleShotAgent`,
+Terminus-2), monitoring flags, retention, the ceiling (`strl/evals.py` `mimo()`), fail-fast.
+
+MiMo-specific (copy and adapt, do not import): `data.py` (the verl parquet columns, the pinned dataset revision, per-domain grouping keys),
+`export.py` (Dockerfile tails per domain), `graders/<domain>.py`, the `DOMAINS` tuple, and `base/mimo.yaml`. For a new suite:
+1. `cp -r strl/tasks/mimo strl/tasks/<suite>`; rename the env (`name = '<suite>'`), register it in `strl/tasks/__init__.py`.
+2. Rewrite `data.py` for the suite's columns and its leak-free grouping key per domain; keep the manifest hashes.
+3. Write one grader per domain (contract above); unit-test `grade()` on temp dirs; nop and tamper must score 0.
+4. `base/<suite>.yaml` extending `base/infra.yaml` with your `domains`, caps and judge; a smoke experiment with 2-4 tasks per domain.
+5. Ladder: unit tests -> `strl prepare` -> `tools/gate_mimo.py` style nop gate per domain -> dry (with `run.ceiling_per_domain=2`)
+   -> 1-GPU canary (0.8B LoRA) -> the run.

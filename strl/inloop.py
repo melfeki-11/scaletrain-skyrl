@@ -59,9 +59,35 @@ def in_loop_result(cfg: dict, env_spec, evaluation_samples, eval_dir, *, optimiz
             write_jsonl(Path(eval_dir) / 'candidate.jsonl', trained)
             result.update(stats)
             result['paired'] = {'base_step': base_step, 'trained_step': trained_step, 'base_rows': len(base), 'trained_rows': len(trained)}
+            fixed, broken = flip_examples(base, trained, env_spec)
+            write_jsonl(Path(eval_dir) / 'fixed_by_training.jsonl', fixed)
+            write_jsonl(Path(eval_dir) / 'broken_by_training.jsonl', broken)
+            result['flip_examples'] = {'fixed': len(fixed), 'broken': len(broken)}
     (Path(eval_dir) / 'result.json').write_text(json.dumps(result, indent=2, default=str))
     (Path(eval_dir) / 'README.md').write_text(summary_markdown(result) + '\n')
     return result
+
+
+FLIP_COLUMNS = ('sample_id', 'domain', 'base_task_metric', 'trained_task_metric', 'base_failure_mode', 'base_artifact', 'trained_artifact')
+
+
+def flip_examples(base: list[dict], trained: list[dict], env_spec, limit: int = 50) -> tuple[list[dict], list[dict]]:
+    """Joined BY SAMPLE ID (never by position): held-out trials the base failed and the trained model passed (fixed), and the reverse
+    (broken), excluding ids masked on either side. Continuous-score domains use the environment's ``passed``."""
+    trained_by_id = {str(r['sample_id']): r for r in trained}
+    fixed, broken = [], []
+    for b in base:
+        t = trained_by_id.get(str(b['sample_id']))
+        if t is None or b.get('masked') or t.get('masked'):
+            continue
+        pb, pt = bool(b.get('passed', b.get('correct'))), bool(t.get('passed', t.get('correct')))
+        if pb == pt:
+            continue
+        row = {'sample_id': b['sample_id'], 'domain': b.get('domain'), 'base_task_metric': b.get('task_metric'), 'trained_task_metric': t.get('task_metric'),
+               'base_failure_mode': env_spec.failure_mode(b) if hasattr(env_spec, 'failure_mode') else None,
+               'base_artifact': str(b.get('artifact') or b.get('completion') or '')[:2000], 'trained_artifact': str(t.get('artifact') or t.get('completion') or '')[:2000]}
+        (fixed if pt else broken).append(row)
+    return fixed[:limit], broken[:limit]
 
 
 def _fmt(value) -> str:

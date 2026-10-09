@@ -15,7 +15,7 @@ def remaining_seconds(attempts, total=3600):
             raise ValueError('Duplicate budget attempt')
         seen.add(attempt['job_id'])
         if not attempt.get('allocated_at'):
-            if attempt['status'] not in {'CANCELED', 'FAILED', 'COMPLETED'}:
+            if attempt['status'] not in {'CANCELED', 'CANCELLED', 'FAILED', 'COMPLETED'}:
                 raise ValueError('Cannot retry an active or ambiguous job')
             continue
         if not attempt.get('terminal_at'):

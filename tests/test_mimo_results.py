@@ -622,6 +622,23 @@ class FailFastRules(FailFastBase):
         with self.assertRaisesRegex(RuntimeError, r'Fail-fast \(step_slow\).*150|Fail-fast \(step_slow\).*x the plan'):
             self.step(2, seconds=170.0)
 
+    def test_uncalibrated_estimate_and_last_step_only_alert(self):
+        # v3smk2-fb: an extrapolated 39 s estimate stopped a healthy 2 x 8 run after its last step
+        self.rules(step_slow_factor=1.5, domain_masked=0.15)
+        self.callback.plan_step_seconds = 39.0
+        self.callback.plan_calibrated = False
+        for s in (1, 2, 3):
+            self.step(s, seconds=250.0)                             # never raises
+        self.assertEqual(len([a for a in self.alerts if 'advisory' in str(a)]), 1)   # one advisory alert, not one per step
+        self.callback.plan_calibrated = True
+        self.callback._slow_steps = []
+        self.step(99, seconds=250.0)
+        self.step(100, seconds=250.0)                               # max_training_steps=100: the last step only alerts
+        self.callback._slow_steps = []
+        self.step(10, seconds=250.0)
+        with self.assertRaises(RuntimeError):
+            self.step(11, seconds=250.0)                            # calibrated and not the last step: stops
+
     def test_step_slow_not_consecutive_fast_unknown_or_no_plan(self):
         self.rules(step_slow_factor=1.5)
         self.callback.plan_step_seconds = 100.0
@@ -782,3 +799,38 @@ class MergeFlag(unittest.TestCase):
         self.assertTrue(any(f.startswith('MERGE(') for f in flags(rows(362, 362), None, None, 99)))      # the Qwen3.5 canary: 362 -> 362
         self.assertFalse(any(f.startswith('MERGE(') for f in flags(rows(811, 209), None, None, 99)))     # Qwen3.8 on real transcripts
         self.assertFalse(any(f.startswith('MERGE(') for f in flags(rows(12, 12), None, None, 99)))       # too few sequences to judge
+
+
+class MultiNodeMonitoring(unittest.TestCase):
+    """Compliance audit: no infra/* in W&B, no per-node line, NETWORK / PEER_STALE never alerted."""
+
+    def test_infra_metrics_from_the_probe(self):
+        from strl.tracking import infra_metrics
+        out = infra_metrics({'nodes': 2, 'efa_available': False, 'transport': 'socket', 'passed': True,
+                             'bandwidth_gbps': {'intra_node': 343.7, 'cross_node': 0.69, 'global': 2.39}})
+        self.assertEqual((out['infra/nodes'], out['infra/efa_available'], out['infra/nccl_socket_transport']), (2.0, 0.0, 1.0))
+        self.assertEqual(out['infra/cross_node_busbw_GBps'], 0.69)
+
+    def test_per_node_line_and_alerted_flags(self):
+        snap = {'at': '00:00:00', 'job': 'IN_PROGRESS', 'latest': {}, 'heartbeat_age_s': 12, 'peer_ages_s': [30, None],
+                'flags': ['PEER_STALE(rank 2, 400s)'], 'completion': None}
+        text = live.line(snap)
+        self.assertIn('nodes=head:12s,rank1:30s,rank2:-s', text)
+        sent, calls = set(), []
+        live.alert_once({'tracking': {}}, 'run', ['PEER_STALE(rank 2, 400s)', 'NETWORK(transport=socket)'], sent, lambda *a: calls.append(a[2]))
+        self.assertEqual(sorted(calls), ['NETWORK', 'PEER_STALE'])
+
+
+class InLoopFlipTables(unittest.TestCase):
+    def test_flips_are_joined_by_sample_id_and_skip_masked(self):
+        from strl.inloop import flip_examples
+        from strl.tasks.mimo.spec import MimoSpec
+        base = [{'sample_id': 'a#0', 'domain': 'code', 'passed': False, 'task_metric': 0.0, 'masked': False, 'artifact': 'x'},
+                {'sample_id': 'b#0', 'domain': 'music', 'passed': True, 'task_metric': 1.0, 'masked': False},
+                {'sample_id': 'c#0', 'domain': 'cyber', 'passed': False, 'task_metric': 0.0, 'masked': True}]
+        trained = [{'sample_id': 'c#0', 'passed': True, 'masked': False}, {'sample_id': 'b#0', 'passed': False, 'task_metric': 0.2, 'masked': False},
+                   {'sample_id': 'a#0', 'passed': True, 'task_metric': 1.0, 'masked': False, 'artifact': 'y'}]
+        fixed, broken = flip_examples(base, trained, MimoSpec())
+        self.assertEqual([r['sample_id'] for r in fixed], ['a#0'])
+        self.assertEqual([r['sample_id'] for r in broken], ['b#0'])
+        self.assertEqual((fixed[0]['base_artifact'], fixed[0]['trained_artifact']), ('x', 'y'))

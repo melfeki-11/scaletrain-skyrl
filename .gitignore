@@ -31,3 +31,4 @@ assets/coding/
 assets/mimo/
 .claude/worktrees/
 wandb/
+evidence/ledgers/*.lock
