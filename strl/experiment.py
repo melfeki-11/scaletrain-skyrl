@@ -83,6 +83,15 @@ TRAINING_TYPES = {'fsdp_size': (int, type(None)), 'cpu_offload': bool, 'reshard_
                   'max_tokens_per_microbatch': (int, type(None)), 'gradient_checkpointing': bool}
 
 
+def eval_layout(cfg: dict) -> tuple[int, int, bool]:
+    """Offline final/retention eval placement on the head node: (shards per model, GPUs per shard = the serving TP, base and trained
+    concurrently?). Shards shrink automatically when TP grows: min(configured, gpus // (2 x tp)); below that, base then trained."""
+    gpn, tp = int(cfg['compute']['gpus_per_node']), int(cfg['inference'].get('tensor_parallel_size') or 1)
+    want = max(1, int(cfg['evaluation'].get('eval_shards_per_model') or 1))
+    fit = gpn // (2 * tp)
+    return (min(want, fit), tp, True) if fit >= 1 else (1, tp, False)
+
+
 VLLM_LORA_RANKS = frozenset({1, 8, 16, 32, 64, 128, 256, 320, 512})   # vllm/config/lora.py MaxLoRARanks at v0.26.0 (the image's vLLM)
 
 
@@ -281,10 +290,10 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
         full = a['prompts_per_step'] * a['n_samples']
         if full % gpus or (full // gpus) % a['micro_forward_per_gpu']:
             problems.append(f'prompts_per_step*n_samples={full} must divide evenly into {gpus} GPUs x micro_forward_per_gpu={a["micro_forward_per_gpu"]}')
-    shards = e['eval_shards_per_model']
-    if e.get('final_eval', True) and (shards < 1 or shards * 2 > gpn):
-        problems.append(f'evaluation.eval_shards_per_model={shards}: parallel final eval needs one GPU per shard for both models (<= {gpn // 2}); '
-                        'set evaluation.final_eval: false to skip it')
+    shards, etp = e['eval_shards_per_model'], int(i.get('tensor_parallel_size') or 1)
+    if e.get('final_eval', True) and (shards < 1 or shards * 2 > gpn or etp > gpn):   # TP > 1 shrinks the shards automatically (eval_layout)
+        problems.append(f'evaluation.eval_shards_per_model={shards} / tensor_parallel_size={etp}: the offline final eval needs >= 1 shard of '
+                        f'{etp} GPU(s) on one {gpn}-GPU node; set evaluation.final_eval: false to skip it')
     if e['interval_steps'] < 1 or e['checkpoint_interval_steps'] < 1:
         problems.append('evaluation.interval_steps and checkpoint_interval_steps must be >= 1')
     elif e['checkpoint_interval_steps'] % e['interval_steps']:
@@ -382,6 +391,7 @@ def retention_config(cfg: dict) -> dict | None:
     rcfg = load(spec['experiment'])
     rcfg['model'] = dict(cfg['model'])
     rcfg['inference'] = {**rcfg['inference'], 'enforce_eager': cfg['inference'].get('enforce_eager', rcfg['inference'].get('enforce_eager'))}
+    rcfg['inference']['tensor_parallel_size'] = cfg['inference']['tensor_parallel_size']   # THIS model's serving TP (a 30B does not fit TP1)
     rcfg['evaluation'] = {**rcfg['evaluation'], 'eval_shards_per_model': 1}
     rcfg['_retention_limit'] = spec.get('limit')
     return rcfg

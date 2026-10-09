@@ -274,23 +274,28 @@ def dry_run_gates(cfg, runtime, env_spec, receipt):
 
 
 def evaluate_test_split(cfg, env_spec, base_model, trained_model, eval_dir, deadline, limit=None, resolved=None):
-    """Base on GPUs [0, n), trained on GPUs [n, 2n), n shards each, concurrently; reassemble in canonical id order. ``resolved``: a
-    different resolved config for the eval processes (the retention environment); ``limit``: the first N held-out examples."""
+    """n shards per model, each on ``tensor_parallel_size`` GPUs (the experiment's serving TP): base and trained concurrently when
+    2 x n x tp GPUs exist, else base then trained (n = 1); reassemble in canonical id order. ``resolved``: a different resolved config for
+    the eval processes (the retention environment); ``limit``: the first N held-out examples."""
     from .finalize import merge_shards, read_jsonl
-    n = cfg['evaluation']['eval_shards_per_model']
+    from .experiment import eval_layout
+    n, tp, concurrent = eval_layout(cfg)
     Path(eval_dir).mkdir(parents=True, exist_ok=True)
-    jobs = []
+    waves = [[], []]
     for offset, (label, model) in enumerate([('base', base_model), ('candidate', trained_model)]):
         for shard in range(n):
             env = os.environ.copy()
             env.pop('RAY_ADDRESS', None)
-            env['CUDA_VISIBLE_DEVICES'] = str(offset * n + shard)
+            first = ((offset * n if concurrent else 0) + shard) * tp
+            env['CUDA_VISIBLE_DEVICES'] = ','.join(str(g) for g in range(first, first + tp))
             if resolved:
                 env['STRL_RESOLVED'] = str(resolved)
             args = [sys.executable, '-m', env_spec.eval_module, '--model', str(model), '--output', str(eval_dir / f'{label}-{shard}.jsonl'),
                     '--rank', str(shard), '--world-size', str(n), *(['--limit', str(limit)] if limit else [])]
-            jobs.append((args, eval_dir / f'{label}-{shard}.log', env))
-    run_parallel(jobs, deadline)
+            waves[0 if concurrent else offset].append((args, eval_dir / f'{label}-{shard}.log', env))
+    for wave in waves:
+        if wave:
+            run_parallel(wave, deadline)
     ids = env_spec.final_eval_ids(cfg)
     ids = ids[:limit] if limit else ids
     return {label: merge_shards([read_jsonl(eval_dir / f'{label}-{s}.jsonl') for s in range(n)], ids) for label in ('base', 'candidate')}

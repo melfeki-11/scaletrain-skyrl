@@ -1,0 +1,6 @@
+{
+  "program": "Verification round 2 (authorized by the user on 2026-10-09: ~2.5 node-hours): one real 2 x 8 H100 GRPO run launched end to end by a fresh agent that has only the repo and the scaletrain-rl-experiments skill, raced across all capacity routes, with retry margin.",
+  "total_seconds": 9000,
+  "nodes": 2,
+  "attempts": []
+}
