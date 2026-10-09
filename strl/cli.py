@@ -132,9 +132,9 @@ def cmd_plan(a):
         left = remaining_seconds(ledger['attempts'], ledger['total_seconds'])
         from .budget import node_fraction
         from .stage import CANARY_OVERLAY, canary_overlay_for
-        train = int(node_fraction(cfg) * cfg['budget']['attempt_max_seconds'])
+        train = int(node_fraction(cfg) * (cfg['budget']['attempt_max_seconds'] + 420))   # stage books the 420 s pod-start slack too
         small = canary_overlay_for(cfg) == CANARY_OVERLAY
-        canary = int(min(3600, cfg['budget']['canary_max_seconds'] + 600) * (1 / 8 if small else node_fraction(cfg)))
+        canary = int((min(3600, cfg['budget']['canary_max_seconds'] + 600) + 420) * (1 / 8 if small else node_fraction(cfg)))
         shape = '1-GPU' if small else '{}x{}-GPU'.format(cfg['compute']['nodes'], cfg['compute']['gpus_per_node'])
         print(f"  budget       {ledger_path}: {left} of {ledger['total_seconds']} node-s left"
               + (f" ({held} held by {len(ledger.get('reservations') or {})} staged launch(es))" if held else '')

@@ -424,8 +424,10 @@ def dry_run_summary(experiment: str, attempt: str, overrides: list[str] | None =
     for name in ('critic', 'durable_checkpoint_io', 'ceiling'):
         if name in g:
             lines.append(f"  {name:<12} {json.dumps(g[name], default=str)[:300]}")
-    if (v.get('generator') or {}).get('shaping'):
-        lines.append(f"  shaping      {json.dumps(v['generator']['shaping'])[:300]}")
+    gen = v.get('generator') or {}
+    for key in ('shaping', 'generic_reward_samples', 'cases'):   # the reward contract's per-case rewards (mimo / gsm8k / countdown-style)
+        if gen.get(key):
+            lines.append(f"  rewards      {key}: {json.dumps(gen[key], default=str)[:400]}")
     if d.get('network'):
         lines.append(f"  network      {json.dumps(d['network'], default=str)[:200]}")
     return '\n'.join(lines)

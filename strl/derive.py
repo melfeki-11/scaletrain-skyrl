@@ -152,7 +152,7 @@ def fits_one_gpu(cfg: dict, params_b: float | None, hf: dict | None = None) -> b
     return params_b is None or bool(memory_estimate_gb(params_b, cfg, hf, world=1, tp=1, fsdp_size=1)['fits'])
 
 
-def recommend_layout(cfg: dict, bandwidth_gbps: float | None = None) -> dict[str, Any]:
+def recommend_layout(cfg: dict, bandwidth_gbps: float | None = None, hsdp_gb: float | None = None) -> dict[str, Any]:
     """LoRA: HSDP within a node when nodes > 1 (only the small LoRA gradients cross nodes). Full: full shard over every GPU when
     the measured cross-node bandwidth is >= FULL_SHARD_MIN_GBPS, else HSDP + cpu_offload (unknown bandwidth: full shard + NETWORK)."""
     nodes, gpn = cfg['compute']['nodes'], cfg['compute']['gpus_per_node']
@@ -164,19 +164,28 @@ def recommend_layout(cfg: dict, bandwidth_gbps: float | None = None) -> dict[str
         return {'fsdp_size': None, 'cpu_offload': False, 'reason': 'full: cross-node bandwidth unknown, full shard (probe it: NETWORK)'}
     if bandwidth_gbps >= FULL_SHARD_MIN_GBPS:
         return {'fsdp_size': None, 'cpu_offload': False, 'reason': f'full: {bandwidth_gbps:.1f} GB/s cross-node, full shard'}
-    return {'fsdp_size': gpn, 'cpu_offload': True, 'reason': f'full: only {bandwidth_gbps:.1f} GB/s cross-node, HSDP within a node + CPU offload'}
+    if hsdp_gb is not None and hsdp_gb < MEMORY_LIMIT_GB:   # a model whose full state fits sharded over one node needs no offload
+        return {'fsdp_size': gpn, 'cpu_offload': False,
+                'reason': f'full: only {bandwidth_gbps:.1f} GB/s cross-node, HSDP within a node (fsdp_size={gpn}; {hsdp_gb:.0f} GB/GPU without offload)'}
+    return {'fsdp_size': gpn, 'cpu_offload': True, 'reason': f'full: only {bandwidth_gbps:.1f} GB/s cross-node, HSDP within a node + CPU offload'
+            + (f' ({hsdp_gb:.0f} GB/GPU without offload)' if hsdp_gb is not None else '')}
 
 
-def layout(cfg: dict, memory: dict, network: dict | None = None) -> dict[str, Any]:
+def layout(cfg: dict, memory: dict, network: dict | None = None, params_b: float | None = None, hf: dict | None = None) -> dict[str, Any]:
     ft, tr = finetune(cfg), training(cfg)
     lora = ft['lora']
     world = cfg['derived']['world_size']
     bandwidth = ((network or {}).get('bandwidth_gbps') or {}).get('cross_node')
+    hsdp_gb = None
+    if params_b and ft['mode'] == 'full' and cfg['compute']['nodes'] > 1:   # what HSDP within a node costs WITHOUT offload
+        probe = {**cfg, 'compute': {**cfg['compute'], 'training': {**(cfg['compute'].get('training') or {}), 'cpu_offload': False,
+                                                                  'fsdp_size': cfg['compute']['gpus_per_node']}}}
+        hsdp_gb = memory_estimate_gb(params_b, probe, hf).get('training_phase_gb')
     return {'mode': ft['mode'] if ft['mode'] == 'full' else f"lora r{lora['rank']} a{lora['alpha']} {lora['target_modules']}",
             'fsdp_group': memory['fsdp_group'], 'replicas': world // memory['fsdp_group'], 'cpu_offload': tr['cpu_offload'],
             'tp': cfg['inference']['tensor_parallel_size'], 'engines': cfg['derived']['num_engines'],
             'train_gb_per_gpu': memory['training_phase_gb'], 'rollout_gb_per_gpu': memory['rollout_phase_gb'],
-            'recommended': recommend_layout(cfg, bandwidth)}
+            'recommended': recommend_layout(cfg, bandwidth, hsdp_gb)}
 
 
 def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float | None, timing: dict,
@@ -333,7 +342,7 @@ def plan(cfg: dict, network: dict | None = None) -> dict:
                       'note': 'estimates: extrapolated from the nearest measured profile; the 1-GPU canary measures the real numbers'},
         'monitoring': {'wandb': f"{cfg['tracking']['base_url']}/{cfg['tracking']['entity']}/{cfg['tracking']['project']} group={cfg['tracking']['group']}",
                        'critic': cfg['tracking'].get('critic', {}).get('enabled', False)},
-        'layout': layout(cfg, memory, network),
+        'layout': layout(cfg, memory, network, params_b, hf),
         'warnings': warnings(cfg, env, profile, params_b, timing, memory, network, hf=hf),
     }
     return out
