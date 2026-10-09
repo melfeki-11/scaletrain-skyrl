@@ -250,6 +250,20 @@ def dry_run_gates(cfg, runtime, env_spec, receipt):
     gates['environment'] = env_spec.dry_run_checks(cfg)
     from .services import wandb as wandb_service
     gates['wandb'] = wandb_service.smoke(cfg, runtime['wandb_run_id'] + 'd')
+    from .overrides import durable
+    if durable(cfg):   # the exact write path of a durable checkpoint (SkyRL io to the S3 ckpt_path), incl. the patched LoRA adapter save
+        from skyrl.backends.skyrl_train.utils.io import io as skyrl_io
+        from safetensors.torch import load as st_load, save as st_save
+        import torch
+        probe = f"{runtime['artifact_uri']}/checkpoints/_strl_dry_probe/adapter_model.safetensors"
+        with skyrl_io.open_file(probe, 'wb') as f:
+            f.write(st_save({'probe': torch.ones(2)}))
+        with skyrl_io.open_file(probe, 'rb') as f:
+            ok = bool(st_load(f.read())['probe'].sum().item() == 2.0)
+        skyrl_io.remove(probe)
+        if not ok:
+            raise RuntimeError(f'durable checkpoint io round trip failed at {probe}')
+        gates['durable_checkpoint_io'] = {'path': probe, 'round_trip': ok}
     if receipt.get('critic') == 'enabled':
         from .monitor import critic
         critic.configure({**cfg['tracking']['critic'], 'enabled': True})

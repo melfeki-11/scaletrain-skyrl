@@ -467,6 +467,21 @@ class SkyRLPatches(unittest.TestCase):
             self.assertEqual(path.read_text(), once)
             return once
 
+    def test_lora_adapter_save_goes_through_cloud_io(self):
+        from strl.runtime import LORA_ADAPTER_CLOUD_SAVE, scaling_patches
+        from strl.experiment import load
+        source = self.apply('pinned-fsdp_strategy.py', LORA_ADAPTER_CLOUD_SAVE)     # pinned SkyRL a9564572 source
+        fn = next(n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef) and n.name == '_save_lora_adapters')
+        text = ast.unparse(fn)
+        self.assertNotIn('save_file(lora_params', text)
+        self.assertIn("io.open_file(os.path.join(lora_save_path, 'adapter_model.safetensors'), 'wb')", text)
+        import safetensors.torch, torch
+        tensors = {'a.lora_A.weight': torch.ones(2, 3)}
+        self.assertTrue(torch.equal(safetensors.torch.load(safetensors.torch.save(tensors))['a.lora_A.weight'], tensors['a.lora_A.weight']))
+        durable_lora = load(str(ROOT / 'experiments/mimo-phi4-mini-lora-verify.yaml'))
+        self.assertIn(next(iter(LORA_ADAPTER_CLOUD_SAVE)), scaling_patches(durable_lora))
+        self.assertNotIn(next(iter(LORA_ADAPTER_CLOUD_SAVE)), scaling_patches(load(str(ROOT / 'experiments/mimo-qwen35-0p8b-2node-smoke.yaml'))))
+
     def test_lora_sync_per_host(self):
         from strl.runtime import LORA_SYNC_PER_HOST
         source = self.apply('pinned-fsdp_worker.py', LORA_SYNC_PER_HOST)

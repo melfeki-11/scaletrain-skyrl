@@ -73,6 +73,18 @@ NO_OPTIMIZER_CHECKPOINT = {
     ],
 }
 
+# Durable checkpoints put trainer.ckpt_path on S3. Every FSDP checkpoint file goes through SkyRL's cloud-aware io, EXCEPT the LoRA
+# adapter, written with safetensors.save_file(path): v1phi3-fb failed at its step-2 save with `No such file or directory ... at path
+# "/workspace/strl-run/s3://..."`. Serialize to bytes and write through io.open_file, like the adapter_config.json next to it.
+LORA_ADAPTER_CLOUD_SAVE = {
+    'skyrl/backends/skyrl_train/distributed/fsdp_strategy.py': [
+        ('            save_file(lora_params, os.path.join(lora_save_path, "adapter_model.safetensors"))\n',
+         '            from safetensors.torch import save as _strl_safetensors_bytes  # strl: save_file cannot write to s3://\n'
+         '            with io.open_file(os.path.join(lora_save_path, "adapter_model.safetensors"), "wb") as _strl_f:\n'
+         '                _strl_f.write(_strl_safetensors_bytes(lora_params))\n'),
+    ],
+}
+
 
 def scaling_patches(cfg) -> dict:
     """The exact-source SkyRL patches an experiment needs (none for single-node full fine-tuning with checkpoints)."""
@@ -82,6 +94,9 @@ def scaling_patches(cfg) -> dict:
         patches.update(LORA_SYNC_PER_HOST)
     if not save_optimizer_state(cfg):
         patches.update(NO_OPTIMIZER_CHECKPOINT)
+    from .overrides import durable
+    if durable(cfg) and finetune(cfg)['mode'] == 'lora':
+        patches.update(LORA_ADAPTER_CLOUD_SAVE)
     return patches
 
 
