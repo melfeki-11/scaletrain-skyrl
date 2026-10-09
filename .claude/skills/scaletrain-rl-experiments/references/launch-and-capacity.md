@@ -97,3 +97,19 @@ data hashes, reward contract) -> [resume: point SkyRL at the previous checkpoint
 artifact sync; canary rule at step 2; stall watchdog; liveness) -> [multi-node: gather every node's exports to S3 + the head] ->
 offline final eval (gsm8k/coding: validation-selected checkpoint, LoRA served by vLLM) or in-loop paired result (mimo) -> [retention eval]
 -> W&B evidence + artifact -> completion.json.
+
+## Sizing an attempt (the arithmetic the worker applies)
+
+- The job runs `attempt_max_seconds` (train) or min(3600, `canary_max_seconds` + 600) (canary); the worker gets that minus
+  `bootstrap_margin_seconds` (180).
+- Training must FINISH by the worker deadline minus the train reserve: the offline eval's `final_eval_reserve_seconds` (final_eval: true), or
+  600 s for the in-loop result (the child is hard-stopped 480 s before the deadline; +120 s for the forced eval and export), + 900 s with
+  `evaluation.retention`.
+- From step 2 on, the run stops early when `now + 1.15 x mean(last 2 steps) + last eval time + 120 s` would cross that line.
+- Start-up before step 0 (pod + image + model load + engines): ~5 min at 0.8B, ~10 min at 8B on 2 x 8, ~12-16 min at 27B.
+- So: attempt_max >= 180 + start-up + step-0 eval + steps x step time + final eval + train reserve. Example (8B LoRA, MiMo cyber + code, 2 x 8,
+  caps 180 s agent / 8 turns): 600 + 250 + 2 x 400 + 250 + 600 ~ 2,500 -> attempt_max 2,700.
+- The ledger books (attempt seconds + 420 s pod-start slack) x nodes x gpus/8 at stage time and charges what was used. A retry after a late
+  failure is clamped to what is left, which may not fit `max_steps`: size the first attempt so a second fits, or accept one try.
+- A separate canary on 2 x 8 books 7,200 node-s. When that does not fit next to the run, a short train attempt (`max_steps` 2, small caps)
+  does the canary's job (the step-2 canary rule runs in train mode too) and also yields the paired result and `strl verify`.
