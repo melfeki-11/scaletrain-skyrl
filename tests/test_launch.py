@@ -19,7 +19,7 @@ class FakeScaleTrain:
         return L.Api(stage=self.stage, submit=self.submit, get=self.get, cancel=self.cancel, record=self.record,
                      pods_started=lambda experiment, attempt: attempt in self.started, clock=lambda: self.now, sleep=self.sleep, log=lambda m: None)
 
-    def stage(self, experiment, *, attempt, mode, team, allow_borrowing, overrides):
+    def stage(self, experiment, *, attempt, mode, team, allow_borrowing, overrides, reservation=None):
         self.staged.append({'attempt': attempt, 'team': team, 'borrow': allow_borrowing, 'overrides': list(overrides)})
         return {'job_file': f'evidence/{attempt}/job.json'}
 
@@ -302,6 +302,41 @@ class SecondReview(unittest.TestCase):
     def test_a_cancelled_spelling_never_breaks_the_budget(self):
         from strl.budget import remaining_seconds
         self.assertEqual(remaining_seconds([{'job_id': 'j', 'status': 'CANCELLED', 'allocated_at': None, 'terminal_at': 'x'}], 100), 100)
+
+
+class ThirdReview(unittest.TestCase):
+    def setUp(self):
+        self.cwd = os.getcwd()
+        self.tmp = tempfile.TemporaryDirectory()
+        os.chdir(self.tmp.name)
+
+    def tearDown(self):
+        os.chdir(self.cwd)
+        self.tmp.cleanup()
+
+    def test_a_rejected_route_releases_its_booking(self):
+        fake = FakeScaleTrain({'rb': [('QUEUED', 'w'), ('IN_PROGRESS', 'absent')]})
+        api = fake.api()
+        released = []
+        api.release = lambda experiment, group, attempt: released.append((group, attempt))
+        original = api.submit
+        api.submit = lambda job_file: None if 'run1-fb' in job_file else original(job_file)
+        out = L.race('exp.yaml', 'run1', 'train', api, poll=5)
+        self.assertEqual(out['winner'], 'run1-rb')
+        self.assertIn(('run1', 'run1-fb'), released)
+
+    def test_an_ambiguous_submit_error_keeps_the_booking(self):
+        fake = FakeScaleTrain({})
+        api = fake.api()
+        released = []
+        api.release = lambda experiment, group, attempt: released.append(attempt)
+
+        def boom(job_file):
+            raise OSError('scale-train crashed')
+        api.submit = boom
+        with self.assertRaises(OSError):
+            L.race('exp.yaml', 'run1', 'train', api, poll=5)
+        self.assertEqual(released, [])   # the job may exist: never free a live job's booking on an ambiguous failure
 
 
 if __name__ == '__main__':

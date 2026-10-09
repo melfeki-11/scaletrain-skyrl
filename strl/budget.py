@@ -30,3 +30,49 @@ def remaining_seconds(attempts, total=3600):
 def node_fraction(cfg, mode='train'):
     """Node-seconds charged per wall-second: nodes x gpus_per_node / 8 (CPU dry runs are free)."""
     return 0.0 if mode == 'dry' else cfg['compute']['nodes'] * cfg['compute']['gpus_per_node'] / 8.0
+
+
+RESERVATION_TTL_SECONDS = 72 * 3600   # a 2 x 8 job can queue ~23 h; a reservation nobody released expires after 3 days
+
+
+def reserved_seconds(data: dict, *, exclude: str | None = None, now: float | None = None) -> int:
+    """Node-seconds held by launches that are staged but not yet recorded (``data['reservations']``: group -> {node_seconds, attempts,
+    created}). ``exclude``: the caller's own group (a race's routes share one reservation)."""
+    import time
+    now = time.time() if now is None else now
+    return int(sum(r['node_seconds'] for g, r in (data.get('reservations') or {}).items()
+                   if g != exclude and now - float(r.get('touched', r.get('created', now))) < RESERVATION_TTL_SECONDS))
+
+
+def release_attempt(data: dict, attempt: str, group: str | None = None) -> bool:
+    """Drop ``attempt`` from its reservation group(s) inside ``data`` (a locked ledger); a group goes when no attempt is left."""
+    found = False
+    for g, held in list((data.get('reservations') or {}).items()):
+        if (group is None or g == group) and attempt in held.get('attempts', []):
+            held['attempts'] = [x for x in held['attempts'] if x != attempt]
+            found = True
+            if not held['attempts']:
+                del data['reservations'][g]
+    return found
+
+
+def locked_ledger(path):
+    """Context manager: exclusive file lock on a program ledger, yields its data; the data is written back atomically on a clean exit.
+    Every writer (stage reservations, record_attempt) goes through it: concurrent launchers share one ledger."""
+    import contextlib
+    import fcntl
+    import json
+    import os
+    from pathlib import Path
+
+    @contextlib.contextmanager
+    def _cm():
+        p = Path(path)
+        with open(str(p) + '.lock', 'w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            data = json.loads(p.read_text())
+            yield data
+            tmp = Path(str(p) + '.tmp')
+            tmp.write_text(json.dumps(data, indent=2) + '\n')
+            os.replace(tmp, p)
+    return _cm()

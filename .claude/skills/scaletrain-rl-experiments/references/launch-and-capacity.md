@@ -68,8 +68,12 @@ A preempted attempt cannot continue in place (its budget window is anchored at i
 - An attempt is charged `(terminal - pod start) x nodes x gpus/8`, pod start = the worker's write-once `budget.json` `started_at` minus
   420 s (image pull + bootstrap). Queue time is never charged. CPU dry runs are free. (Entries recorded before 2026-10-08 charged from job
   creation.)
-- Several launches can share one ledger: entries are written under a file lock, but `stage` only CHECKS the remaining budget (nothing is
-  reserved), so concurrent launches can overspend it together. Sum their reservations yourself before launching in parallel.
+- Several launches can share one ledger safely: `stage` checks AND books the attempt's worst case (`reservations` in the ledger, one booking
+  per race) under a file lock, `record_attempt` releases it, and a booking nobody released expires after 72 h. `strl plan` shows what is held.
+  A launch that cannot fit next to the others' bookings is refused at stage time instead of overspending.
+  A route ScaleTrain rejects releases its booking at once; a waiting or running launch refreshes its booking hourly (the 72 h expiry counts
+  from the last refresh). A staged attempt you will never submit: `strl ledger <exp> --release <attempt>`. Known gap: while losing routes
+  are being settled (about one poll), their charge is not yet booked.
 - `stage` refuses when the remaining budget cannot cover bootstrap + training + the final-eval/retention reserve; a canary job is capped
   at `budget.canary_max_seconds` + 600 s.
 - `strl launch --watch` records the winner and the losers itself. Otherwise, after every terminal attempt:
@@ -96,3 +100,19 @@ data hashes, reward contract) -> [resume: point SkyRL at the previous checkpoint
 artifact sync; canary rule at step 2; stall watchdog; liveness) -> [multi-node: gather every node's exports to S3 + the head] ->
 offline final eval (gsm8k/coding: validation-selected checkpoint, LoRA served by vLLM) or in-loop paired result (mimo) -> [retention eval]
 -> W&B evidence + artifact -> completion.json.
+
+## Sizing an attempt (the arithmetic the worker applies)
+
+- The job runs `attempt_max_seconds` (train) or min(3600, `canary_max_seconds` + 600) (canary); the worker gets that minus
+  `bootstrap_margin_seconds` (180).
+- Training must FINISH by the worker deadline minus the train reserve: the offline eval's `final_eval_reserve_seconds` (final_eval: true), or
+  600 s for the in-loop result (the child is hard-stopped 480 s before the deadline; +120 s for the forced eval and export), + 900 s with
+  `evaluation.retention`.
+- From step 2 on, the run stops early when `now + 1.15 x mean(last 2 steps) + last eval time + 120 s` would cross that line.
+- Start-up before step 0 (pod + image + model load + engines): ~5 min at 0.8B, ~10 min at 8B on 2 x 8, ~12-16 min at 27B.
+- So: attempt_max >= 180 + start-up + step-0 eval + steps x step time + final eval + train reserve. Example (8B LoRA, MiMo cyber + code, 2 x 8,
+  caps 180 s agent / 8 turns): 600 + 250 + 2 x 400 + 250 + 600 ~ 2,500 -> attempt_max 2,700.
+- The ledger books (attempt seconds + 420 s pod-start slack) x nodes x gpus/8 at stage time and charges what was used. A retry after a late
+  failure is clamped to what is left, which may not fit `max_steps`: size the first attempt so a second fits, or accept one try.
+- A separate canary on 2 x 8 books 7,200 node-s. When that does not fit next to the run, a short train attempt (`max_steps` 2, small caps)
+  does the canary's job (the step-2 canary rule runs in train mode too) and also yields the paired result and `strl verify`.

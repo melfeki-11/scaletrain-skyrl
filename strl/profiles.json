@@ -150,5 +150,19 @@
    "source": "job_db3e2pcf8c4g08flber0 can-27b-a (canary, 300 s caps)",
    "mean_prompt_tokens": 2048
   }
+ ],
+ "networks": [
+  {
+   "source": "v3smk3-fb (2 x p5.48xlarge, 2026-10-09)",
+   "passed": true,
+   "nodes": 2,
+   "transport": "socket",
+   "efa_available": false,
+   "bandwidth_gbps": {
+    "intra_node": 343.23,
+    "cross_node": 0.68,
+    "global": 2.32
+   }
+  }
  ]
 }

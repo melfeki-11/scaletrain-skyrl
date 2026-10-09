@@ -1,0 +1,28 @@
+{
+  "program": "Verification round 2 (authorized by the user on 2026-10-09: ~2.5 node-hours): one real 2 x 8 H100 GRPO run launched end to end by a fresh agent that has only the repo and the scaletrain-rl-experiments skill, raced across all capacity routes, with retry margin.",
+  "total_seconds": 9000,
+  "nodes": 2,
+  "attempts": [
+    {
+      "job_id": "job_db4fpbbmjdjg07lcrs10",
+      "attempt": "fa-q3pf-dry-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-09T14:39:41Z",
+      "terminal_at": "2026-10-09T14:42:45Z",
+      "gpu_fraction": 0.0,
+      "nodes": 2,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-09T14:39:41Z) is not charged"
+    },
+    {
+      "job_id": "job_db4g8armjdjg07lcrs20",
+      "attempt": "fa-q3pf-a1-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-09T15:11:39Z",
+      "terminal_at": "2026-10-09T15:41:56Z",
+      "gpu_fraction": 1.0,
+      "nodes": 2,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-09T15:11:39Z) is not charged"
+    }
+  ],
+  "reservations": {}
+}

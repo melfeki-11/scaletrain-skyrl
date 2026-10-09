@@ -103,7 +103,7 @@ class Contracts(unittest.TestCase):
         cfg=load();self.assertEqual((cfg['compute']['nodes'],cfg['compute']['gpus_per_node'],cfg['derived']['num_engines']),(1,8,8))
         for mutate in [lambda c:c['compute'].update(nodes=2),lambda c:c['budget'].update(attempt_max_seconds=7200,total_seconds=7200),
                        lambda c:c['algorithm'].update(micro_train_per_gpu=3),lambda c:c['inference'].update(tensor_parallel_size=3),
-                       lambda c:c['evaluation'].update(eval_shards_per_model=5),lambda c:c['compute'].update(gpus_per_node=3),
+                       lambda c:c['evaluation'].update(eval_shards_per_model=0),lambda c:c['compute'].update(gpus_per_node=3),
                        lambda c:c['algorithm'].update(n_samples=1)]:
             bad=load();mutate(bad)
             for k in [k for k in bad if k.startswith('_') or k=='derived']:bad.pop(k)

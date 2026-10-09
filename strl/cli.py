@@ -56,6 +56,24 @@ def readiness_warnings(cfg: dict) -> list[str]:
         out.append(f"DATA: {cfg['run'].get('data_dir')} is not prepared for this selection ({' '.join(str(error).split())[:240]}): run "
                    '`strl prepare <exp>` (or `strl fetch`). Lowering train/test counts reuses a prepared dir; more tasks, other filters or another seed need a prepare.')
     ledger = cfg['budget'].get('ledger')
+    b = cfg['budget']
+    if int(b['canary_max_seconds']) + 600 > 3600:
+        out.append(f"CANARY: budget.canary_max_seconds={b['canary_max_seconds']} + 600 s exceeds the 3600 s canary job cap: the canary job gets "
+                   '3600 s (a slow step-0 eval + 2 steps of agentic trials may not fit: lower the per-domain caps or the step deadline for it)')
+    if ledger and Path(ledger).is_file():
+        from .budget import node_fraction, remaining_seconds, reserved_seconds
+        from .stage import CANARY_OVERLAY, canary_overlay_for
+        data = json.loads(Path(ledger).read_text())
+        left = remaining_seconds(data['attempts'], data['total_seconds']) - reserved_seconds(data)
+        charge = node_fraction(cfg)
+        canary_charge = 1 / 8 if canary_overlay_for(cfg) == CANARY_OVERLAY else charge
+        need_train = int((b['final_eval_reserve_seconds'] + 901) * charge)
+        need_canary = int(900 * canary_charge)
+        if left < min(need_train, need_canary):
+            out.append(f'BUDGET: {left} node-s available in {ledger}: no GPU mode fits (a train attempt needs > {need_train}, a canary >= '
+                       f'{need_canary}); dry runs still work. More GPU budget needs the user\'s authorization and a new ledger.')
+        elif left < need_train:
+            out.append(f'BUDGET: {left} node-s available in {ledger}: a canary fits, a train attempt does not (needs > {need_train}).')
     if ledger and not Path(ledger).is_file():
         out.append(f'LEDGER: budget.ledger {ledger} does not exist, so stage will refuse. A new GPU program needs the user\'s authorization; then create '
                    'the file (references/launch-and-capacity.md, "New program, new budget") and set budget.total_seconds to match.')
@@ -67,12 +85,24 @@ def cmd_plan(a):
     from .experiment import diff
     cfg = _load(a.experiment, a.set)
     try:
-        report = plan(cfg, json.loads(Path(a.network).read_text()) if a.network else None)
+        network = json.loads(Path(a.network).read_text()) if a.network else None
+        if network is None and int(cfg['compute']['nodes']) > 1:   # the last measured multi-node probe (strl/profiles.json networks)
+            measured = json.loads((ROOT / 'strl/profiles.json').read_text()).get('networks') or []
+            network = dict(measured[-1]) if measured else None
+            if network:   # another job's probe: an assumption, labelled as such (pass --network <attempt>/network.json for your own)
+                network['source'] = f"ASSUMED from {network.get('source')}; --network <your probe> to replace"
+        report = plan(cfg, network)
     except RuntimeError as error:   # model detection (gated / offline config, contradicting profile, unmapped VLM wrapper)
         print(f'experiment {a.experiment} cannot be planned:\n- {error}', file=sys.stderr)
         raise SystemExit(2)
     if a.against:
-        report['diff_vs'] = {a.against: [{'key': k, 'from': x, 'to': y} for k, x, y in diff(_load(a.against), cfg)]}
+        other = _load(a.against)
+        rows = [{'key': k, 'from': x, 'to': y} for k, x, y in diff(other, cfg)]
+        from .tasks import get_environment
+        derived = lambda c: get_environment(c['environment']['name']).skyrl_overrides(c, 'train').get('environment.env_class') or 'generator'
+        if derived(other) != derived(cfg):   # e.g. a custom reward term moves gsm8k from SkyRL's built-in env to strl_env (proven equivalent)
+            rows.append({'key': 'derived: environment.env_class', 'from': derived(other), 'to': derived(cfg)})
+        report['diff_vs'] = {a.against: rows}
     report['warnings'] += readiness_warnings(cfg)
     if a.json:
         print(json.dumps(report, indent=2, default=str))
@@ -89,7 +119,8 @@ def cmd_plan(a):
           + f"(fits={e['memory']['fits']}); from profile {e['profile']}"
           + ("" if e.get('calibrated') else " (UNCALIBRATED: different environment/model; the canary measures the real step time)"))
     lay, mem = report['layout'], e['memory']
-    print(f"  layout       {lay['mode']} | FSDP group {lay['fsdp_group']} x {lay['replicas']} replica(s), cpu_offload={lay['cpu_offload']} | "
+    print(f"  layout       {lay['mode']} | FSDP group {lay['fsdp_group']} x {lay['replicas']} replica(s), cpu_offload={lay['cpu_offload']}"
+          + (f" (host RAM {mem['host_offload_gb_per_gpu']} GB/GPU)" if mem.get('host_offload_gb_per_gpu') else '') + " | "
           f"vLLM TP{lay['tp']} x {lay['engines']} engine(s) | per-GPU train {lay['train_gb_per_gpu']} GB, rollout {lay['rollout_gb_per_gpu']} GB "
           f"(weights {mem['engine_weights_gb']}, KV room {mem['kv_room_gb']})"
           + (f", LoRA {mem['lora_params_m']}M params" if mem['lora_params_m'] else '') + f"; recommended: {lay['recommended']['reason']}")
@@ -98,15 +129,18 @@ def cmd_plan(a):
     if ledger_path.is_file():   # the program budget the next stage would draw from (node-seconds)
         from .budget import remaining_seconds
         ledger = json.loads(ledger_path.read_text())
+        from .budget import reserved_seconds
+        held = reserved_seconds(ledger)
         left = remaining_seconds(ledger['attempts'], ledger['total_seconds'])
         from .budget import node_fraction
         from .stage import CANARY_OVERLAY, canary_overlay_for
-        train = int(node_fraction(cfg) * cfg['budget']['attempt_max_seconds'])
+        train = int(node_fraction(cfg) * (cfg['budget']['attempt_max_seconds'] + 420))   # stage books the 420 s pod-start slack too
         small = canary_overlay_for(cfg) == CANARY_OVERLAY
-        canary = int(min(3600, cfg['budget']['canary_max_seconds'] + 600) * (1 / 8 if small else node_fraction(cfg)))
+        canary = int((min(3600, cfg['budget']['canary_max_seconds'] + 600) + 420) * (1 / 8 if small else node_fraction(cfg)))
         shape = '1-GPU' if small else '{}x{}-GPU'.format(cfg['compute']['nodes'], cfg['compute']['gpus_per_node'])
-        print(f"  budget       {ledger_path}: {left} of {ledger['total_seconds']} node-s left; a train attempt reserves up to "
-              f"{train} node-s, a {shape} canary up to {canary} ({len(ledger['attempts'])} attempts recorded)")
+        print(f"  budget       {ledger_path}: {left} of {ledger['total_seconds']} node-s left"
+              + (f" ({held} held by {len(ledger.get('reservations') or {})} staged launch(es))" if held else '')
+              + f"; a train attempt reserves up to {train} node-s, a {shape} canary up to {canary} ({len(ledger['attempts'])} attempts recorded)")
     for w in report['warnings']:
         print(f'  ! {w}')
     for k, rows in report.get('diff_vs', {}).items():
@@ -121,7 +155,10 @@ def cmd_fetch(a):
     from .models import snapshot_identity, write_identity
     if snapshot_identity(cfg['model'])[0] == 'mismatch':
         raise SystemExit(snapshot_identity(cfg['model'])[1])
-    snapshot_download(cfg['model']['id'], revision=cfg['model']['revision'], local_dir=cfg['model']['local_path'])
+    # top-level files only, exactly what stage uploads and stage-model copies: repos often ship onnx/, runs/ or other subfolders many times
+    # larger than the weights (SmolLM2-1.7B: 19 GB of ONNX next to 3.4 GB of safetensors)
+    snapshot_download(cfg['model']['id'], revision=cfg['model']['revision'], local_dir=cfg['model']['local_path'],
+                      ignore_patterns=['*/*', 'README.md', 'LICENSE', '.gitattributes'])
     write_identity(cfg['model'])
     from .runtime import ROUTER_SHA256, ROUTER_WHEEL
     import hashlib
@@ -224,9 +261,16 @@ def cmd_submit(a):
         raise SystemExit(check.stderr or check.stdout)
     out = _scaletrain('submit', a.job, '--user-id', a.user_id, '--receipt', receipt)
     if out.returncode:  # never resubmit blindly: reconcile by exact job name
-        listing = json.loads(_scaletrain('list', '--user-id', a.user_id, '--limit', '20').stdout or '[]')
-        match = [j for j in listing if j['name'] == job['job_name']]
-        print(json.dumps({'submit_error': (out.stderr or out.stdout).strip()[-300:], 'reconciled_by_name': match[:1]}, indent=1))
+        listed = _scaletrain('list', '--user-id', a.user_id, '--limit', '20')
+        listing = json.loads(listed.stdout or '[]') if not listed.returncode else None
+        match = [j for j in listing or [] if j['name'] == job['job_name']]
+        print(json.dumps({'submit_error': (out.stderr or out.stdout).strip()[-300:], 'reconciled_by_name': match[:1],
+                          'listing_ok': listing is not None}, indent=1))
+        receipt_file = Path(a.job).parent / 'stage.json'
+        definitely_absent = listing is not None and not match   # an ambiguous failure keeps the booking (the job may be live)
+        if definitely_absent and receipt_file.is_file() and json.loads(receipt_file.read_text()).get('ledger'):   # rejected: free its booking
+            from .stage import release_reservation
+            release_reservation(ROOT / json.loads(receipt_file.read_text())['ledger'], None, job['job_name'])
         return
     print(out.stdout.strip())
 
@@ -286,8 +330,6 @@ def record_attempt(experiment: str, attempt: str, job_id: str, *, terminal_at: s
     observation of the job leaving the queue, minus one poll) when known, else conservatively from created_at. ``never_started`` (positive
     evidence that no pod ran) records it uncharged for ANY terminal status. ``overrides`` are the launch's --set values (ledger, storage).
     The read-modify-write is serialized with a file lock and an atomic replace: concurrent launchers share one ledger."""
-    import fcntl
-    import os
     cfg = _load(experiment, overrides)
     ledger_path = Path(ledger) if ledger else ROOT / cfg['budget']['ledger']
     job = job or json.loads(_scaletrain('get', job_id).stdout)
@@ -313,21 +355,25 @@ def record_attempt(experiment: str, attempt: str, job_id: str, *, terminal_at: s
             entry.update(allocated_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(max(created_s, allocated_floor))),
                          evidence='no worker trace: charged from the launcher\'s first observation of the job leaving the queue (minus one poll) '
                                   f'to the terminal observation; queue time (created_at {created}) is not charged')
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(str(ledger_path) + '.lock', 'w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        data = json.loads(ledger_path.read_text())
+    from .budget import locked_ledger
+    with locked_ledger(ledger_path) as data:
         if any(x['job_id'] == job_id for x in data['attempts']):
             raise ValueError(f'{job_id} already recorded')
         data['attempts'].append(entry)
-        tmp = Path(str(ledger_path) + '.tmp')
-        tmp.write_text(json.dumps(data, indent=2) + '\n')
-        os.replace(tmp, ledger_path)
+        from .budget import release_attempt
+        release_attempt(data, attempt)   # release this attempt's share of its launch's reservation
     from .budget import remaining_seconds
     return {'recorded': entry, 'remaining_node_seconds': remaining_seconds(data['attempts'], data['total_seconds'])}
 
 
 def cmd_ledger(a):
+    if a.release:   # a staged attempt that will never be submitted (or was rejected): free its budget booking
+        from .stage import release_reservation
+        ledger = Path(a.ledger) if a.ledger else ROOT / _load(a.experiment, a.set)['budget']['ledger']
+        print(json.dumps({'released': release_reservation(ledger, None, a.release), 'attempt': a.release}))
+        return
+    if not (a.attempt and a.job_id):
+        raise SystemExit('strl ledger needs --attempt and --job-id to record a terminal attempt (or --release ATTEMPT)')
     try:
         out = record_attempt(a.experiment, a.attempt, a.job_id, terminal_at=a.terminal_at, never_started=a.never_started, ledger=a.ledger,
                              overrides=a.set)
@@ -343,7 +389,11 @@ def cmd_launch(a):
 
 def cmd_verify(a):
     from .verify_results import verify
-    print(json.dumps(verify(_load(a.experiment), a.attempt), indent=1, default=str))
+    try:
+        out = verify(_load(a.experiment), a.attempt)
+    except (RuntimeError, FileNotFoundError) as error:
+        raise SystemExit(f'cannot verify {a.attempt}: {error}')
+    print(json.dumps(out, indent=1, default=str))
 
 
 def cmd_compare(a):
@@ -422,7 +472,8 @@ def main(argv=None):
     s = sub.add_parser('status'); s.add_argument('job_id', nargs='?'); s.add_argument('--list', action='store_true'); s.add_argument('--user-id', default=USER)
     s = sub.add_parser('monitor'); s.add_argument('experiment'); s.add_argument('--attempt', required=True); s.add_argument('--job-id')
     s.add_argument('--interval', type=float, default=60); s.add_argument('--once', action='store_true')
-    s = sub.add_parser('ledger'); s.add_argument('experiment'); s.add_argument('--attempt', required=True); s.add_argument('--job-id', required=True)
+    s = sub.add_parser('ledger'); s.add_argument('experiment'); s.add_argument('--attempt'); s.add_argument('--job-id')
+    s.add_argument('--release', metavar='ATTEMPT', help='drop a staged-but-never-submitted attempt from its budget reservation')
     s.add_argument('--terminal-at', help='ISO time of the terminal observation (default: now)')
     s.add_argument('--never-started', action='store_true', help='a terminal job whose pod never ran (verified: no worker-started.json / budget.json): not charged')
     s.add_argument('--set', action='append', default=[], metavar='KEY=VALUE', help="the launch's --set overrides (ledger, storage)")

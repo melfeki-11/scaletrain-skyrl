@@ -10,6 +10,7 @@ _REGISTRY: dict[str, str] = {
     'coding_exec': 'strl.tasks.coding.spec:CodingExecSpec',
     'coding_harbor': 'strl.tasks.coding.spec:CodingHarborSpec',
     'mimo': 'strl.tasks.mimo.spec:MimoSpec',
+    'countdown': 'strl.tasks.countdown.spec:CountdownSpec',
 }
 _CACHE: dict[str, EnvironmentSpec] = {}
 

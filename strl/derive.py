@@ -129,6 +129,11 @@ def memory_estimate_gb(params_b: float, cfg: dict, hf: dict | None = None, *, wo
         hidden, layers, vocab = t['hidden_size'], t['num_hidden_layers'], t.get('vocab_size', 32000)
         per_layer = tokens * hidden * 2 * (1 if tr['gradient_checkpointing'] else 17)
         activations = per_layer * layers + tokens * hidden * 34 + tokens * vocab * 2
+        # FSDP materializes one whole layer at a time: its gathered bf16 params (+ its unsharded grads before the reduce-scatter, in
+        # reduce_dtype, for trained weights). A MoE layer holds every expert, so this term matters there most.
+        layer_params = p / max(1, layers)
+        grad_bytes = 0 if ft['mode'] == 'lora' else (4 if str(tr.get('reduce_dtype', 'fp32')) == 'fp32' else 2)
+        activations += layer_params * (2 + grad_bytes) if group > 1 else 0
     else:   # no config.json (gated or offline): activations cannot be estimated honestly
         return {'training_phase_gb': None, 'rollout_phase_gb': round(H100_GB * inf['gpu_memory_utilization'], 1), 'engine_weights_gb': round(2 * p / tp / 1e9, 1),
                 'kv_room_gb': round(H100_GB * inf['gpu_memory_utilization'] - 2 * p / tp / 1e9, 1), 'host_offload_gb_per_gpu': None, 'fsdp_group': group,
@@ -147,7 +152,7 @@ def fits_one_gpu(cfg: dict, params_b: float | None, hf: dict | None = None) -> b
     return params_b is None or bool(memory_estimate_gb(params_b, cfg, hf, world=1, tp=1, fsdp_size=1)['fits'])
 
 
-def recommend_layout(cfg: dict, bandwidth_gbps: float | None = None) -> dict[str, Any]:
+def recommend_layout(cfg: dict, bandwidth_gbps: float | None = None, hsdp_gb: float | None = None) -> dict[str, Any]:
     """LoRA: HSDP within a node when nodes > 1 (only the small LoRA gradients cross nodes). Full: full shard over every GPU when
     the measured cross-node bandwidth is >= FULL_SHARD_MIN_GBPS, else HSDP + cpu_offload (unknown bandwidth: full shard + NETWORK)."""
     nodes, gpn = cfg['compute']['nodes'], cfg['compute']['gpus_per_node']
@@ -159,19 +164,28 @@ def recommend_layout(cfg: dict, bandwidth_gbps: float | None = None) -> dict[str
         return {'fsdp_size': None, 'cpu_offload': False, 'reason': 'full: cross-node bandwidth unknown, full shard (probe it: NETWORK)'}
     if bandwidth_gbps >= FULL_SHARD_MIN_GBPS:
         return {'fsdp_size': None, 'cpu_offload': False, 'reason': f'full: {bandwidth_gbps:.1f} GB/s cross-node, full shard'}
-    return {'fsdp_size': gpn, 'cpu_offload': True, 'reason': f'full: only {bandwidth_gbps:.1f} GB/s cross-node, HSDP within a node + CPU offload'}
+    if hsdp_gb is not None and hsdp_gb < MEMORY_LIMIT_GB:   # a model whose full state fits sharded over one node needs no offload
+        return {'fsdp_size': gpn, 'cpu_offload': False,
+                'reason': f'full: only {bandwidth_gbps:.1f} GB/s cross-node, HSDP within a node (fsdp_size={gpn}; {hsdp_gb:.0f} GB/GPU without offload)'}
+    return {'fsdp_size': gpn, 'cpu_offload': True, 'reason': f'full: only {bandwidth_gbps:.1f} GB/s cross-node, HSDP within a node + CPU offload'
+            + (f' ({hsdp_gb:.0f} GB/GPU without offload)' if hsdp_gb is not None else '')}
 
 
-def layout(cfg: dict, memory: dict, network: dict | None = None) -> dict[str, Any]:
+def layout(cfg: dict, memory: dict, network: dict | None = None, params_b: float | None = None, hf: dict | None = None) -> dict[str, Any]:
     ft, tr = finetune(cfg), training(cfg)
     lora = ft['lora']
     world = cfg['derived']['world_size']
     bandwidth = ((network or {}).get('bandwidth_gbps') or {}).get('cross_node')
+    hsdp_gb = None
+    if params_b and ft['mode'] == 'full' and cfg['compute']['nodes'] > 1:   # what HSDP within a node costs WITHOUT offload
+        probe = {**cfg, 'compute': {**cfg['compute'], 'training': {**(cfg['compute'].get('training') or {}), 'cpu_offload': False,
+                                                                  'fsdp_size': cfg['compute']['gpus_per_node']}}}
+        hsdp_gb = memory_estimate_gb(params_b, probe, hf).get('training_phase_gb')
     return {'mode': ft['mode'] if ft['mode'] == 'full' else f"lora r{lora['rank']} a{lora['alpha']} {lora['target_modules']}",
             'fsdp_group': memory['fsdp_group'], 'replicas': world // memory['fsdp_group'], 'cpu_offload': tr['cpu_offload'],
             'tp': cfg['inference']['tensor_parallel_size'], 'engines': cfg['derived']['num_engines'],
             'train_gb_per_gpu': memory['training_phase_gb'], 'rollout_gb_per_gpu': memory['rollout_phase_gb'],
-            'recommended': recommend_layout(cfg, bandwidth)}
+            'recommended': recommend_layout(cfg, bandwidth, hsdp_gb)}
 
 
 def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float | None, timing: dict,
@@ -202,9 +216,15 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
     if a['max_generate_length'] >= 1024:
         out.append(f'SPEED: max_generate_length={a["max_generate_length"]}: generation time is set by the longest sequence (eager decode); '
                    'halving it roughly halves generate time. Truncated rollouts get reward 0 (zero_reward_on_non_stop).')
-    if e['checkpoint_interval_steps'] != e['interval_steps']:
+    if e['checkpoint_interval_steps'] != e['interval_steps'] and e.get('final_eval', True):   # no selection with the in-loop result
         out.append('SELECTION: only exported steps can be selected as the final checkpoint; checkpoint_interval_steps == interval_steps makes every '
                    'validated step eligible (costs one HF export per eval).')
+    if e.get('final_eval', True):
+        from .experiment import eval_layout
+        if not eval_layout(cfg)[2]:
+            out.append(f"EVAL: the offline final eval runs base THEN trained on the same {cfg['inference'].get('tensor_parallel_size') or 1} GPU(s) "
+                       f"(not enough GPUs for both at TP {cfg['inference'].get('tensor_parallel_size') or 1}): about twice the eval time; "
+                       f"budget.final_eval_reserve_seconds ({b['final_eval_reserve_seconds']}) must cover both.")
     if a['use_kl_loss'] and a['kl_coef'] == 0:
         out.append('MEMORY: use_kl_loss with kl_coef 0 keeps a reference model for nothing; set use_kl_loss: false.')
     if a['lr'] > 1e-5 and not lora:
@@ -213,7 +233,7 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
     if nondefault:
         out.append(f'REWARD: shaping terms {[c["fn"] for c in nondefault]} are trained on but NOT the yardstick: judge the run by eval/task_metric '
                    'and the held-out test, and watch environment/reward_components/* for terms that rise while the task metric does not (reward hacking).')
-    seconds = b['attempt_max_seconds'] - b['bootstrap_margin_seconds'] - b['final_eval_reserve_seconds'] - 550
+    seconds = b['attempt_max_seconds'] - b['bootstrap_margin_seconds'] - train_reserve(cfg) - 550
     steps = int(seconds / timing['step_s']) if timing['step_s'] > 0 else 0
     if steps < min(20, int(a.get('max_steps') or 20)):   # silent when the configured max_steps already fits
         out.append(f'BUDGET: only ~{steps} optimizer steps fit in the attempt after startup and final-eval reserve (max_steps {a.get("max_steps")}); '
@@ -241,9 +261,24 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
     if memory and memory['kv_room_gb'] <= 1.0:
         out.append(f"MEMORY: vLLM weights {memory['engine_weights_gb']} GB/GPU leave no KV room inside gpu_memory_utilization "
                    f"({memory['rollout_phase_gb']} GB): raise inference.tensor_parallel_size or gpu_memory_utilization.")
-    if nodes > 1 and not (network or {}).get('efa_available'):
-        out.append('NETWORK: EFA is unverified for this multi-node job (no probe result): the worker probe records the NCCL transport and '
-                   'cross-node all-gather GB/s in network.json; on NET/Socket prefer LoRA or HSDP (compute.training.fsdp_size = gpus_per_node).')
+    cross = ((network or {}).get('bandwidth_gbps') or {}).get('cross_node')
+    if nodes > 1 and not network:
+        out.append('NETWORK: no probe result for this multi-node job: the worker probe records the NCCL transport and cross-node GB/s in '
+                   'network.json; on NET/Socket prefer LoRA or HSDP (compute.training.fsdp_size = gpus_per_node).')
+    elif nodes > 1 and not network.get('efa_available'):
+        source = network.get('source', 'the given probe')
+        line = (f"NETWORK: measured {network.get('transport', '?')} transport, {cross} GB/s cross-node ({source}; EFA absent).")
+        if cross and not lora:   # full fine-tuning moves gradients (and, with full shard, parameters) across nodes every step
+            tr = training(cfg)
+            group = tr['fsdp_size'] or cfg['derived']['world_size']
+            p = (params_b or 0) * 1e9
+            grad = (4 if str(tr.get('reduce_dtype', 'fp32')) == 'fp32' else 2) * p / group
+            gather = 0.0 if group <= cfg['compute']['gpus_per_node'] else 2 * p * 4   # full shard: params all-gathered for ~4 passes
+            global_bw = ((network.get('bandwidth_gbps') or {}).get('global') or cross)
+            seconds = grad / (cross * 1e9) + gather / (global_bw * 1e9)
+            line += (f' Full fine-tuning: ~{seconds:.0f} s of cross-node collectives per optimizer step (estimate, not in the step time above); '
+                     'HSDP gives the same per-GPU memory as one node, so a second node only buys rollout throughput.')
+        out.append(line)
     if nodes > 1 and lora:
         out.append('LORA_SYNC: SkyRL writes the LoRA adapter to a node-local lora_sync_path from global rank 0 only; strl patches the FSDP '
                    'worker so the first rank on every host writes its own copy before the engines reload it (contract-tested on CPU; '
@@ -270,6 +305,15 @@ def params_and_config(cfg: dict) -> tuple[models.ModelProfile, dict | None, floa
     return profile, hf, params_b
 
 
+def train_reserve(cfg: dict) -> int:
+    """What the worker keeps free at the end of a train attempt (strl.worker.train_reserve_seconds, mirrored without importing the pod code):
+    the offline final eval's reserve, or the in-loop result's forced eval + export window (480 s hard stop + 120 s), + retention."""
+    retention = 900 if (cfg.get('evaluation') or {}).get('retention') else 0
+    if cfg['evaluation'].get('final_eval', True):
+        return int(cfg['budget']['final_eval_reserve_seconds']) + retention
+    return 480 + 120 + retention
+
+
 def plan(cfg: dict, network: dict | None = None) -> dict:
     """``network``: a probe result (artifacts/network.json of an earlier attempt) the layout recommendation is based on."""
     env = get_environment(cfg['environment']['name'])
@@ -281,7 +325,7 @@ def plan(cfg: dict, network: dict | None = None) -> dict:
         memory['measured_peak_gb'] = max(r['memory_peak_gb'] for r in seen)
         memory['measured_in'] = seen[-1]['name']
     budget = cfg['budget']
-    usable = budget['attempt_max_seconds'] - budget['bootstrap_margin_seconds'] - budget['final_eval_reserve_seconds'] - 550
+    usable = budget['attempt_max_seconds'] - budget['bootstrap_margin_seconds'] - train_reserve(cfg) - 550
     a = cfg['algorithm']
     per_gpu = cfg['derived']['rollouts_per_step'] // max(1, cfg['derived']['world_size'])
     out = {
@@ -304,7 +348,7 @@ def plan(cfg: dict, network: dict | None = None) -> dict:
                       'note': 'estimates: extrapolated from the nearest measured profile; the 1-GPU canary measures the real numbers'},
         'monitoring': {'wandb': f"{cfg['tracking']['base_url']}/{cfg['tracking']['entity']}/{cfg['tracking']['project']} group={cfg['tracking']['group']}",
                        'critic': cfg['tracking'].get('critic', {}).get('enabled', False)},
-        'layout': layout(cfg, memory, network),
+        'layout': layout(cfg, memory, network, params_b, hf),
         'warnings': warnings(cfg, env, profile, params_b, timing, memory, network, hf=hf),
     }
     return out

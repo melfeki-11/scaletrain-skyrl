@@ -1,0 +1,39 @@
+# Base experiment: Countdown (reach a target with + - * / over 3-5 integers, each at most once). Single-turn, verifiable, no external
+# services; problems are generated deterministically from environment.countdown.seed by `strl prepare` (no download).
+# Held-out sets are cut first (test, then validation), so changing train_size never changes them.
+name: countdown-base
+description: Countdown arithmetic GRPO, Qwen3.5-0.8B (strl_env generic reward path)
+
+extends: base/infra.yaml
+
+environment:
+  name: countdown
+  countdown:
+    seed: 20261009
+    train_size: 512
+    validation_size: 100          # train-pool-disjoint validation (in-loop eval); the test split is only for the offline final eval
+    test_size: 200
+    min_numbers: 3
+    max_numbers: 5
+    max_number: 25                # small numbers are 1..max_number
+    big_numbers: [25, 50, 75, 100]
+    big_number_prob: 0.15         # chance each number is drawn from big_numbers instead
+    min_target: 10
+    max_target: 999               # every problem is solvable by construction (reference solution in extra_info only)
+
+reward:                           # strl/tasks/countdown/rewards.py
+  components:
+    - {fn: countdown_correct, weight: 1.0}
+
+algorithm:
+  max_generate_length: 1024
+
+evaluation:
+  eval_batch_size: 100            # == validation_size
+
+tracking:
+  project: scaletrain-rl-envs
+  group: countdown
+
+run:
+  data_dir: assets/countdown/data

@@ -19,7 +19,8 @@ team started at once. No single route is reliably fastest, so the launcher RACES
      attempt that left a durable checkpoint (evaluation.durable_checkpoints) or starting fresh.
 
 Only one route can ever train: the loser cancellation is the guarantee, not luck; a loser that cannot be settled fails the launch loudly.
-Budget: stage only CHECKS the remaining budget (no reservation), so concurrent launches against one ledger can overspend it together.
+Budget: stage checks AND books each race's worst case in the ledger (one booking per race, released as its attempts are recorded or rejected,
+kept alive hourly while waiting or running), so concurrent launches cannot overspend a program.
 """
 from __future__ import annotations
 
@@ -58,6 +59,8 @@ class Api:
     record: Callable[..., Any]                     # (experiment, attempt, job_id, never_started=, terminal_at=, allocated_floor=) -> ledger receipt
     pods_started: Callable[[str, str], bool | None]   # (experiment, attempt) -> did a pod ever run (budget.json / worker-started.json); None = unknown
     has_checkpoint: Callable[[str, str], bool] = lambda experiment, attempt: True   # durable checkpoint in S3 (resume candidates)
+    release: Callable[[str, str, str], Any] = lambda experiment, group, attempt: None   # drop a staged-but-rejected route's budget booking
+    touch: Callable[[str, str], Any] = lambda experiment, group: None                    # keep a waiting/running launch's booking alive
     clock: Callable[[], float] = time.time
     sleep: Callable[[float], Any] = time.sleep
     log: Callable[[str], Any] = field(default=lambda m: print(m, flush=True))
@@ -163,16 +166,19 @@ def race(experiment: str, attempt: str, mode: str, api: Api, *, overrides: list[
     if not jobs:
         raise RuntimeError('no route was accepted by ScaleTrain')
     try:
-        return _poll_routes(api, experiment, poll, max_wait_seconds, chosen, jobs, receipts, seen)
+        return _poll_routes(api, experiment, poll, max_wait_seconds, chosen, jobs, receipts, seen, group=attempt)
     except BaseException:   # Ctrl-C / an error while waiting: cancel everything still unsettled before leaving
         api.log('launch interrupted while waiting for capacity: cancelling every submitted route')
         _settle_losers(api, experiment, dict(jobs), poll, seen=seen)
         raise
 
 
-def _poll_routes(api, experiment, poll, max_wait_seconds, chosen, jobs, receipts, seen) -> dict:
-    started_at, last, ran, unknown_polls = api.clock(), {}, {}, 0
+def _poll_routes(api, experiment, poll, max_wait_seconds, chosen, jobs, receipts, seen, group=None) -> dict:
+    started_at, last, ran, unknown_polls, touched = api.clock(), {}, {}, 0, api.clock()
     while True:
+        if group and api.clock() - touched >= 3600:   # a long queue keeps its booking (TTL counts from the last touch)
+            api.touch(experiment, group)
+            touched = api.clock()
         states = {name: _state(api, job_id) for name, job_id in jobs.items()}
         for n, (st, _) in states.items():
             if ACTIVE(st):
@@ -222,21 +228,30 @@ def _submit_routes(api, experiment, attempt, mode, chosen, overrides, jobs, rece
             api.log(f'a submitted route already started: not submitting {name} or later routes')
             break
         extra = [] if borrow else ['compute.allow_borrowing=false']
-        receipts[name] = api.stage(experiment, attempt=name, mode=mode, team=team, allow_borrowing=borrow, overrides=[*(overrides or []), *extra])
+        api.log(f'staging {name} (payload, data and any local model files are uploaded: a few GB take minutes)')
+        receipts[name] = api.stage(experiment, attempt=name, mode=mode, team=team, allow_borrowing=borrow, overrides=[*(overrides or []), *extra],
+                                   reservation=attempt)   # the routes of one race share one budget reservation
+        # api.submit returns None ONLY when the job definitely does not exist (validation failed, or the reconcile listing succeeded without
+        # it); an ambiguous failure raises, and then the booking is kept (the job may be live): TTL or `strl ledger --release` frees it
         job_id = api.submit(receipts[name]['job_file'])
         if job_id:
             jobs[name] = job_id
             api.log(f'submitted {name}: team={team} borrowing={borrow} job={job_id}')
         else:
-            api.log(f'{name} was not accepted by ScaleTrain; continuing with the other routes')
+            api.release(experiment, attempt, name)
+            api.log(f'{name} was not accepted by ScaleTrain (booking released); continuing with the other routes')
 
 
 def watch(experiment: str, attempt: str, job_id: str, api: Api, *, poll: float = 60.0, seen_at: float | None = None,
-          floor_poll: float | None = None) -> dict:
+          floor_poll: float | None = None, group: str | None = None) -> dict:
     """Follow a started job to its end. Returns {'outcome': 'terminal'|'preempted', 'status', ...} after recording it in the ledger.
     ``seen_at``: when the race first saw it allocated (the charge floor when the pod left no budget.json, e.g. a bootstrap failure)."""
     seen_at = seen_at if seen_at is not None else api.clock()
+    touched = api.clock()
     while True:
+        if group and api.clock() - touched >= 3600:
+            api.touch(experiment, group)
+            touched = api.clock()
         status, detail = _state(api, job_id)
         if status in TERMINAL:
             receipt = _record(api, experiment, attempt, job_id, allocated_floor=seen_at - (floor_poll if floor_poll is not None else poll))
@@ -260,7 +275,7 @@ def launch(experiment: str, attempt: str, mode: str, api: Api, *, overrides: lis
         history.append(result)
         if not result.get('winner') or not follow:
             break
-        outcome = watch(experiment, result['winner'], result['job_id'], api, seen_at=result.get('winner_seen_at'), floor_poll=poll)
+        outcome = watch(experiment, result['winner'], result['job_id'], api, seen_at=result.get('winner_seen_at'), floor_poll=poll, group=name)
         if any(x.get('unsettled') for x in outcome.get('settled') or []):
             result['outcome'] = outcome
             api.log('the preempted job could not be settled: NOT relaunching (two attempts could train at once)')
@@ -288,9 +303,9 @@ def real_api(user_id: str, overrides: list[str] | None = None) -> Api:
     from . import cli
     from .stage import stage as stage_fn
 
-    def stage(experiment, *, attempt, mode, team, allow_borrowing, overrides):
+    def stage(experiment, *, attempt, mode, team, allow_borrowing, overrides, reservation=None):
         receipt = stage_fn(experiment, attempt=attempt, mode=mode, team=team, allow_borrowing=allow_borrowing,
-                           output=f'evidence/{attempt}/job.json', overrides=overrides)
+                           output=f'evidence/{attempt}/job.json', overrides=overrides, reservation=reservation)
         Path(f'evidence/{attempt}').mkdir(parents=True, exist_ok=True)
         Path(f'evidence/{attempt}/stage.json').write_text(json.dumps(receipt, indent=2))
         return receipt
@@ -303,8 +318,11 @@ def real_api(user_id: str, overrides: list[str] | None = None) -> Api:
         out = cli._scaletrain('submit', job_file, '--user-id', user_id, '--receipt', receipt)
         if out.returncode == 0:
             return json.loads(out.stdout.strip().splitlines()[-1])['id']
-        listing = json.loads(cli._scaletrain('list', '--user-id', user_id, '--limit', '30').stdout or '[]')   # reconcile, never resubmit
-        match = [j for j in listing if j['name'] == job['job_name']]
+        listed = cli._scaletrain('list', '--user-id', user_id, '--limit', '30')   # reconcile by name, never resubmit
+        if listed.returncode:
+            raise RuntimeError(f"submit of {job['job_name']} failed and the reconcile listing failed too: the job may exist; check "
+                               f'`strl status --list` before relaunching (its budget booking is kept)')
+        match = [j for j in json.loads(listed.stdout or '[]') if j['name'] == job['job_name']]
         return match[0]['id'] if match else None
 
     def get(job_id: str) -> dict:
@@ -338,7 +356,25 @@ def real_api(user_id: str, overrides: list[str] | None = None) -> Api:
         except (Exception, SystemExit):
             return False
 
-    return Api(stage=stage, submit=submit, get=get, cancel=cancel, record=record, pods_started=pods_started, has_checkpoint=has_checkpoint)
+    def _ledger(experiment):
+        return cli.ROOT / cli._load(experiment, overrides)['budget']['ledger']
+
+    def release(experiment, group, attempt):
+        from .stage import release_reservation
+        try:
+            release_reservation(_ledger(experiment), group, attempt)
+        except (Exception, SystemExit) as error:
+            print(f'could not release the booking of {attempt}: {error}; strl ledger <exp> --release {attempt}', flush=True)
+
+    def touch(experiment, group):
+        from .stage import touch_reservation
+        try:
+            touch_reservation(_ledger(experiment), group)
+        except (Exception, SystemExit):
+            pass
+
+    return Api(stage=stage, submit=submit, get=get, cancel=cancel, record=record, pods_started=pods_started, has_checkpoint=has_checkpoint,
+               release=release, touch=touch)
 
 
 def _problems(history: list[dict]) -> list[dict]:
@@ -394,5 +430,38 @@ def main_launch(a) -> int:
     if (last.get('outcome') or {}).get('outcome') == 'preempted':
         print(f"\n{last['winner']} was preempted and no relaunch was left (--relaunch-on-preempt N to continue)", file=sys.stderr)
         return 4
+    if a.mode == 'dry' and (last.get('outcome') or {}).get('status') == 'COMPLETED':
+        print(dry_run_summary(a.experiment, last['winner'], a.set))
     print(f"\nnext: python -m strl monitor {a.experiment} --attempt {last['winner']} --job-id {last['job_id']}")
     return 0
+
+
+def dry_run_summary(experiment: str, attempt: str, overrides: list[str] | None = None) -> str:
+    """One screen of what a finished dry run proved (artifacts/dry-run.json), so nobody has to dig through S3 for it."""
+    try:
+        import boto3
+        from . import cli
+        st = cli._load(experiment, overrides)['storage']
+        key = f"{st['prefix']}/attempts/{attempt}/artifacts/dry-run.json"
+        d = json.loads(boto3.Session(profile_name=st['profile']).client('s3').get_object(Bucket=st['bucket'], Key=key)['Body'].read())
+    except (Exception, SystemExit) as error:
+        return f'\ndry run {attempt}: could not read dry-run.json ({type(error).__name__}: {error})'
+    g = d.get('gates') or {}
+    v = g.get('skyrl_validate') or {}
+    lines = [f"\ndry run {attempt}: {d.get('status')}  (s3://{st['bucket']}/{key})",
+             f"  model_code   {(d.get('model_code') or {}).get('status')} {(d.get('model_code') or {}).get('class')}",
+             f"  skyrl        validated={v.get('validated')} overrides={v.get('overrides')} generator_contract="
+             f"{'passed' if (v.get('generator') or {}).get('generator_config_passed') else (v.get('generator') or {})}",
+             f"  layout       {json.dumps(v.get('layout') or {}, default=str)[:400]}",
+             f"  environment  {json.dumps(g.get('environment'), default=str)[:300]}",
+             f"  wandb        {json.dumps(g.get('wandb'), default=str)[:160]}"]
+    for name in ('critic', 'durable_checkpoint_io', 'ceiling'):
+        if name in g:
+            lines.append(f"  {name:<12} {json.dumps(g[name], default=str)[:300]}")
+    gen = v.get('generator') or {}
+    for key in ('shaping', 'generic_reward_samples', 'cases'):   # the reward contract's per-case rewards (mimo / gsm8k / countdown-style)
+        if gen.get(key):
+            lines.append(f"  rewards      {key}: {json.dumps(gen[key], default=str)[:400]}")
+    if d.get('network'):
+        lines.append(f"  network      {json.dumps(d['network'], default=str)[:200]}")
+    return '\n'.join(lines)

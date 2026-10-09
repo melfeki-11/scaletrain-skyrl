@@ -14,7 +14,8 @@ class LlamaProfile(ModelProfile):
     name = 'llama'
     architectures = ('LlamaForCausalLM',)
     verified = 'preflight'
-    notes = 'Dense Llama: no thinking toggle; terminal EOS is <|eot_id|> (pass it to scorers that strip terminal markers).'
+    notes = ('Llama architecture: no thinking toggle. The end-of-turn token comes from the chat template, not the architecture (Llama 3: '
+             '<|eot_id|>; SmolLM2: <|im_end|>); the GSM8K scorer strips every known terminal marker (strl/tasks/gsm8k/answers.py).')
     thinking_flag = False
 
 

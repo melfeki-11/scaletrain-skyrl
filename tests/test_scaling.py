@@ -325,6 +325,57 @@ class Staging(unittest.TestCase):
         with self.assertRaises(RuntimeError):      # 1800 node-s left = 900 s at 2 nodes: not enough for an attempt
             self.stage('train')
 
+    def _stage_as(self, attempt, mode='train', s3=None, reservation=None):
+        from strl.stage import stage
+        return stage(str(TMP / 'exp.yaml'), attempt=attempt, mode=mode, ledger=str(TMP / 'ledger.json'), output=str(TMP / f'{attempt}.json'),
+                     s3=s3 or FakeS3(), now=time.struct_time((2026, 10, 6, 12, 0, 0, 0, 279, 0)), reservation=reservation)
+
+    def test_concurrent_launches_cannot_overspend_one_ledger(self):
+        held = lambda: json.loads((TMP / 'ledger.json').read_text()).get('reservations') or {}
+        (TMP / 'ledger.json').write_text(json.dumps({'total_seconds': 5000, 'nodes': 2, 'attempts': []}))   # one 2 x 8 booking = 1800 s x 2 = 3600
+        first = self._stage_as('mn-a1-fb', reservation='mn-a1')
+        self._stage_as('mn-a1-rb', reservation='mn-a1')                       # a race's routes share ONE reservation
+        self.assertEqual(list(held()), ['mn-a1'])
+        self.assertEqual(held()['mn-a1']['node_seconds'], int((first['remaining_seconds'] + 420) * 2))   # + pod-start slack
+        self.assertEqual(held()['mn-a1']['attempts'], ['mn-a1-fb', 'mn-a1-rb'])
+        with self.assertRaises(RuntimeError):                                  # another launch sees only what is left
+            self._stage_as('mn-b1')
+        self._stage_as('mn-d1', mode='dry')                                    # CPU dry runs are free: never blocked, never booked
+        self.assertEqual(list(held()), ['mn-a1'])
+        from strl.stage import release_reservation
+        release_reservation(TMP / 'ledger.json', 'mn-a1', 'mn-a1-rb')
+        release_reservation(TMP / 'ledger.json', 'mn-a1', 'mn-a1-fb')
+        self.assertEqual(held(), {})
+        self._stage_as('mn-b1')                                                # released: the budget is available again
+
+    def test_recording_an_attempt_releases_its_reservation(self):
+        from unittest import mock
+        from strl import cli
+        (TMP / 'ledger.json').write_text(json.dumps({'total_seconds': 5000, 'nodes': 2, 'attempts': [],
+                                                    'reservations': {'mn-a1': {'node_seconds': 3600, 'attempts': ['mn-a1-fb'], 'created': time.time()}}}))
+        Path('evidence/mn-a1-fb').mkdir(parents=True, exist_ok=True)
+        Path('evidence/mn-a1-fb/stage.json').write_text(json.dumps({'gpu_fraction': 1.0, 'nodes': 2}))
+        try:
+            with mock.patch.object(cli, 'allocation_start', lambda cfg, attempt: None), mock.patch.object(cli, 'worker_started', lambda cfg, attempt: False):
+                out = cli.record_attempt(str(TMP / 'exp.yaml'), 'mn-a1-fb', 'job-1', ledger=str(TMP / 'ledger.json'), never_started=True,
+                                         job={'status': 'CANCELED', 'created_at': '2026-10-06 00:00:00+00:00'})
+        finally:
+            shutil.rmtree('evidence/mn-a1-fb', ignore_errors=True)
+        self.assertIsNone(out['recorded']['allocated_at'])
+        self.assertEqual(json.loads((TMP / 'ledger.json').read_text()).get('reservations'), {})
+
+    def test_the_receipt_names_the_ledger_actually_booked(self):
+        receipt = self._stage_as('mn-l1')
+        self.assertEqual(Path(receipt['ledger']).resolve(), (TMP / 'ledger.json').resolve())   # the explicit --ledger, not the YAML's
+
+    def test_a_failed_stage_releases_its_reservation(self):
+        class Broken(FakeS3):
+            def put_object(self, **kw):
+                raise OSError('S3 down')
+        with self.assertRaises(OSError):
+            self._stage_as('mn-x1', s3=Broken())
+        self.assertEqual(json.loads((TMP / 'ledger.json').read_text()).get('reservations') or {}, {})
+
     def test_model_already_in_s3(self):
         from strl.stage import MODEL_MANIFEST, model_prefix, stage_model
         shutil.rmtree(TMP / 'model')
@@ -804,10 +855,18 @@ class Retention(unittest.TestCase):
         self.assertEqual((rcfg['_retention_limit'], rcfg['evaluation']['eval_shards_per_model']), (300, 1))
         self.assertIsNone(retention_config(load('experiments/mimo-qwen38-27b-lora.yaml')))
 
-    def test_retention_needs_two_gpus_and_reserves_time(self):
-        from strl.worker import train_reserve_seconds
+    def test_retention_rejects_a_tp_larger_than_the_node(self):
         with self.assertRaises(ExperimentError):
-            load('experiments/mimo-qwen35-0p8b-smoke.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])   # 1 GPU
+            load('experiments/mimo-qwen35-0p8b-smoke.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}',
+                                                                         'inference.tensor_parallel_size=2'])
+
+    def test_retention_follows_this_pods_gpus_and_reserves_time(self):
+        from strl.experiment import eval_layout, retention_config
+        from strl.worker import train_reserve_seconds
+        one = load('experiments/mimo-qwen35-0p8b-smoke.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])   # 1 GPU
+        self.assertEqual(eval_layout(retention_config(one)), (1, 1, False))            # base then trained on the one GPU this pod has
+        two = load('experiments/mimo-phi4-mini-lora-verify.yaml', overrides=['inference.tensor_parallel_size=2'])    # review: was placed on GPUs 2,3
+        self.assertEqual(eval_layout(retention_config(two)), (1, 2, False))
         cfg = load('experiments/mimo-qwen38-27b-lora.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])
         self.assertEqual(train_reserve_seconds(cfg, 'train') - train_reserve_seconds(load('experiments/mimo-qwen38-27b-lora.yaml'), 'train'), 900)
 
@@ -852,3 +911,12 @@ class FullModeSwitch(unittest.TestCase):
         from strl.overrides import scaling_values
         cfg = load(str(ROOT / 'experiments/mimo-phi4-mini-lora-verify.yaml'), overrides=['finetune.mode=full', 'algorithm.lr=1e-6'])
         self.assertFalse(any(k.startswith('trainer.policy.model.lora') for k in scaling_values(cfg, 10)))
+
+
+class PlanMirrorsWorker(unittest.TestCase):
+    def test_plan_train_reserve_matches_the_worker(self):
+        from strl.derive import train_reserve
+        from strl.worker import train_reserve_seconds
+        for path in ('experiments/gsm8k-qwen35.yaml', 'experiments/mimo-phi4-mini-lora-verify.yaml', 'experiments/mimo-qwen35-0p8b-2node-smoke.yaml'):
+            cfg = load(path)
+            self.assertEqual(train_reserve(cfg), train_reserve_seconds(cfg, 'train'), path)

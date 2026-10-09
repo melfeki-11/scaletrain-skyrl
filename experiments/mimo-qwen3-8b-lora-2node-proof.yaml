@@ -1,0 +1,50 @@
+# Bounded 2 x 8 H100 proof of experiments/mimo-qwen3-8b-lora-2node.yaml (ran as fa-q3pf-a1-fb, 3,634 node-s, verified) (Qwen3-8B LoRA r64, MiMo cyber + code, native reward).
+# Goal: >= 2 optimizer updates on both nodes, the in-loop paired result, strl verify, W&B evidence, inside a 9,000 node-s ledger with a retry.
+# Sizing (train mode, in-loop eval): the worker gets attempt_max - 180 s; training must stop by deadline - 600 s (child hard stop 480 + 120,
+# strl/worker.py train_reserve_seconds), and after step 1 the predictive stop needs now + 1.15 x step + eval + 120 < that. Expected for 8B
+# on 2 x 8: startup ~600 s, eval ~200-250 s, step ~300-400 s (caps 180 s agent + <=150 s verifier, step deadline 480 s) -> step 1 ends at
+# ~1,250 s and needs a train deadline >= ~2,080 s -> attempt_max 2,700 (worker 2,520, train deadline 1,920-2,080 typical-to-slow margin).
+# Expected charge ~ (420 + ~2,000) x 2 = ~4,800 node-s (calibration: v3smk3-fb, 0.8B same shape, 1,675 s wall incl. retention);
+# worst case 2 x (420 + 2,520) = 5,880. Retry margin: an early failure (startup / first step, the common failure mode in validation.md)
+# leaves >= 5,400 node-s for a full second attempt; a late failure leaves a shorter one (stage clamps it to the remaining budget).
+# A separate --mode canary would reserve min(3600, canary_max + 600) x 2 = 7,200 node-s and cannot fit next to a train attempt, so this
+# canary-sized train run (2 updates, 32 rollouts/step, 8 held-out trials) IS the canary, as experiments/mimo-qwen35-0p8b-2node-smoke.yaml is.
+name: mimo-qwen3-8b-lora-2node-proof
+description: 2x8 proof, Qwen3-8B LoRA r64, MiMo cyber+code, native reward, 2 updates, budget-fitted caps
+extends: experiments/mimo-qwen3-8b-lora-2node.yaml
+
+environment:
+  harbor: {max_seq_len: 16384, max_concurrency: 64, max_turns: 8}
+  mimo:
+    eval_repeats: 1
+    canary: 2
+    step_deadline_sec: 480            # >= max agent + verifier + 120 s of every domain (180 + 150 + 120 = 450)
+    domains:                          # test lowered to 4 (reuses assets/mimo/data; same fixed held-out ids at step 0 and step 2)
+      cyber: {train: 24, test: 4, max_agent_sec: 180, max_verifier_sec: 90, max_turns: 8}
+      code:  {train: 24, test: 4, max_agent_sec: 180, max_verifier_sec: 150, max_turns: 8}
+
+algorithm:
+  prompts_per_step: 8                 # 4 per domain x 4 samples = 32 trajectories = 2 per GPU on 16 GPUs
+  minibatch_prompts: 8
+  n_samples: 4
+  max_steps: 2
+
+evaluation:
+  interval_steps: 2                   # base eval at step 0, trained eval at step 2
+  checkpoint_interval_steps: 2
+  fixed_qualitative_samples: 8
+  durable_checkpoints: false          # 2 steps only: a resume would restart anyway; saves the per-rank checkpoint upload
+
+budget:
+  total_seconds: 9000
+  attempt_max_seconds: 2700
+  stall_seconds: 1080                 # step_deadline_sec + 600
+  save_optimizer_state: false         # one HF/LoRA export at the stop step
+  ledger: evidence/ledgers/fresh-agent-multinode.json
+
+limits:
+  max_attempt_seconds: 2700
+
+tracking:
+  group: mimo-qwen3-8b-2node
+  tags: ['nodes:2', 'finetune:lora', 'model:qwen3-8b', 'domains:cyber+code', 'proof']

@@ -17,6 +17,8 @@ before anything else: it validates, derives the infrastructure, estimates time/c
 | `mimo-qwen35-0p8b-2node-smoke.yaml` | model, compute: 2 x 8 | multi-node smoke at 0.8B (rendezvous, 16-rank NCCL, LoRA sync, export gather, retention) |
 | `mimo-qwen38-27b-lora-run1.yaml` / `-run1-1node.yaml` | selection, budget | the 27B main run on 2 x 8 and its 1 x 8 fallback |
 | `mimo-example-music-code-full.yaml` | domains, finetune mode, reward (shaping) | template for a new MiMo program: subset, full fine-tuning, custom shaping term |
+| `mimo-qwen3-8b-lora-2node.yaml` / `-proof.yaml` | model (8B), domains (cyber + code), 2 x 8 | mid-size dense LoRA on 2 nodes; the bounded `-proof` variant ran and verified (`fa-q3pf-a1-fb`) |
+| `countdown-qwen35.yaml` | environment (`countdown`, new) | single-turn verifiable arithmetic; the template for adding your own environment; 1-GPU offline final eval |
 | `mimo-phi4-mini-lora-verify.yaml` | model (non-Qwen), LoRA, reward, eval | Phi-4-mini on music+cyber: shaped reward, durable checkpoints (resume), GSM8K retention |
 | `gsm8k-qwen35-2node-smoke.yaml` / `-full.yaml` | compute: 2 nodes | multi-node smoke on GSM8K, LoRA / full |
 

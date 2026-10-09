@@ -35,8 +35,9 @@ def prefix_property(tokenizer: Any, chat_kwargs: dict | None = None) -> dict:
             return {'ok': True, 'detail': f'history keeps the generation prompt and reply verbatim (ending {ender!r}): turns can merge'}
     expected = p1 + reply + (enders[0] if enders else '')
     k = next((i for i, (a, b) in enumerate(zip(expected, p2)) if a != b), min(len(expected), len(p2)))
-    return {'ok': False, 'detail': f'history diverges from the generated prefix at char {k}: generated {expected[max(0, k - 24):k + 12]!r} '
-                                   f'vs rendered {p2[max(0, k - 24):k + 12]!r}'}
+    return {'ok': False, 'detail': f'on a probe conversation (user, assistant reply {reply!r}, user) the re-rendered history diverges from '
+                                   f'what the model generated at char {k}: generated {expected[max(0, k - 24):k + 12]!r} vs re-rendered '
+                                   f'{p2[max(0, k - 24):k + 12]!r} (typically the template drops or rewrites the thinking block)'}
 
 
 def end_of_turn_tokens(tokenizer: Any) -> list[str]:

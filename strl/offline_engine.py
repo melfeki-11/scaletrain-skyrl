@@ -22,7 +22,8 @@ def build(cfg: dict, profile: Any, model: str | Path, *, max_model_len: int, gpu
     """(engine, lora_request or None). ``model`` is a model directory, or a PEFT adapter directory (served on cfg.model.local_path)."""
     from vllm import LLM
     from .lora import is_adapter
-    kwargs = dict(tokenizer=cfg['model']['local_path'], tensor_parallel_size=1, dtype=cfg['model']['dtype'],
+    # the experiment's serving TP (each eval shard is given that many GPUs): a model too large for one GPU must not train and then fail here
+    kwargs = dict(tokenizer=cfg['model']['local_path'], tensor_parallel_size=int(cfg['inference'].get('tensor_parallel_size') or 1), dtype=cfg['model']['dtype'],
                   enforce_eager=cfg['inference']['enforce_eager'], gpu_memory_utilization=gpu_memory_utilization, max_model_len=max_model_len,
                   max_num_seqs=128, disable_log_stats=True, **profile.vllm_kwargs(cfg))
     if is_adapter(model):

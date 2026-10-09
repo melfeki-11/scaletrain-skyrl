@@ -1,0 +1,58 @@
+# Countdown on Qwen3.5-0.8B, LoRA r32, ONE GPU: the shipped experiment of the `countdown` environment (strl/tasks/countdown), which a
+# fresh agent added from references/extending.md. The template for adding your own single-turn verifiable environment.
+# Reward: the binary yardstick + a small closeness term for valid, legal expressions that miss (training reward only; the task metric
+# stays `correct`). The offline final eval runs on the same GPU, base then trained, on the 200 held-out problems.
+# Data: `strl prepare experiments/countdown-qwen35.yaml` writes assets/countdown/data (512 train / 100 validation / 200 test).
+# Budget: point budget.ledger at YOUR program's ledger (plan prints LEDGER until it exists).
+name: countdown-qwen35
+description: Countdown arithmetic, Qwen3.5-0.8B, LoRA r32, 1 GPU, binary + 0.1 closeness
+extends: base/countdown.yaml
+
+model:
+  id: Qwen/Qwen3.5-0.8B
+  revision: 2fc06364715b967f1860aea9cf38778875588b17
+
+finetune:
+  mode: lora
+  lora: {rank: 32, alpha: 64, dropout: 0.0, target_modules: all-linear}
+
+reward:
+  components:
+    - {fn: countdown_correct, weight: 1.0}
+    - {fn: countdown_closeness, weight: 0.1}
+
+compute:
+  nodes: 1
+  gpus_per_node: 1
+
+inference:
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.5
+
+algorithm:
+  prompts_per_step: 16
+  minibatch_prompts: 16
+  n_samples: 8
+  micro_train_per_gpu: 8
+  micro_forward_per_gpu: 8
+  lr: 1.0e-05
+  max_steps: 40
+
+evaluation:
+  interval_steps: 10
+  checkpoint_interval_steps: 20
+  final_eval: true
+  eval_shards_per_model: 1        # 1 GPU: base then trained (strl.experiment.eval_layout)
+
+budget:
+  total_seconds: 14400
+  attempt_max_seconds: 3600
+  ledger: evidence/ledgers/countdown.json
+
+limits:
+  max_nodes: 1
+  max_attempt_seconds: 3600
+
+tracking:
+  group: countdown
+  tags: ['env:countdown', 'finetune:lora', 'nodes:1']

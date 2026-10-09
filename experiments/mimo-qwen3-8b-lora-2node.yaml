@@ -1,0 +1,42 @@
+# MiMo cyber + code, Qwen3-8B LoRA r64 on 2 x 8 H100, native verifier reward only: the mid-size multi-node template.
+# Built by a fresh agent from the skill (copied from the 27B LoRA arm; changed model, domain subset, TP, ledger, group). Its bounded
+# variant mimo-qwen3-8b-lora-2node-proof.yaml ran on 2 x 8 (fa-q3pf-a1-fb, 2026-10-09: 2 updates, exports from both nodes, verified).
+# Budget: point budget.ledger at YOUR authorized program's ledger (plan prints LEDGER until it exists).
+name: mimo-qwen3-8b-lora-2node
+description: MiMo cyber+code agentic GRPO, Qwen3-8B, LoRA r64/a64 all-linear, 2 nodes x 8 H100, native reward
+extends: experiments/mimo-qwen38-27b-lora.yaml
+
+model:
+  id: Qwen/Qwen3-8B
+  revision: b968826d9c46dd6066d109eabc6255188de91218
+
+environment:
+  mimo:
+    domains:                        # subset chosen by train > 0; a domain is off only with train: 0 AND test: 0
+      music:   {train: 0, test: 0}
+      cyber:   {train: 24, test: 24}
+      code:    {train: 24, test: 24}
+      general: {train: 0, test: 0}
+      webdev:  {train: 0, test: 0}
+
+reward:
+  components:
+    - {fn: verifier_score, weight: 1.0}   # native grader only
+
+inference:
+  tensor_parallel_size: 1           # 8B bf16 (~16 GB) fits one H100 per engine: 16 engines
+
+algorithm:
+  prompts_per_step: 16              # 8 per domain at equal weights
+  minibatch_prompts: 16
+
+evaluation:
+  durable_checkpoints: true         # borrowed capacity can be reclaimed: relaunch resumes from S3
+
+budget:
+  save_optimizer_state: true
+  ledger: evidence/ledgers/mimo-qwen3-8b.json
+
+tracking:
+  group: mimo-qwen3-8b-2node
+  tags: ['nodes:2', 'finetune:lora', 'model:qwen3-8b', 'domains:cyber+code']
