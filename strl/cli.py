@@ -94,7 +94,13 @@ def cmd_plan(a):
         print(f'experiment {a.experiment} cannot be planned:\n- {error}', file=sys.stderr)
         raise SystemExit(2)
     if a.against:
-        report['diff_vs'] = {a.against: [{'key': k, 'from': x, 'to': y} for k, x, y in diff(_load(a.against), cfg)]}
+        other = _load(a.against)
+        rows = [{'key': k, 'from': x, 'to': y} for k, x, y in diff(other, cfg)]
+        from .tasks import get_environment
+        derived = lambda c: get_environment(c['environment']['name']).skyrl_overrides(c, 'train').get('environment.env_class') or 'generator'
+        if derived(other) != derived(cfg):   # e.g. a custom reward term moves gsm8k from SkyRL's built-in env to strl_env (proven equivalent)
+            rows.append({'key': 'derived: environment.env_class', 'from': derived(other), 'to': derived(cfg)})
+        report['diff_vs'] = {a.against: rows}
     report['warnings'] += readiness_warnings(cfg)
     if a.json:
         print(json.dumps(report, indent=2, default=str))
@@ -147,7 +153,10 @@ def cmd_fetch(a):
     from .models import snapshot_identity, write_identity
     if snapshot_identity(cfg['model'])[0] == 'mismatch':
         raise SystemExit(snapshot_identity(cfg['model'])[1])
-    snapshot_download(cfg['model']['id'], revision=cfg['model']['revision'], local_dir=cfg['model']['local_path'])
+    # top-level files only, exactly what stage uploads and stage-model copies: repos often ship onnx/, runs/ or other subfolders many times
+    # larger than the weights (SmolLM2-1.7B: 19 GB of ONNX next to 3.4 GB of safetensors)
+    snapshot_download(cfg['model']['id'], revision=cfg['model']['revision'], local_dir=cfg['model']['local_path'],
+                      ignore_patterns=['*/*', 'README.md', 'LICENSE', '.gitattributes'])
     write_identity(cfg['model'])
     from .runtime import ROUTER_SHA256, ROUTER_WHEEL
     import hashlib
@@ -367,7 +376,11 @@ def cmd_launch(a):
 
 def cmd_verify(a):
     from .verify_results import verify
-    print(json.dumps(verify(_load(a.experiment), a.attempt), indent=1, default=str))
+    try:
+        out = verify(_load(a.experiment), a.attempt)
+    except (RuntimeError, FileNotFoundError) as error:
+        raise SystemExit(f'cannot verify {a.attempt}: {error}')
+    print(json.dumps(out, indent=1, default=str))
 
 
 def cmd_compare(a):

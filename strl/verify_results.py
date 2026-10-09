@@ -56,6 +56,11 @@ def verify_in_loop(cfg: dict, attempt: str, local: Path, env) -> dict:
 
 def verify(cfg: dict, attempt: str) -> dict:
     env = get_environment(cfg['environment']['name'])
+    receipt = Path('evidence') / attempt / 'stage.json'
+    mode = json.loads(receipt.read_text()).get('mode') if receipt.is_file() else None
+    if mode in ('canary', 'dry'):
+        raise RuntimeError(f'{attempt} is a {mode} attempt: it has no held-out result to verify (a canary trains 2 steps on a small batch; its '
+                           'pass/fail gate is artifacts/<attempt>/canary.json). Verify a --mode train attempt.')
     local = _download(cfg, attempt, Path('evidence') / attempt)
     if not cfg['evaluation'].get('final_eval', True):   # in-loop paired result (mimo): independent recomputation + offline re-grading
         if env.name == 'mimo':

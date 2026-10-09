@@ -222,6 +222,7 @@ def _submit_routes(api, experiment, attempt, mode, chosen, overrides, jobs, rece
             api.log(f'a submitted route already started: not submitting {name} or later routes')
             break
         extra = [] if borrow else ['compute.allow_borrowing=false']
+        api.log(f'staging {name} (payload, data and any local model files are uploaded: a few GB take minutes)')
         receipts[name] = api.stage(experiment, attempt=name, mode=mode, team=team, allow_borrowing=borrow, overrides=[*(overrides or []), *extra],
                                    reservation=attempt)   # the routes of one race share one budget reservation
         job_id = api.submit(receipts[name]['job_file'])
