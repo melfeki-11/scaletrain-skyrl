@@ -107,7 +107,8 @@ to transformers' native class in the pod (`model_code` in `worker-started`/`dry-
 
 ## Getting capacity ASAP (every launch, every time)
 
-`strl launch` submits one job per route and keeps the first that starts (losers are cancelled and recorded; queue time is never charged):
+`strl launch` submits one job per route (in order, stopping as soon as a submitted one starts) and keeps the first that starts (losers are
+cancelled and recorded; queue time is never charged):
 `fb` foundation+borrowing, `rb` research+borrowing, `ro` research own quota, `fo` foundation own quota. Measured: the same job waited ~23 h on
 one route and started first on another; dry runs start in seconds on `fb`.
 - Prefer the smallest shape that answers the question: `gpus_per_node` 1/2/4 slices admit far faster than 8, and 1 node far faster than 2.

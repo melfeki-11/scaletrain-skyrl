@@ -116,6 +116,12 @@ def race(experiment: str, attempt: str, mode: str, api: Api, *, overrides: list[
     chosen, jobs, receipts = select_routes(routes), {}, {}
     for code, team, borrow in chosen:
         name = f'{attempt}-{code}'
+        # Staging takes ~30 s per route; when capacity is free the first route is often running before the last is submitted. Measured: in
+        # all 5 GPU races of 2026-10-08 a second route was allocated in the same poll and had to be cancelled and charged. Stop submitting
+        # once any submitted route started (no added latency when capacity is scarce: every route is still submitted).
+        if jobs and any(_state(api, j)[0] not in TERMINAL | {'QUEUED', 'UNKNOWN'} for j in jobs.values()):
+            api.log(f'a submitted route already started: not submitting {name} or later routes')
+            break
         extra = [] if borrow else ['compute.allow_borrowing=false']
         receipts[name] = api.stage(experiment, attempt=name, mode=mode, team=team, allow_borrowing=borrow, overrides=[*(overrides or []), *extra])
         job_id = api.submit(receipts[name]['job_file'])

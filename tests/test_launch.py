@@ -8,11 +8,12 @@ from strl import launch as L
 
 
 class FakeScaleTrain:
-    """Scripted job states: script[route_code] = list of (status, detail) per poll; the last entry repeats. Cancel -> CANCELED next poll."""
+    """Scripted job states: script[route_code] = list of (status, detail) per poll interval (state advances when the launcher sleeps, not
+    when it reads, like a real job); the last entry repeats. Cancel -> CANCELED."""
 
     def __init__(self, script, started=()):
         self.script, self.started = script, set(started)
-        self.jobs, self.polls, self.cancelled, self.staged, self.recorded, self.now = {}, {}, set(), [], [], 0.0
+        self.jobs, self.polls, self.cancelled, self.staged, self.recorded, self.now, self.ticks = {}, {}, set(), [], [], 0.0, 0
 
     def api(self):
         return L.Api(stage=self.stage, submit=self.submit, get=self.get, cancel=self.cancel, record=self.record,
@@ -26,7 +27,7 @@ class FakeScaleTrain:
         attempt = Path(job_file).parent.name
         job_id = f'job-{attempt}'
         self.jobs[job_id] = attempt
-        self.polls[job_id] = 0
+        self.polls[job_id] = self.ticks
         return job_id
 
     def get(self, job_id):
@@ -34,8 +35,7 @@ class FakeScaleTrain:
             return {'status': 'CANCELED', 'status_detail': 'absent'}
         attempt = self.jobs[job_id]
         script = self.script.get(attempt.rsplit('-', 1)[-1] if attempt.rsplit('-', 1)[-1] in self.script else attempt, [('QUEUED', 'waiting')])
-        i = min(self.polls[job_id], len(script) - 1)
-        self.polls[job_id] += 1
+        i = min(self.ticks - self.polls[job_id], len(script) - 1)
         status, detail = script[i]
         return {'status': status, 'status_detail': detail}
 
@@ -50,6 +50,7 @@ class FakeScaleTrain:
 
     def sleep(self, seconds):
         self.now += seconds
+        self.ticks += 1
 
 
 class Race(unittest.TestCase):
@@ -71,7 +72,7 @@ class Race(unittest.TestCase):
         self.assertNotIn('job-run1-rb', fake.cancelled)
 
     def test_routes_stage_team_and_borrowing(self):
-        fake = FakeScaleTrain({'fb': [('IN_PROGRESS', 'absent')]})
+        fake = FakeScaleTrain({'fb': [('QUEUED', 'w'), ('IN_PROGRESS', 'absent')]})
         L.race('exp.yaml', 'run1', 'canary', fake.api(), overrides=['compute.nodes=1'], poll=1)
         by = {s['attempt']: s for s in fake.staged}
         self.assertEqual((by['run1-fb']['team'], by['run1-fb']['borrow']), (L.FOUNDATION, True))
@@ -80,15 +81,22 @@ class Race(unittest.TestCase):
         self.assertEqual(by['run1-fb']['overrides'], ['compute.nodes=1'])
 
     def test_two_routes_starting_in_one_poll_keep_one_and_charge_the_other(self):
-        fake = FakeScaleTrain({'fb': [('IN_PROGRESS', 'absent')], 'rb': [('IN_PROGRESS', 'absent')]}, started={'run1-rb'})
+        fake = FakeScaleTrain({'fb': [('QUEUED', 'w'), ('IN_PROGRESS', 'absent')], 'rb': [('QUEUED', 'w'), ('IN_PROGRESS', 'absent')]}, started={'run1-rb'})
         out = L.race('exp.yaml', 'run1', 'train', fake.api(), poll=5)
         self.assertEqual(out['winner'], 'run1-fb')                     # the runbook's preferred route wins a tie
         self.assertIn(('run1-rb', False), fake.recorded)               # its pod ran: charged (never_started False)
         self.assertTrue(next(l for l in out['losers'] if l['attempt'] == 'run1-rb')['charged'])
 
+    def test_routes_after_a_started_one_are_not_submitted(self):
+        fake = FakeScaleTrain({'fb': [('IN_PROGRESS', 'absent')]})
+        out = L.race('exp.yaml', 'run1', 'train', fake.api(), poll=5)
+        self.assertEqual(out['winner'], 'run1-fb')
+        self.assertEqual([x['attempt'] for x in fake.staged], ['run1-fb'])     # nothing else staged, submitted, cancelled or charged
+        self.assertEqual(fake.recorded, [])
+
     def test_a_loser_seen_allocated_is_charged_even_before_its_pod_leaves_a_trace(self):
         # measured: v1phi-rb went IN_PROGRESS in the winner's poll, was cancelled, and its pod wrote budget.json 89 s AFTER CANCELED
-        fake = FakeScaleTrain({'fb': [('IN_PROGRESS', 'absent')], 'rb': [('IN_PROGRESS', 'absent')]}, started=())
+        fake = FakeScaleTrain({'fb': [('QUEUED', 'w'), ('IN_PROGRESS', 'absent')], 'rb': [('QUEUED', 'w'), ('IN_PROGRESS', 'absent')]}, started=())
         out = L.race('exp.yaml', 'run1', 'train', fake.api(), poll=5)
         self.assertEqual(out['winner'], 'run1-fb')
         self.assertIn(('run1-rb', False), fake.recorded)               # charged: it was allocated
@@ -134,8 +142,7 @@ class Race(unittest.TestCase):
             attempt = fake.jobs.get(job_id, '')
             if attempt.startswith('run1-p1-') and job_id not in fake.cancelled:
                 script = fake.script['p1-fb'] if attempt.endswith('-fb') else [('QUEUED', 'w')]
-                i = min(fake.polls[job_id], len(script) - 1)
-                fake.polls[job_id] += 1
+                i = min(fake.ticks - fake.polls[job_id], len(script) - 1)
                 return {'status': script[i][0], 'status_detail': script[i][1]}
             return original_get(job_id)
         api = fake.api()

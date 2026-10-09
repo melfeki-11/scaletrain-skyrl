@@ -29,6 +29,9 @@ one job per route and keeps the first that starts:
 | `ro` | gen_ai.agents_research | off | own quota only: cannot be reclaimed by a quota owner |
 | `fo` | gen_ai.agent_training_foundation | off | own quota only (often 0 headroom) |
 
+- Routes are staged and submitted in this order (~30 s each); before each next route the launcher checks the submitted ones and stops
+  submitting once one has started. When capacity is free that is usually `fb` alone (on 2026-10-08, submitting all four at once had a
+  second route allocated, cancelled and charged in every GPU race); when it is scarce every route is still in the queue within ~2 min.
 - `--routes fb,ro` restricts the race. Every route uses high priority (never lower it).
 - The losers are cancelled the moment the winner leaves the queue and recorded uncharged, on positive evidence that their pods never
   started (no `budget.json` / `worker-started.json`). Two routes starting inside one poll interval: the extra one is charged for the

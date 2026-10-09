@@ -14,7 +14,9 @@ What has actually been run, with job IDs, so you know which paths are proven and
 | coding_exec · Qwen3-1.7B (model switch) | canary |
 | coding_harbor · Qwen3.5-0.8B (Terminus-2 in Modal sandboxes) | canary (`can-hb-f`, after 5 failed attempts whose fixes are listed below); no full training run yet |
 | llama / generic model profiles | CPU preflight only (`verified: unverified`; `strl plan` warns) |
-| multi-node, fully-async Harbor, Megatron | designed and documented in [scaling.md](scaling.md); **not GPU-verified in this repo** |
+| multi-node (2 x 8) | **GPU-verified at 0.8B** (LoRA, 2 updates, 16-rank NCCL, LoRA sync across hosts); 27B on 2 x 8 up to the step-0 eval only. See the 2026-10-07 and 2026-10-08 sections |
+| non-Qwen models | Phi-4-mini (`dense` profile, bundled remote code) through dry run and a GPU run, 2026-10-08 section |
+| fully-async Harbor, Megatron, > 2 nodes, MoE on GPU | designed and documented in [scaling.md](scaling.md); **not GPU-verified in this repo** |
 
 ## Gates (2026-10-06)
 
@@ -119,3 +121,38 @@ Fixes for the review findings: one shared hardened `test.sh` (interpreter on PAT
 - Borrowed GPU capacity was reclaimed twice within 70 s and 30 min. A preempted attempt does not resume; durable mid-run checkpoints with a resume path are not implemented.
 - Cyber and code positive controls (an agent actually solving a task) and webdev's render-to-judge path with a real site need a model; they are exercised by the canary and the main run, not by a scripted control. The 27B did solve some code (10%) and cyber (3-12%) held-out tasks and scored webdev 2-5% through the vision judge, so those paths scored non-zero end to end.
 - One code image was checked for future-commit leakage (`git rev-list --all` equals `HEAD`: 202 commits, no refs ahead); the other images, the cyber `submit.sh` surface, and judge prompt injection were not audited.
+
+
+## Hardening round: capacity race, a non-Qwen model, multi-node re-verification (2026-10-08/09)
+
+Program ledger: `evidence/ledgers/platform-hardening.json`, 14,400 node-seconds (4 node-hours), authorized by the user for 1-2 GPU canaries
+(a non-Qwen LoRA model on a MiMo subset with a shaped reward, and a resume test) plus one 2 x 8 0.8B smoke.
+
+### The capacity race (`strl launch`, every launch below)
+
+Every launch raced fb / rb / ro / fo. All 10 races were won by `fb` (foundation + borrowing) within 15-19 s; CPU dry runs never left the queue on
+the research team's quota (`rb`, `ro`). In 4 races `rb` was ALSO allocated within the same poll; one such loser's pod wrote `budget.json` 89 s
+after its job was CANCELED (`v1phi-rb`), which the first launcher version recorded as never started. Fixed: a loser ever seen allocated is charged
+through a 180 s tail (`CANCEL_TAIL_SECONDS`). The `v1phi-rb` ledger entry predates the fix and is under-charged by ~64 node-s (left unedited: the
+ledger is append-only; correcting it is the user's call).
+
+### What each GPU attempt found
+
+| Attempt | Shape | Outcome | Bug found -> fix |
+| --- | --- | --- | --- |
+| `v1dry-fb` | CPU | dry_run_passed; ceiling cyber 1.0 / music 0.0 (gpt-6-luna, 97.6 s) | - |
+| `v1phi-fb` (Phi-4-mini LoRA, music + cyber) | 1 x 2 GPU | FAILED at policy init: `ImportError: cannot import name 'LossKwargs'` | SkyRL loads every model with `trust_remote_code=True`; Phi's `auto_map` runs a bundled modeling file written for transformers 4. The worker now uses the native class when transformers has it (`model_code: remote_code_dropped`), and `model_code_check` imports the class in every pod, so a dry run catches it for free |
+| `v3smk-fb` (0.8B, music + cyber) | 2 x 8 | rendezvous, probe, step-0 eval, step 1 (350 s); then FAILED: `Fail-fast (domain_masked): 88% of music groups masked` | single-shot replies overflowing `max_generate_length` (`OutputLengthExceededError`, no tokens) were counted as infrastructure masks. Now a scored placeholder (reward 0, zero loss), `generate/<d>/num_output_exceeded`, never `masked` |
+| `v1phid2-fb` | CPU | dry_run_passed with `model_code: remote_code_dropped, class Phi3ForCausalLM` | - |
+| `v1phi2-fb` | 1 x 2 GPU | past policy init (the fix works); FAILED at step 2 on the same music overflow fail-fast (staged before that fix) | Phi-4-mini's ABC pieces overflow 2,048 tokens: the experiment now uses 4,096 |
+| `v3smk2-fb` | 2 x 8 | both updates done (352 / 250 s; generate 222 / 221 s, policy_train 81 / 21 s; LoRA sync across nodes), no overflow masks; then FAILED after the LAST step: `Fail-fast (step_slow): 250s > 1.5 x the plan estimate 39s` | an UNCALIBRATED estimate (a 27B profile scaled down by size) stopped a healthy run at its last step. Only calibrated estimates stop a run now, no rule stops at the last step (advisory alert instead), and the estimator floors agentic generation at 0.35 x step deadline (212 s planned for this smoke) |
+| `v1phid3-fb` | CPU | dry_run_passed; the new shaping contract ran the shipped term in the pod (`turn_efficiency_bonus`: pass 1.035, fail 0.0 in both domains) | - |
+
+### Forward test (a fresh agent with only the repo and the skill, CPU only)
+
+Prepared four experiments (Qwen2.5-7B LoRA and full on music + code, a custom token-cost shaping term with 9 unit tests, Qwen3.8-27B 2 x 8 on
+cyber + general with the full launch command). It found 12 gaps; the code ones are fixed (`--set finetune.mode=full` refused an inherited LoRA
+rank; `plan` silent on a missing ledger or unprepared data; BUDGET warning noise; the dry run never called mimo shaping terms; terms saw
+`max_generate_length` 1024; the fallback name `-fb1` collided with route codes and could truncate to the original name; a relaunch name could
+exceed 26 characters hours into a launch) and the documentation ones are in SKILL.md (lr by size, `result`/`ctx` fields, data dirs, large-model
+staging, start-up times, A/B groups). Its experiment files were removed after the gaps were fixed.
