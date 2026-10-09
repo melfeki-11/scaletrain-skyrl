@@ -130,8 +130,9 @@ Program ledger: `evidence/ledgers/platform-hardening.json`, 14,400 node-seconds 
 
 ### The capacity race (`strl launch`, every launch below)
 
-Every launch raced fb / rb / ro / fo. All 10 races were won by `fb` (foundation + borrowing) within 15-19 s; CPU dry runs never left the queue on
-the research team's quota (`rb`, `ro`). In 4 races `rb` was ALSO allocated within the same poll; one such loser's pod wrote `budget.json` 89 s
+Every launch raced fb / rb / ro / fo. All 13 races were won by `fb` (foundation + borrowing) within 4-19 s; CPU dry runs never left the queue on
+the research team's quota (`rb`, `ro`). In every GPU race before the "stop submitting once a route started" change, `rb` was ALSO allocated
+within the same poll and had to be cancelled and charged (46-484 node-s each); one such loser's pod wrote `budget.json` 89 s
 after its job was CANCELED (`v1phi-rb`), which the first launcher version recorded as never started. Fixed: a loser ever seen allocated is charged
 through a 180 s tail (`CANCEL_TAIL_SECONDS`). The `v1phi-rb` ledger entry predates the fix and is under-charged by ~64 node-s (left unedited: the
 ledger is append-only; correcting it is the user's call).
@@ -148,6 +149,14 @@ ledger is append-only; correcting it is the user's call).
 | `v3smk2-fb` | 2 x 8 | both updates done (352 / 250 s; generate 222 / 221 s, policy_train 81 / 21 s; LoRA sync across nodes), no overflow masks; then FAILED after the LAST step: `Fail-fast (step_slow): 250s > 1.5 x the plan estimate 39s` | an UNCALIBRATED estimate (a 27B profile scaled down by size) stopped a healthy run at its last step. Only calibrated estimates stop a run now, no rule stops at the last step (advisory alert instead), and the estimator floors agentic generation at 0.35 x step deadline (212 s planned for this smoke) |
 | `v1phid3-fb` | CPU | dry_run_passed; the new shaping contract ran the shipped term in the pod (`turn_efficiency_bonus`: pass 1.035, fail 0.0 in both domains) | - |
 | `v1phi3-fb` | 1 x 2 GPU | step-0 eval (513 s, 4,096-token music), 2 updates (395 / 394 s; policy_train 14 s), no fail-fast; then FAILED saving the step-2 durable checkpoint: `No such file or directory ... "/workspace/strl-run/s3://..."` | pinned SkyRL writes every FSDP checkpoint file through its cloud io EXCEPT the LoRA adapter (`safetensors.save_file(path)`). Exact-source patch `LORA_ADAPTER_CLOUD_SAVE` (tested on the pinned source); the dry run now round-trips a safetensors file through SkyRL io at the real S3 `ckpt_path` (`durable_checkpoint_io` gate) |
+| `v3smk3-fb` | 2 x 8 | **COMPLETED**: probe (socket NCCL, cross-node 0.68 GB/s, intra 343 GB/s), 2 updates, LoRA sync across hosts, export `global_step_2/policy` in S3, in-loop paired result (0.8B scores 0 on these tasks). `strl verify` verified (coverage 8/8, statistics agree, 6 music artifacts re-graded, 0 disagreements); W&B readback has `infra/*`, per-domain keys, flip and trajectory tables; `strl monitor --once` prints `nodes=head:311s,rank1:235s` | retention failed: the pod re-resolved `base/gsm8k.yaml`, which the payload does not ship. Fixed: the pod reads the staged `retention-resolved.json` |
+| `v1phid4-fb` | CPU | dry_run_passed; `durable_checkpoint_io` round trip through SkyRL io at the real S3 `ckpt_path`; the LoRA save patch applied to the image's SkyRL | - |
+| `v1phi4-fb` | 1 x 2 GPU | **COMPLETED**: 2 updates, in-loop paired result, durable checkpoint `global_step_2` in S3 (model + optimizer shards per rank, `data.pt`, `trainer_state.pt`, `lora_adapter/adapter_model.safetensors`); retention failed (staged before the fix above) | - |
+| `v2res-fb` (`run.resume_from=v1phi4-fb`, `max_steps` 4) | 1 x 2 GPU | the worker found the checkpoint (`resumed_from: v1phi4-fb step 2`, carried its step-0 eval records and canary), SkyRL rendered `resume_mode: from_path`; then FAILED in `load_checkpoints`: `Checkpoint path not found: s3:/scale-ml/...` | pinned SkyRL wraps `resume_path` in `pathlib.Path`, collapsing `s3://`. Exact-source patch `RESUME_FROM_CLOUD_PATH` keeps it a string (the rest of the load path uses SkyRL's cloud io). The independent review's resume-prefix fix was already in this attempt |
+| `v2res2-fb` (same) | 1 x 2 GPU | **COMPLETED: resume proven.** SkyRL loaded `v1phi4-fb`'s complete `global_step_2` from S3 (weights, optimizer, data position), trained steps 3-4 (~360 s each), saved its own durable `global_step_4`; the paired result keeps V1's step-0 eval as the base (`base_step` 0, `trained_step` 4), `strl verify` verified. Retention through the LoRA adapter served by vLLM: GSM8K 200 test problems 89.5% -> 90.0%, +0.5 [-2.0, +3.0] (no regression). W&B: `generate/<d>/reward_terms/user_rewards.examples:turn_efficiency_bonus`, `retention/gsm8k/*`. Won `fb` after 1 s with no other route submitted | - |
+
+Spend: 12,215 of 14,400 node-seconds (3.39 node-hours), 87% of it before the resume run on the three 2 x 8 attempts and their charged losing routes.
+Not exercised on GPU this round: `judge_variance` and judged domains (general, webdev), full fine-tuning, the 27B on 2 x 8 past step 0, > 2 nodes, MoE.
 
 ### Forward test (a fresh agent with only the repo and the skill, CPU only)
 
