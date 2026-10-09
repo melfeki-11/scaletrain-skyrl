@@ -15,6 +15,32 @@ Common protocol for every run:
 - Δ is a paired bootstrap CI.
 - `strl verify` re-scored every completion independently (in Modal for coding) and found 0 disagreements with the worker.
 
+## Verification round 2: fresh agents with only the repo and the skill (2026-10-09)
+
+Five no-context agents used the skill to:
+- set up a new 8B model on 2 × 8;
+- run a reward A/B on a new model family (Llama architecture);
+- add a brand-new RL environment (`countdown`, now shipped);
+- assess an MoE model with full fine-tuning across 2 nodes;
+- re-test the result after the fixes.
+
+Every dry run they launched passed (10 dry runs on ScaleTrain, 3 model stagings). Real GPU proofs:
+
+| Run | What it proved | Result |
+| --- | --- | --- |
+| `fb-smolb-can-fb` (1 GPU canary) | a new model family (SmolLM2) + an agent-written reward on GPU | 2 updates, learning signal 0.625, brevity term paid only on correct answers |
+| `fa-q3pf-a1-fb` (2 × 8 H100) | the fresh agent's sizing and experiment for Qwen3-8B LoRA on MiMo cyber + code | completed, exports from both nodes, `strl verify` verified, full W&B evidence; 3,634 node-s |
+| `cd-v1-fb` (1 GPU) | the agent-built `countdown` env, the new TP-aware sequential final eval, generic `verify` | completed, 200-problem offline eval 25.0% → 25.0% (2 tiny updates), verified; 197 node-s |
+
+The agents' reports drove about 40 fixes in the repo and skill. The most important ones:
+- the offline final eval hard-coded TP1, so models over ~45 GB trained and then failed their eval;
+- launches could overspend a shared ledger (stage now books budget atomically);
+- `fetch` downloaded entire HF repos (19 GB of ONNX);
+- the plan's offload, network and budget advice was wrong in several cases;
+- the new-environment docs were a method list rather than a recipe.
+
+Details are in `references/validation.md`.
+
 ## Platform hardening: capacity race, a non-Qwen model, 2 × 8 re-verification, resume (2026-10-08/09)
 
 An infrastructure round, not a training-effect study: every run below is 2-4 LoRA updates on small held-out sets, and their task metrics are 0

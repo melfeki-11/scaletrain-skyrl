@@ -221,3 +221,12 @@ user's approval). Attempt `fa-q3pf-a1-fb`, job_db4g8armjdjg07lcrs20, ledger `evi
 - `strl verify`: verified (coverage complete). W&B readback: `infra/*`, per-domain `generate/*` / `eval/*`, `qualitative/{fixed,broken}_by_training`,
   `qualitative/critic`, `trajectories/*`, `test/*`, `gpu/mem_peak_gb`, `timing/step`.
 - Charged 3,634 node-s (agent's estimate: ~4,800; worst case 5,880); 5,366 left.
+
+### 1-GPU proof of the new environment, the TP-aware sequential final eval and generic verify (2026-10-09)
+
+`countdown-qwen35.yaml` with `--set budget.ledger=evidence/ledgers/platform-hardening.json --set algorithm.max_steps=8 --set
+budget.attempt_max_seconds=2400 --set evaluation.interval_steps=4 --set evaluation.checkpoint_interval_steps=4`; attempt `cd-v1-fb`
+(won `fb` immediately; 352 node-s booked, 197 charged): COMPLETED, 2 updates (the predictive deadline stopped it: steps ~240 s on 1 GPU),
+LoRA adapter changed (186 `lora_B` tensors, served by vLLM in the eval), offline final eval on the SAME GPU, base then trained, 200
+held-out problems in 351 s: 25.0% -> 25.0%, zero flips (two tiny updates). `strl verify` re-scored all 400 completions with countdown's
+own scorer: verified.
