@@ -304,5 +304,40 @@ class SecondReview(unittest.TestCase):
         self.assertEqual(remaining_seconds([{'job_id': 'j', 'status': 'CANCELLED', 'allocated_at': None, 'terminal_at': 'x'}], 100), 100)
 
 
+class ThirdReview(unittest.TestCase):
+    def setUp(self):
+        self.cwd = os.getcwd()
+        self.tmp = tempfile.TemporaryDirectory()
+        os.chdir(self.tmp.name)
+
+    def tearDown(self):
+        os.chdir(self.cwd)
+        self.tmp.cleanup()
+
+    def test_a_rejected_route_releases_its_booking(self):
+        fake = FakeScaleTrain({'rb': [('QUEUED', 'w'), ('IN_PROGRESS', 'absent')]})
+        api = fake.api()
+        released = []
+        api.release = lambda experiment, group, attempt: released.append((group, attempt))
+        original = api.submit
+        api.submit = lambda job_file: None if 'run1-fb' in job_file else original(job_file)
+        out = L.race('exp.yaml', 'run1', 'train', api, poll=5)
+        self.assertEqual(out['winner'], 'run1-rb')
+        self.assertIn(('run1', 'run1-fb'), released)
+
+    def test_a_submit_error_releases_the_booking_before_raising(self):
+        fake = FakeScaleTrain({})
+        api = fake.api()
+        released = []
+        api.release = lambda experiment, group, attempt: released.append(attempt)
+
+        def boom(job_file):
+            raise OSError('scale-train crashed')
+        api.submit = boom
+        with self.assertRaises(OSError):
+            L.race('exp.yaml', 'run1', 'train', api, poll=5)
+        self.assertEqual(released, ['run1-fb'])
+
+
 if __name__ == '__main__':
     unittest.main()

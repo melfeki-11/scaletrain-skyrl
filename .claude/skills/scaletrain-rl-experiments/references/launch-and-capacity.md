@@ -71,6 +71,9 @@ A preempted attempt cannot continue in place (its budget window is anchored at i
 - Several launches can share one ledger safely: `stage` checks AND books the attempt's worst case (`reservations` in the ledger, one booking
   per race) under a file lock, `record_attempt` releases it, and a booking nobody released expires after 72 h. `strl plan` shows what is held.
   A launch that cannot fit next to the others' bookings is refused at stage time instead of overspending.
+  A route ScaleTrain rejects releases its booking at once; a waiting or running launch refreshes its booking hourly (the 72 h expiry counts
+  from the last refresh). A staged attempt you will never submit: `strl ledger <exp> --release <attempt>`. Known gap: while losing routes
+  are being settled (about one poll), their charge is not yet booked.
 - `stage` refuses when the remaining budget cannot cover bootstrap + training + the final-eval/retention reserve; a canary job is capped
   at `budget.canary_max_seconds` + 600 s.
 - `strl launch --watch` records the winner and the losers itself. Otherwise, after every terminal attempt:

@@ -209,6 +209,7 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
     lock = contextlib.ExitStack()
     ledger_data = lock.enter_context(locked_ledger(ledger_path))   # check + reserve atomically (concurrent launchers share the ledger)
     group = reservation or attempt
+    already_booked = False
     try:
         held = reserved_seconds(ledger_data, exclude=group)   # other launches staged but not yet recorded (concurrent launchers)
         remaining = max(0, remaining_seconds(ledger_data['attempts'], ledger_data['total_seconds']) - held)
@@ -245,7 +246,9 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
             booked = ledger_data.setdefault('reservations', {}).setdefault(group, {'node_seconds': 0, 'attempts': [], 'created': time.time()})
             # the ledger charges from pod start - POD_START_SLACK_SECONDS (image pull + bootstrap), so book that too
             booked['node_seconds'] = max(int(booked['node_seconds']), int((remaining + 420) * charge))
+            already_booked = attempt in booked['attempts']   # a re-stage of an unsubmitted attempt must not drop the earlier booking on failure
             booked['attempts'] = sorted(set(booked['attempts']) | {attempt})
+            booked['touched'] = time.time()
     except BaseException:
         lock.__exit__(*sys.exc_info())   # no write-back
         raise
@@ -254,19 +257,25 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
         return _stage_after_budget(experiment_path, cfg, env, profile, attempt, mode, team, allow_borrowing, output, s3, now, snapshot,
                                    remaining, worker_seconds, gpu_fraction, nodes, gpus, charge)
     except BaseException:
-        if charge:
+        if charge and not already_booked:
             release_reservation(ledger_path, group, attempt)
         raise
 
 
-def release_reservation(ledger_path, group: str, attempt: str) -> None:
-    """Drop ``attempt`` from its launch's reservation (the group goes when no attempt is left): staging failed or the attempt was recorded."""
+def release_reservation(ledger_path, group: str | None, attempt: str) -> bool:
+    """Drop ``attempt`` from its launch's reservation (the group goes when no attempt is left): staging failed, ScaleTrain rejected the job,
+    or the attempt was recorded. ``group`` None: whichever group holds it."""
+    from .budget import release_attempt
+    with locked_ledger(ledger_path) as data:
+        return release_attempt(data, attempt, group)
+
+
+def touch_reservation(ledger_path, group: str) -> None:
+    """A launch still waiting or running keeps its booking alive (the TTL counts from the last touch, not from staging)."""
     with locked_ledger(ledger_path) as data:
         held = (data.get('reservations') or {}).get(group)
         if held:
-            held['attempts'] = [x for x in held.get('attempts', []) if x != attempt]
-            if not held['attempts']:
-                del data['reservations'][group]
+            held['touched'] = time.time()
 
 
 def _stage_after_budget(experiment_path, cfg, env, profile, attempt, mode, team, allow_borrowing, output, s3, now, ledger_data, remaining,
@@ -386,7 +395,8 @@ def _stage_after_budget(experiment_path, cfg, env, profile, attempt, mode, team,
                'worker_seconds': worker_seconds, 'preset': job['preset_instance_type'], 'gpu_fraction': gpu_fraction, 'nodes': nodes,
                'node_seconds_per_second': charge, 'canary_overlay': cfg['_meta'].get('canary_overlay'), 'team': job['team'],
                'allow_borrowing': job['allow_borrowing'], 'wandb_run_id': wandb_run_id, 'artifact_uri': artifact_uri, 'job_file': output,
-               'profile': profile.name, 'overrides': cfg['_meta'].get('overrides', []), 'staging_dir': str(staging)}
+               'profile': profile.name, 'overrides': cfg['_meta'].get('overrides', []), 'staging_dir': str(staging),
+               'ledger': str(Path(cfg['budget']['ledger']))}
     if estimate is not None:
         receipt['plan_step_seconds'] = estimate
     return receipt

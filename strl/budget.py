@@ -41,7 +41,19 @@ def reserved_seconds(data: dict, *, exclude: str | None = None, now: float | Non
     import time
     now = time.time() if now is None else now
     return int(sum(r['node_seconds'] for g, r in (data.get('reservations') or {}).items()
-                   if g != exclude and now - float(r.get('created', now)) < RESERVATION_TTL_SECONDS))
+                   if g != exclude and now - float(r.get('touched', r.get('created', now))) < RESERVATION_TTL_SECONDS))
+
+
+def release_attempt(data: dict, attempt: str, group: str | None = None) -> bool:
+    """Drop ``attempt`` from its reservation group(s) inside ``data`` (a locked ledger); a group goes when no attempt is left."""
+    found = False
+    for g, held in list((data.get('reservations') or {}).items()):
+        if (group is None or g == group) and attempt in held.get('attempts', []):
+            held['attempts'] = [x for x in held['attempts'] if x != attempt]
+            found = True
+            if not held['attempts']:
+                del data['reservations'][g]
+    return found
 
 
 def locked_ledger(path):

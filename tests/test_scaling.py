@@ -851,10 +851,13 @@ class Retention(unittest.TestCase):
         self.assertEqual((rcfg['_retention_limit'], rcfg['evaluation']['eval_shards_per_model']), (300, 1))
         self.assertIsNone(retention_config(load('experiments/mimo-qwen38-27b-lora.yaml')))
 
-    def test_retention_needs_two_gpus_and_reserves_time(self):
+    def test_retention_follows_this_pods_gpus_and_reserves_time(self):
+        from strl.experiment import eval_layout, retention_config
         from strl.worker import train_reserve_seconds
-        with self.assertRaises(ExperimentError):
-            load('experiments/mimo-qwen35-0p8b-smoke.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])   # 1 GPU
+        one = load('experiments/mimo-qwen35-0p8b-smoke.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])   # 1 GPU
+        self.assertEqual(eval_layout(retention_config(one)), (1, 1, False))            # base then trained on the one GPU this pod has
+        two = load('experiments/mimo-phi4-mini-lora-verify.yaml', overrides=['inference.tensor_parallel_size=2'])    # review: was placed on GPUs 2,3
+        self.assertEqual(eval_layout(retention_config(two)), (1, 2, False))
         cfg = load('experiments/mimo-qwen38-27b-lora.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])
         self.assertEqual(train_reserve_seconds(cfg, 'train') - train_reserve_seconds(load('experiments/mimo-qwen38-27b-lora.yaml'), 'train'), 900)
 

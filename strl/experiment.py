@@ -256,8 +256,6 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
     if retention:
         if not retention.get('experiment'):
             problems.append('evaluation.retention.experiment: the experiment whose held-out set measures retention (e.g. base/gsm8k.yaml)')
-        if gpn < 2:
-            problems.append('evaluation.retention needs >= 2 GPUs per node (base and trained are evaluated concurrently, one GPU each)')
         if retention.get('limit') is not None and (not isinstance(retention['limit'], int) or retention['limit'] < 1):
             problems.append('evaluation.retention.limit must be a positive integer (number of held-out examples)')
     if (e.get('durable_checkpoints') or (cfg.get('run') or {}).get('resume_from')) and not b.get('save_optimizer_state', True):
@@ -393,6 +391,7 @@ def retention_config(cfg: dict) -> dict | None:
     rcfg['model'] = dict(cfg['model'])
     rcfg['inference'] = {**rcfg['inference'], 'enforce_eager': cfg['inference'].get('enforce_eager', rcfg['inference'].get('enforce_eager'))}
     rcfg['inference']['tensor_parallel_size'] = cfg['inference']['tensor_parallel_size']   # THIS model's serving TP (a 30B does not fit TP1)
+    rcfg['compute'] = {**rcfg['compute'], 'gpus_per_node': cfg['compute']['gpus_per_node']}  # the GPUs this pod HAS (eval_layout places on them)
     rcfg['evaluation'] = {**rcfg['evaluation'], 'eval_shards_per_model': 1}
     rcfg['_retention_limit'] = spec.get('limit')
     return rcfg

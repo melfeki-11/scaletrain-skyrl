@@ -230,3 +230,11 @@ budget.attempt_max_seconds=2400 --set evaluation.interval_steps=4 --set evaluati
 LoRA adapter changed (186 `lora_B` tensors, served by vLLM in the eval), offline final eval on the SAME GPU, base then trained, 200
 held-out problems in 351 s: 25.0% -> 25.0%, zero flips (two tiny updates). `strl verify` re-scored all 400 completions with countdown's
 own scorer: verified.
+
+### Independent review of this round's diff (2026-10-09)
+
+Fixed with tests: a route rejected by ScaleTrain (or a submit error) kept its budget booking for 72 h; no manual release (`strl ledger
+--release`); bookings expired by age while a launch still queued (now refreshed hourly while waiting or running); the retention eval placed
+GPUs by the retention YAML's node size (a 2-GPU experiment at TP2 got `CUDA_VISIBLE_DEVICES=2,3`); a failed re-stage dropped an earlier valid
+booking; countdown `prepare` could loop forever on narrow settings; countdown in-loop scoring ignored truncation; the default network probe is
+labelled as assumed; plan warns `EVAL` when the final eval runs base then trained. Accepted: losers being settled are not booked (~one poll).

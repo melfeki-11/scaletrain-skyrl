@@ -73,8 +73,12 @@ def generate(cfg: dict) -> dict[str, list[dict]]:
     s = settings(cfg)
     rng = random.Random(int(s['seed']))
     need = {split: int(s[f'{split}_size']) for split in SPLITS}
-    pool, seen = [], set()
+    pool, seen, tries = [], set(), 0
     while len(pool) < sum(need.values()):
+        tries += 1
+        if tries > 200 * sum(need.values()) + 10000:   # settings that cannot yield enough unique problems must fail, not hang
+            raise ValueError(f'countdown settings produced only {len(pool)} unique problems of the {sum(need.values())} requested: widen '
+                             'max_number / big_numbers / the target range or lower the split sizes')
         problem = make_problem(rng, s)
         if problem is None:
             continue

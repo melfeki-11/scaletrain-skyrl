@@ -156,6 +156,8 @@ class CountdownSpec(EnvironmentSpec):
         if strl is None:   # rescore from the decoded text (never trust the training reward as the task metric)
             numbers, target = scoring.load_truth(_truth(extras))
             strl = scoring.score_expression(completion, numbers, target)
+        if item.get('stop_reason') not in (None, 'stop', 'eos_token'):   # truncated: wrong, exactly as score() and the offline eval treat it
+            strl = {**strl, 'correct': False, 'failure_class': strl.get('failure_class') if not strl.get('correct') else 'truncated'}
         return {
             'step': step, 'sample_id': info.get('sample_id'), 'prompt': item.get('input_prompt'), 'completion': completion,
             'ground_truth': _truth(extras), 'parsed_answer': strl.get('parsed'), 'failure_class': strl.get('failure_class'),

@@ -219,6 +219,12 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
     if e['checkpoint_interval_steps'] != e['interval_steps'] and e.get('final_eval', True):   # no selection with the in-loop result
         out.append('SELECTION: only exported steps can be selected as the final checkpoint; checkpoint_interval_steps == interval_steps makes every '
                    'validated step eligible (costs one HF export per eval).')
+    if e.get('final_eval', True):
+        from .experiment import eval_layout
+        if not eval_layout(cfg)[2]:
+            out.append(f"EVAL: the offline final eval runs base THEN trained on the same {cfg['inference'].get('tensor_parallel_size') or 1} GPU(s) "
+                       f"(not enough GPUs for both at TP {cfg['inference'].get('tensor_parallel_size') or 1}): about twice the eval time; "
+                       f"budget.final_eval_reserve_seconds ({b['final_eval_reserve_seconds']}) must cover both.")
     if a['use_kl_loss'] and a['kl_coef'] == 0:
         out.append('MEMORY: use_kl_loss with kl_coef 0 keeps a reference model for nothing; set use_kl_loss: false.')
     if a['lr'] > 1e-5 and not lora:

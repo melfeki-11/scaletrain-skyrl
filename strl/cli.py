@@ -89,6 +89,8 @@ def cmd_plan(a):
         if network is None and int(cfg['compute']['nodes']) > 1:   # the last measured multi-node probe (strl/profiles.json networks)
             measured = json.loads((ROOT / 'strl/profiles.json').read_text()).get('networks') or []
             network = dict(measured[-1]) if measured else None
+            if network:   # another job's probe: an assumption, labelled as such (pass --network <attempt>/network.json for your own)
+                network['source'] = f"ASSUMED from {network.get('source')}; --network <your probe> to replace"
         report = plan(cfg, network)
     except RuntimeError as error:   # model detection (gated / offline config, contradicting profile, unmapped VLM wrapper)
         print(f'experiment {a.experiment} cannot be planned:\n- {error}', file=sys.stderr)
@@ -262,6 +264,10 @@ def cmd_submit(a):
         listing = json.loads(_scaletrain('list', '--user-id', a.user_id, '--limit', '20').stdout or '[]')
         match = [j for j in listing if j['name'] == job['job_name']]
         print(json.dumps({'submit_error': (out.stderr or out.stdout).strip()[-300:], 'reconciled_by_name': match[:1]}, indent=1))
+        receipt_file = Path(a.job).parent / 'stage.json'
+        if not match and receipt_file.is_file() and json.loads(receipt_file.read_text()).get('ledger'):   # rejected: free its booking
+            from .stage import release_reservation
+            release_reservation(ROOT / json.loads(receipt_file.read_text())['ledger'], None, job['job_name'])
         return
     print(out.stdout.strip())
 
@@ -351,16 +357,20 @@ def record_attempt(experiment: str, attempt: str, job_id: str, *, terminal_at: s
         if any(x['job_id'] == job_id for x in data['attempts']):
             raise ValueError(f'{job_id} already recorded')
         data['attempts'].append(entry)
-        for group, held in list((data.get('reservations') or {}).items()):   # release this attempt's share of its launch's reservation
-            if attempt in held.get('attempts', []):
-                held['attempts'] = [x for x in held['attempts'] if x != attempt]
-                if not held['attempts']:
-                    del data['reservations'][group]
+        from .budget import release_attempt
+        release_attempt(data, attempt)   # release this attempt's share of its launch's reservation
     from .budget import remaining_seconds
     return {'recorded': entry, 'remaining_node_seconds': remaining_seconds(data['attempts'], data['total_seconds'])}
 
 
 def cmd_ledger(a):
+    if a.release:   # a staged attempt that will never be submitted (or was rejected): free its budget booking
+        from .stage import release_reservation
+        ledger = Path(a.ledger) if a.ledger else ROOT / _load(a.experiment, a.set)['budget']['ledger']
+        print(json.dumps({'released': release_reservation(ledger, None, a.release), 'attempt': a.release}))
+        return
+    if not (a.attempt and a.job_id):
+        raise SystemExit('strl ledger needs --attempt and --job-id to record a terminal attempt (or --release ATTEMPT)')
     try:
         out = record_attempt(a.experiment, a.attempt, a.job_id, terminal_at=a.terminal_at, never_started=a.never_started, ledger=a.ledger,
                              overrides=a.set)
@@ -459,7 +469,8 @@ def main(argv=None):
     s = sub.add_parser('status'); s.add_argument('job_id', nargs='?'); s.add_argument('--list', action='store_true'); s.add_argument('--user-id', default=USER)
     s = sub.add_parser('monitor'); s.add_argument('experiment'); s.add_argument('--attempt', required=True); s.add_argument('--job-id')
     s.add_argument('--interval', type=float, default=60); s.add_argument('--once', action='store_true')
-    s = sub.add_parser('ledger'); s.add_argument('experiment'); s.add_argument('--attempt', required=True); s.add_argument('--job-id', required=True)
+    s = sub.add_parser('ledger'); s.add_argument('experiment'); s.add_argument('--attempt'); s.add_argument('--job-id')
+    s.add_argument('--release', metavar='ATTEMPT', help='drop a staged-but-never-submitted attempt from its budget reservation')
     s.add_argument('--terminal-at', help='ISO time of the terminal observation (default: now)')
     s.add_argument('--never-started', action='store_true', help='a terminal job whose pod never ran (verified: no worker-started.json / budget.json): not charged')
     s.add_argument('--set', action='append', default=[], metavar='KEY=VALUE', help="the launch's --set overrides (ledger, storage)")
