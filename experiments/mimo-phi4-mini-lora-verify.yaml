@@ -48,6 +48,7 @@ algorithm:
   micro_forward_per_gpu: 1
   lr: 1.0e-05
   max_steps: 2
+  max_generate_length: 4096           # v1phi2-fb: 75% of Phi-4-mini's single-shot ABC pieces overflowed 2048 tokens
 
 evaluation:
   interval_steps: 2

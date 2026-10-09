@@ -336,8 +336,7 @@ def _scaling_problems(cfg: dict, gpus: int) -> list[str]:
     if isinstance(rank, int) and not isinstance(rank, bool):
         if mode == 'lora' and rank <= 0:
             problems.append('finetune.mode lora needs finetune.lora.rank > 0')
-        if mode == 'full' and rank > 0:
-            problems.append('finetune.lora.rank > 0 is only valid with finetune.mode: lora')
+        # mode full ignores finetune.lora entirely (an inherited LoRA block must not block `--set finetune.mode=full`)
     if isinstance(lora.get('dropout', 0.0), (int, float)) and not 0 <= lora.get('dropout', 0.0) < 1:
         problems.append('finetune.lora.dropout must be in [0, 1)')
     tr = cfg['compute'].get('training') or {}

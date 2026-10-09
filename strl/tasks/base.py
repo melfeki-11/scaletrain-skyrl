@@ -2,7 +2,7 @@
 
 To add an environment: subclass ``EnvironmentSpec`` in ``strl/tasks/<name>/spec.py`` and register it in
 ``strl/tasks/__init__.py``. Nothing in the trainer, worker, stager or monitoring changes (see
-.claude/skills/scaletrain-rl/references/environments.md).
+.claude/skills/scaletrain-rl-experiments/references/extending.md ("A new environment")).
 """
 from __future__ import annotations
 

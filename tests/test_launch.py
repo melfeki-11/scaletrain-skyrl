@@ -44,6 +44,8 @@ class FakeScaleTrain:
 
     def record(self, experiment, attempt, job_id, never_started=False, terminal_at=None):
         self.recorded.append((attempt, never_started))
+        self.terminal_at = getattr(self, 'terminal_at', {})
+        self.terminal_at[attempt] = terminal_at
         return {'ok': True}
 
     def sleep(self, seconds):
@@ -84,6 +86,16 @@ class Race(unittest.TestCase):
         self.assertIn(('run1-rb', False), fake.recorded)               # its pod ran: charged (never_started False)
         self.assertTrue(next(l for l in out['losers'] if l['attempt'] == 'run1-rb')['charged'])
 
+    def test_a_loser_seen_allocated_is_charged_even_before_its_pod_leaves_a_trace(self):
+        # measured: v1phi-rb went IN_PROGRESS in the winner's poll, was cancelled, and its pod wrote budget.json 89 s AFTER CANCELED
+        fake = FakeScaleTrain({'fb': [('IN_PROGRESS', 'absent')], 'rb': [('IN_PROGRESS', 'absent')]}, started=())
+        out = L.race('exp.yaml', 'run1', 'train', fake.api(), poll=5)
+        self.assertEqual(out['winner'], 'run1-fb')
+        self.assertIn(('run1-rb', False), fake.recorded)               # charged: it was allocated
+        self.assertIsNotNone(fake.terminal_at['run1-rb'])              # through the cancel tail, not the API's CANCELED time
+        self.assertIn(('run1-ro', True), fake.recorded)                # only ever QUEUED: not charged
+        self.assertIsNone(fake.terminal_at['run1-ro'])
+
     def test_no_capacity_within_the_window_cancels_everything(self):
         fake = FakeScaleTrain({})
         out = L.race('exp.yaml', 'run1', 'train', fake.api(), poll=60, max_wait_seconds=600)
@@ -103,6 +115,13 @@ class Race(unittest.TestCase):
             L.select_routes('xx')
         with self.assertRaises(ValueError):
             L.race('exp.yaml', 'a' * 27, 'train', FakeScaleTrain({}).api())
+
+    def test_every_name_a_launch_may_create_is_checked_up_front(self):
+        L.check_names('a' * 22, relaunch_on_preempt=2, fallback=False)              # 22 + '-p2' = 25
+        with self.assertRaises(ValueError):
+            L.check_names('a' * 22, relaunch_on_preempt=2, fallback=True)            # 22 + '-alt' + '-p2' = 29
+        L.check_names('a' * 19, relaunch_on_preempt=2, fallback=True)
+        self.assertFalse(L.FALLBACK_SUFFIX.lstrip('-').startswith(tuple(c for c, _, _ in L.ROUTES)))
 
     def test_preemption_is_detected_cancelled_recorded_and_relaunched(self):
         fake = FakeScaleTrain({'fb': [('IN_PROGRESS', 'absent'), ('IN_PROGRESS', 'absent'), ('QUEUED', 'preemption_reported')],

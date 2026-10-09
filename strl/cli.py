@@ -46,6 +46,22 @@ def _load(path: str, overrides: list[str] | None = None) -> dict:
         raise SystemExit(2)
 
 
+def readiness_warnings(cfg: dict) -> list[str]:
+    """What `plan` cannot derive from the YAML alone: is the data prepared for THIS selection, and does the budget ledger exist?"""
+    out = []
+    from .tasks import get_environment
+    try:
+        get_environment(cfg['environment']['name']).assert_manifest(cfg)
+    except Exception as error:   # missing dir, fewer prepared tasks than configured, other filters/seed/revision
+        out.append(f"DATA: {cfg['run'].get('data_dir')} is not prepared for this selection ({' '.join(str(error).split())[:240]}): run "
+                   '`strl prepare <exp>` (or `strl fetch`). Lowering train/test counts reuses a prepared dir; more tasks, other filters or another seed need a prepare.')
+    ledger = cfg['budget'].get('ledger')
+    if ledger and not Path(ledger).is_file():
+        out.append(f'LEDGER: budget.ledger {ledger} does not exist, so stage will refuse. A new GPU program needs the user\'s authorization; then create '
+                   'the file (references/launch-and-capacity.md, "New program, new budget") and set budget.total_seconds to match.')
+    return out
+
+
 def cmd_plan(a):
     from .derive import plan
     from .experiment import diff
@@ -57,6 +73,7 @@ def cmd_plan(a):
         raise SystemExit(2)
     if a.against:
         report['diff_vs'] = {a.against: [{'key': k, 'from': x, 'to': y} for k, x, y in diff(_load(a.against), cfg)]}
+    report['warnings'] += readiness_warnings(cfg)
     if a.json:
         print(json.dumps(report, indent=2, default=str))
         return

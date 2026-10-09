@@ -1,5 +1,5 @@
 """Fallback profiles. Unverified: use for CPU dry runs / 1-GPU canaries before a real run, and add a dedicated profile
-(see .claude/skills/scaletrain-rl/references/extending.md, "A new model") once an architecture needs special handling."""
+(see .claude/skills/scaletrain-rl-experiments/references/extending.md, "A new model") once an architecture needs special handling."""
 from __future__ import annotations
 
 from . import ModelProfile

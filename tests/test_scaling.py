@@ -177,9 +177,9 @@ class Overrides(unittest.TestCase):
                 load(SMOKE, overrides=bad)
 
     def test_existing_experiments_render_nothing_new(self):
-        for path in sorted(Path(ROOT / 'experiments').glob('*.yaml')) + [ROOT / 'base/gsm8k.yaml']:
-            if '2node' in path.name or path.name.startswith('mimo'):   # scaling experiments: LoRA / multi-node by design
-                continue
+        # the GPU-verified single-node experiments that predate LoRA / multi-node (an explicit list: new experiments may use LoRA freely)
+        legacy = ['gsm8k-qwen35', 'mbpp-qwen35-binary', 'mbpp-qwen35-partial', 'mbpp-qwen35-custom-reward', 'mbpp-qwen3-1p7b', 'harbor-qwen35']
+        for path in [ROOT / 'experiments' / f'{name}.yaml' for name in legacy] + [ROOT / 'base/gsm8k.yaml']:
             cfg = load(str(path))
             self.assertEqual(scaling_values(cfg, 10), {}, path)
             self.assertNotIn('finetune', cfg)
@@ -726,3 +726,45 @@ class Retention(unittest.TestCase):
             load('experiments/mimo-qwen35-0p8b-smoke.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])   # 1 GPU
         cfg = load('experiments/mimo-qwen38-27b-lora.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml}'])
         self.assertEqual(train_reserve_seconds(cfg, 'train') - train_reserve_seconds(load('experiments/mimo-qwen38-27b-lora.yaml'), 'train'), 900)
+
+
+class RemoteCode(unittest.TestCase):
+    """SkyRL loads with trust_remote_code=True: a stale bundled modeling file (Phi-4-mini under transformers 5) must yield to the native class."""
+
+    def _dir(self, config):
+        import json as _json
+        import tempfile as _tempfile
+        d = Path(_tempfile.mkdtemp())
+        (d / 'config.json').write_text(_json.dumps(config))
+        return d
+
+    def test_native_architecture_drops_auto_map_and_keeps_the_original(self):
+        from strl import models
+        d = self._dir({'model_type': 'phi3', 'architectures': ['Phi3ForCausalLM'],
+                       'auto_map': {'AutoConfig': 'configuration_phi3.Phi3Config', 'AutoModelForCausalLM': 'modeling_phi3.Phi3ForCausalLM'}})
+        out = models.prefer_native_code(d)
+        self.assertEqual(out['status'], 'remote_code_dropped')
+        self.assertNotIn('auto_map', json.loads((d / 'config.json').read_text()))
+        self.assertIn('auto_map', json.loads((d / 'config.json.remote').read_text()))
+        self.assertEqual(models.model_code_check(d), {'class': 'Phi3ForCausalLM', 'source': models.model_code_check(d)['source']})
+        self.assertEqual(models.prefer_native_code(d)['status'], 'native')       # idempotent on a second node / a retry
+
+    def test_unknown_architecture_keeps_its_remote_code(self):
+        from strl import models
+        d = self._dir({'model_type': 'brand_new', 'architectures': ['BrandNewForCausalLM'], 'auto_map': {'AutoModelForCausalLM': 'm.BrandNewForCausalLM'}})
+        self.assertEqual(models.prefer_native_code(d)['status'], 'remote_code')
+        self.assertIn('auto_map', json.loads((d / 'config.json').read_text()))
+
+    def test_unloadable_model_fails_the_check(self):
+        from strl import models
+        d = self._dir({'model_type': 'brand_new', 'architectures': ['BrandNewForCausalLM']})
+        with self.assertRaises(RuntimeError):
+            models.model_code_check(d)
+
+
+class FullModeSwitch(unittest.TestCase):
+    def test_set_full_on_a_lora_experiment_needs_no_rank_reset(self):
+        from strl.experiment import load
+        from strl.overrides import scaling_values
+        cfg = load(str(ROOT / 'experiments/mimo-phi4-mini-lora-verify.yaml'), overrides=['finetune.mode=full', 'algorithm.lr=1e-6'])
+        self.assertFalse(any(k.startswith('trainer.policy.model.lora') for k in scaling_values(cfg, 10)))

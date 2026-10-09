@@ -70,8 +70,14 @@ def _state(api: Api, job_id: str) -> tuple[str, str]:
         return 'UNKNOWN', type(error).__name__
 
 
-def _settle_losers(api: Api, experiment: str, losers: dict[str, str], poll: float, timeout: float = 600.0) -> list[dict]:
-    """Cancel every loser, wait until each is terminal, record it in the ledger (uncharged only on positive evidence that no pod ran)."""
+CANCEL_TAIL_SECONDS = 180   # a job cancelled after allocation can keep its pod for minutes (measured: budget.json written 89 s after CANCELED)
+
+
+def _settle_losers(api: Api, experiment: str, losers: dict[str, str], poll: float, timeout: float = 600.0,
+                   allocated: set[str] | frozenset = frozenset()) -> list[dict]:
+    """Cancel every loser, wait until each is terminal, record it in the ledger. Uncharged only on positive evidence that no pod ran: a
+    job ever seen allocated (IN_PROGRESS) is charged even before its pod leaves a trace, through CANCEL_TAIL_SECONDS after the terminal
+    observation, because the pod outlives the API's CANCELED."""
     for attempt, job_id in losers.items():
         try:
             api.cancel(job_id)
@@ -82,9 +88,10 @@ def _settle_losers(api: Api, experiment: str, losers: dict[str, str], poll: floa
         for attempt, job_id in list(pending.items()):
             status, _ = _state(api, job_id)
             if status in TERMINAL:
-                never = not api.pods_started(experiment, attempt)
+                never = attempt not in allocated and not api.pods_started(experiment, attempt)
+                tail = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(api.clock() + CANCEL_TAIL_SECONDS)) if attempt in allocated else None
                 try:
-                    receipt = api.record(experiment, attempt, job_id, never_started=never and status in {'CANCELED', 'CANCELLED'})
+                    receipt = api.record(experiment, attempt, job_id, never_started=never and status in {'CANCELED', 'CANCELLED'}, terminal_at=tail)
                 except Exception as error:
                     receipt = {'error': str(error)}
                 out.append({'attempt': attempt, 'job_id': job_id, 'status': status, 'charged': not never, 'ledger': receipt})
@@ -119,9 +126,10 @@ def race(experiment: str, attempt: str, mode: str, api: Api, *, overrides: list[
             api.log(f'{name} was not accepted by ScaleTrain; continuing with the other routes')
     if not jobs:
         raise RuntimeError('no route was accepted by ScaleTrain')
-    started_at, last, ran = api.clock(), {}, {}
+    started_at, last, ran, allocated = api.clock(), {}, {}, set()
     while True:
         states = {name: _state(api, job_id) for name, job_id in jobs.items()}
+        allocated |= {n for n, (s, _) in states.items() if s not in TERMINAL | {'QUEUED', 'UNKNOWN'}}
         if states != last:
             api.log(time.strftime('%H:%M:%S ') + ' '.join(f'{n}[{s} {d}]' for n, (s, d) in states.items()))
             last = states
@@ -134,16 +142,16 @@ def race(experiment: str, attempt: str, mode: str, api: Api, *, overrides: list[
         if running:
             winner = running[0]
             losers = {n: j for n, j in jobs.items() if n != winner}
-            settled = _settle_losers(api, experiment, losers, poll)
+            settled = _settle_losers(api, experiment, losers, poll, allocated=allocated)
             api.log(f'WINNER {winner} ({jobs[winner]}) after {api.clock() - started_at:.0f} s; cancelled {sorted(losers)}')
             return {'winner': winner, 'job_id': jobs[winner], 'waited_seconds': round(api.clock() - started_at), 'routes': [c for c, _, _ in chosen],
                     'jobs': jobs, 'losers': settled, 'receipt': receipts[winner]}
         dead = [n for n, (s, _) in states.items() if s in TERMINAL]   # ended without a pod
         if dead and len(dead) == len(jobs):
-            settled = _settle_losers(api, experiment, dict(jobs), poll)
+            settled = _settle_losers(api, experiment, dict(jobs), poll, allocated=allocated)
             return {'winner': None, 'reason': 'every route ended before starting', 'jobs': jobs, 'losers': settled}
         if max_wait_seconds is not None and api.clock() - started_at > max_wait_seconds:
-            settled = _settle_losers(api, experiment, dict(jobs), poll)
+            settled = _settle_losers(api, experiment, dict(jobs), poll, allocated=allocated)
             api.log(f'no route started within {max_wait_seconds / 3600:.1f} h: all cancelled')
             return {'winner': None, 'reason': f'no capacity within {max_wait_seconds:.0f} s', 'jobs': jobs, 'losers': settled}
         api.sleep(poll)
@@ -162,7 +170,7 @@ def watch(experiment: str, attempt: str, job_id: str, api: Api, *, poll: float =
         if status == 'QUEUED' and 'preempt' in detail:
             api.log(f'{attempt} was preempted ({detail}): cancelling the requeued job (a preempted attempt cannot resume)')
             terminal_at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(api.clock()))
-            settled = _settle_losers(api, experiment, {attempt: job_id}, poll=min(poll, 15.0))
+            settled = _settle_losers(api, experiment, {attempt: job_id}, poll=min(poll, 15.0), allocated={attempt})
             return {'outcome': 'preempted', 'status': status, 'attempt': attempt, 'job_id': job_id, 'terminal_at': terminal_at, 'settled': settled}
         api.sleep(poll)
 
@@ -235,7 +243,24 @@ def real_api(user_id: str) -> Api:
     return Api(stage=stage, submit=submit, get=get, cancel=cancel, record=record, pods_started=pods_started)
 
 
+FALLBACK_SUFFIX = '-alt'   # not '-fb...': route codes already end attempt names (fb/rb/ro/fo)
+
+
+def check_names(attempt: str, *, relaunch_on_preempt: int = 0, fallback: bool = False) -> None:
+    """Every attempt name a launch may create must fit MAX_BASE_NAME BEFORE anything is submitted (a relaunch hours later must not fail on
+    its name, and truncation must never reproduce an earlier name)."""
+    longest = attempt + (FALLBACK_SUFFIX if fallback else '') + (f'-p{relaunch_on_preempt}' if relaunch_on_preempt else '')
+    if len(longest) > MAX_BASE_NAME:
+        raise ValueError(f'attempt name {attempt!r} is too long: with these flags the launcher may create {longest!r} ({len(longest)} > '
+                         f'{MAX_BASE_NAME} characters before the route suffix); use at most {MAX_BASE_NAME - len(longest) + len(attempt)} characters')
+
+
 def main_launch(a) -> int:
+    try:
+        check_names(a.attempt, relaunch_on_preempt=a.relaunch_on_preempt or 0, fallback=bool(a.max_wait_hours and a.fallback_set))
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 2
     api = real_api(a.user_id)
     from . import cli
     from .overrides import durable
@@ -245,7 +270,7 @@ def main_launch(a) -> int:
                      relaunch_on_preempt=a.relaunch_on_preempt, resume_on_preempt=resumable)
     if a.max_wait_hours and not history[-1].get('winner') and a.fallback_set:   # e.g. 2 nodes never came: fall back to a smaller shape
         api.log(f'no capacity within {a.max_wait_hours} h: falling back with {a.fallback_set}')
-        history += launch(a.experiment, f'{a.attempt}-fb1'[:MAX_BASE_NAME], a.mode, api, overrides=[*a.set, *a.fallback_set], routes=a.routes,
+        history += launch(a.experiment, a.attempt + FALLBACK_SUFFIX, a.mode, api, overrides=[*a.set, *a.fallback_set], routes=a.routes,
                           poll=a.poll, follow=a.watch, relaunch_on_preempt=a.relaunch_on_preempt, resume_on_preempt=resumable)
     print(json.dumps([{k: v for k, v in h.items() if k != 'receipt'} for h in history], indent=1, default=str))
     last = history[-1]

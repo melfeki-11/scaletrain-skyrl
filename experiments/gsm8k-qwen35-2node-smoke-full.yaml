@@ -9,7 +9,7 @@ extends: experiments/gsm8k-qwen35-2node-smoke.yaml
 
 finetune:
   mode: full
-  lora: {rank: 0}                 # the parent's LoRA rank is inherited by the merge; a rank > 0 is only valid in lora mode
+  lora: {rank: 0}                 # optional: mode full ignores the inherited LoRA block
 
 compute:
   training: {fsdp_size: null}     # full shard across both nodes

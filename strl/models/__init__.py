@@ -173,3 +173,45 @@ def detect(model_cfg: dict, hf_config: dict | None = None) -> tuple[ModelProfile
                            'loading (language_model_only), a decoder class to wrap and a text-only export (see strl/models/qwen3_5.py); '
                            'register one with strl.models.register_profile, or pick the text-only checkpoint')
     return get_profile('generic_causal_lm'), hf_config
+
+
+def prefer_native_code(model_dir: str | Path) -> dict:
+    """SkyRL loads every model with trust_remote_code=True, so a checkpoint whose config.json carries `auto_map` (Phi-3/Phi-4, several
+    InternLM/Mistral-era releases) runs the repo's bundled modeling file, written for an older transformers: Phi-4-mini's raised
+    `ImportError: cannot import name 'LossKwargs'` under transformers 5 at policy init (v1phi-fb, 2026-10-09). When the installed transformers
+    has the architecture natively, drop auto_map (the original is kept as config.json.remote) so the native class is used, as vLLM does by
+    default. Runs in the pod on every node before anything loads the model. Returns what it did."""
+    path = Path(model_dir) / 'config.json'
+    if not path.is_file():
+        return {'status': 'no_config'}
+    config = json.loads(path.read_text())
+    auto = config.get('auto_map')
+    if not auto:
+        return {'status': 'native'}
+    import transformers
+    from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+    archs = config.get('architectures') or []
+    if not (config.get('model_type') in CONFIG_MAPPING and archs and all(hasattr(transformers, a) for a in archs)):
+        return {'status': 'remote_code', 'auto_map': sorted(auto)}
+    original = path.with_name('config.json.remote')
+    if not original.exists():
+        original.write_text(path.read_text())
+    config.pop('auto_map')
+    path.write_text(json.dumps(config, indent=2) + '\n')
+    return {'status': 'remote_code_dropped', 'auto_map': sorted(auto), 'transformers': transformers.__version__}
+
+
+def model_code_check(model_dir: str | Path) -> dict:
+    """Import the class the trainer will instantiate, without weights (a dry run proves it on CPU): the bundled remote class when
+    config.json still maps one, else transformers' native class for each architecture. Raises when it cannot be imported."""
+    config = json.loads((Path(model_dir) / 'config.json').read_text())
+    auto = (config.get('auto_map') or {}).get('AutoModelForCausalLM')
+    if auto:
+        from transformers.dynamic_module_utils import get_class_from_dynamic_module
+        return {'class': get_class_from_dynamic_module(auto, str(model_dir)).__name__, 'source': 'remote_code'}
+    import transformers
+    missing = [a for a in config.get('architectures') or [] if not hasattr(transformers, a)]
+    if missing:
+        raise RuntimeError(f'transformers {transformers.__version__} has no {missing} and config.json maps no remote code: this model cannot load '
+                           'in the training image')
+    return {'class': (config.get('architectures') or ['?'])[0], 'source': f'transformers {transformers.__version__}'}

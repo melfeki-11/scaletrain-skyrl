@@ -35,7 +35,7 @@ environment:
 
 reward:
   components:
-    - {fn: verifier_score, weight: 1.0}   # the native grader (reward.txt, or the judged final); other terms are out of scope for mimo
+    - {fn: verifier_score, weight: 1.0}   # the native grader (reward.txt, or the judged final); add module:function shaping terms after it (training only)
 
 algorithm:
   prompts_per_step: 40              # 8 per domain at equal weights

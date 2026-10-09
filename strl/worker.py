@@ -426,6 +426,8 @@ def main():
             raise RuntimeError('Incorrect worker allocation: expected exactly ' + ('one node' if nodes == 1 else f'{nodes} nodes'))
         begin = budget(runtime, cfg)
         identity['budget'] = begin
+        identity['model_code'] = {**models.prefer_native_code(cfg['model']['local_path']), **models.model_code_check(cfg['model']['local_path'])}
+        print(json.dumps({'model_code': identity['model_code']}), flush=True)
         reserve = train_reserve_seconds(cfg, mode)
         os.environ.update(
             GRPO_WORKER_BEGAN_EPOCH=str(begin['started_at']), STRL_GPU_FRACTION=str(begin['gpu_fraction']),

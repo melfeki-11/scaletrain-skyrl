@@ -193,7 +193,7 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
         out.append(f'SIGNAL: at base reward ~{p0:.2f}, {100 * all_same:.0f}% of groups of {a["n_samples"]} are all-equal (zero advantage); '
                    'watch train/learning_signal_fraction. More samples per prompt raise it; so does an easier curriculum.')
     elif p0 is None:
-        out.append('SIGNAL: base pass rate unknown for this environment/model: the 1-GPU canary measures it (eval/task_metric at step 0); '
+        out.append('SIGNAL: base pass rate unknown for this environment/model: the canary measures it (eval/task_metric at step 0); '
                    'if < 0.3, prefer prompts_per_step 32 x n_samples 16 (same rollouts, ~6x fewer all-fail groups).')
     if a['n_samples'] < 4:
         out.append('SIGNAL: n_samples < 4 gives very noisy group baselines for GRPO.')
@@ -213,8 +213,9 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
                    'and the held-out test, and watch environment/reward_components/* for terms that rise while the task metric does not (reward hacking).')
     seconds = b['attempt_max_seconds'] - b['bootstrap_margin_seconds'] - b['final_eval_reserve_seconds'] - 550
     steps = int(seconds / timing['step_s']) if timing['step_s'] > 0 else 0
-    if steps < 20:
-        out.append(f'BUDGET: only ~{steps} optimizer steps fit in the attempt after startup and final-eval reserve; consider shorter generations or a longer attempt.')
+    if steps < min(20, int(a.get('max_steps') or 20)):   # silent when the configured max_steps already fits
+        out.append(f'BUDGET: only ~{steps} optimizer steps fit in the attempt after startup and final-eval reserve (max_steps {a.get("max_steps")}); '
+                   'consider shorter generations or a longer attempt.')
     if env.generator_kind == 'harbor':   # step-wise GRPO merges a trajectory's turns only if the chat template keeps history verbatim
         from .models import template_check
         merge = template_check.check(cfg)   # local tokenizer / HF cache only: plan never goes online

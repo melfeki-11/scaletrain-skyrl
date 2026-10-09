@@ -796,6 +796,12 @@ class Generator(unittest.TestCase):
             env.queue = [fake_results(exc='OutputLengthExceededError', reward=None, trial_dir=env_dir(env))]
             out, summary = env.go(phase='train')
             self.assertEqual((out['reward'], out['stop_reason'], summary['masked'], summary['stop']), (0.0, 'output_length', False, 'output_length'))
+            env = Env(temp + '/out-notok')      # v3smk-fb: an overflow that left NO tokens is a scored placeholder, never an infrastructure mask
+            env.queue = [fake_results(exc='OutputLengthExceededError', reward=None, rollout=False, trial_dir=env_dir(env))]
+            out, summary = env.go(phase='train')
+            self.assertEqual((summary['masked'], summary['placeholder'], summary['stop'], out['reward']), (False, True, 'output_length', 0.0))
+            self.assertEqual(generator.rollout_metrics([summary], ['g'])['environment/music/masked_group_fraction'] if summary['domain'] == 'music'
+                             else generator.group_fractions([summary], ['g'])['masked_group_fraction'], 0.0)
             env = Env(temp + '/mask-eval', settings={'timeout_policy': 'mask'})   # the user asked to mask timeouts: still masked in eval
             env.queue = [fake_results(exc='AgentTimeoutError', reward=None, rollout=False)]
             self.assertTrue(env.go(phase='eval')[1]['masked'])
@@ -1758,3 +1764,27 @@ class DeadlineAndEvalValidation(unittest.TestCase):
             self.load('algorithm.eval_temperature=0.0')
         self.assertIn('eval_repeats > 1', str(caught.exception))
         self.load('algorithm.eval_temperature=0.0', 'environment.mimo.eval_repeats=1')   # a single greedy eval is fine
+
+
+class ShapingContract(unittest.TestCase):
+    """The dry run calls every shaping term (forward test: a custom mimo term first ran at the canary before this)."""
+
+    def test_a_term_returning_nan_fails_the_dry_run_contract(self):
+        from unittest import mock
+        from strl.experiment import load
+        from strl.tasks.mimo import generator, spec
+        cfg = load(str(Path(__file__).resolve().parents[1] / 'experiments/mimo-phi4-mini-lora-verify.yaml'))
+        good = spec.shaping_contract(cfg, ['music'])
+        self.assertGreater(good['music']['passed'], good['music']['failed'])
+        bad = [{'name': 'nan_term', 'fn': lambda result, ctx: float('nan'), 'weight': 1.0, 'params': {}, 'max_generate_length': 2048}]
+        with mock.patch.object(generator, 'reward_terms', lambda cfg: bad):
+            with self.assertRaises(RuntimeError):
+                spec.shaping_contract(cfg, ['music'])
+
+    def test_terms_see_the_experiment_generation_cap(self):
+        seen = {}
+        terms = [{'name': 't', 'fn': lambda result, ctx: seen.setdefault('cap', ctx.max_generate_length) and 0.0, 'weight': 1.0, 'params': {},
+                  'max_generate_length': 2048}]
+        from strl.tasks.mimo.generator import shape_reward
+        shape_reward({'domain': 'music'}, 1.0, 1.0, terms)
+        self.assertEqual(seen['cap'], 2048)
