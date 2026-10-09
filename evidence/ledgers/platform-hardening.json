@@ -422,6 +422,115 @@
       "gpu_fraction": 0.0,
       "nodes": 1,
       "evidence": "CANCELED without a pod: no worker-started.json / budget.json in the attempt artifacts (not charged)"
+    },
+    {
+      "job_id": "job_db4fes3mjdjg088cejl0",
+      "attempt": "fc-cd-dry1-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-09T14:17:20Z",
+      "terminal_at": "2026-10-09T14:19:26Z",
+      "gpu_fraction": 0.0,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-09T14:17:20Z) is not charged"
+    },
+    {
+      "job_id": "job_db4ferjmjdjg088cejkg",
+      "attempt": "fa-q3cc-dry-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-09T14:17:18Z",
+      "terminal_at": "2026-10-09T14:20:25Z",
+      "gpu_fraction": 0.0,
+      "nodes": 2,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-09T14:17:18Z) is not charged"
+    },
+    {
+      "job_id": "job_db4fg8rmjdjg07lcrs0g",
+      "attempt": "fd-dry-q3moe-a-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-09T14:20:19Z",
+      "terminal_at": "2026-10-09T14:22:38Z",
+      "gpu_fraction": 0.0,
+      "nodes": 2,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-09T14:20:19Z) is not charged"
+    },
+    {
+      "job_id": "job_db4fifjmjdjg088cejlg",
+      "attempt": "fa-q3cc-dryc-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-09T14:25:02Z",
+      "terminal_at": "2026-10-09T14:30:09Z",
+      "gpu_fraction": 0.0,
+      "nodes": 2,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-09T14:25:02Z) is not charged"
+    },
+    {
+      "job_id": "job_db4fkcbmjdjg088cejm0",
+      "attempt": "fc-cd-dry2-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-09T14:29:05Z",
+      "terminal_at": "2026-10-09T14:31:12Z",
+      "gpu_fraction": 0.0,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-09T14:29:05Z) is not charged"
+    },
+    {
+      "job_id": "job_db4fp7gc78j0089ltaf0",
+      "attempt": "fb-smolb-dry-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-09T14:39:26Z",
+      "terminal_at": "2026-10-09T14:41:31Z",
+      "gpu_fraction": 0.0,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-09T14:39:26Z) is not charged"
+    },
+    {
+      "job_id": "job_db4fp80c78j0089ltafg",
+      "attempt": "fb-smola-dry-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-09T14:39:28Z",
+      "terminal_at": "2026-10-09T14:41:33Z",
+      "gpu_fraction": 0.0,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-09T14:39:28Z) is not charged"
+    },
+    {
+      "job_id": "job_db4fqf0c78j0089ltag0",
+      "attempt": "fb-smolb-can-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-09T14:42:04Z",
+      "terminal_at": "2026-10-09T14:51:10Z",
+      "gpu_fraction": 0.125,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-09T14:42:04Z) is not charged"
+    },
+    {
+      "job_id": "job_db4gdn8c78j0089ltai0",
+      "attempt": "fe-cd-olmo-dry-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-09T15:23:09Z",
+      "terminal_at": "2026-10-09T15:25:12Z",
+      "gpu_fraction": 0.0,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-09T15:23:09Z) is not charged"
+    },
+    {
+      "job_id": "job_db4gfb0c78j0089ltaig",
+      "attempt": "fe-cdc-olmo-dry-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-09T15:26:36Z",
+      "terminal_at": "2026-10-09T15:28:39Z",
+      "gpu_fraction": 0.0,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-09T15:26:36Z) is not charged"
     }
-  ]
+  ],
+  "reservations": {
+    "cd-v1": {
+      "node_seconds": 352,
+      "attempts": [
+        "cd-v1-fb"
+      ],
+      "created": 1791559099.920202
+    }
+  }
 }

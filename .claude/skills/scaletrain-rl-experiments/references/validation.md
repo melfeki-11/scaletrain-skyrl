@@ -198,3 +198,26 @@ Known limits, not fixed:
   re-recorded uncharged through the locked path.
 - Budget reservations: `stage` now books each launch's worst case under the ledger lock (a race's routes share one booking), so parallel launches
   cannot overspend a program; released on record or on a failed stage, expired after 72 h.
+
+### Fresh-agent forward tests (no context but the repo and this skill), 2026-10-09
+
+| Agent | Task | Real jobs | Outcome | What it changed in the repo/skill |
+| --- | --- | --- | --- | --- |
+| A | Qwen3-8B LoRA, 2 x 8, MiMo cyber + code; then a real 2 x 8 GPU proof inside a 9,000 node-s ledger | stage-model (16 GB, ~90 s), two 2-node CPU dry runs (one with the gpt-6-luna ceiling: cyber 1.0, code 0.5), the 2 x 8 GPU proof (below) | dry runs passed every gate (2 hosts, 16 Ray GPUs, 82 overrides, nop 0 with the verifier proven) | attempt-sizing arithmetic, BUDGET/CANARY plan warnings, reservation slack, plan step count with the in-loop reserve |
+| B | SmolLM2-1.7B (Llama arch, ChatML) GSM8K reward A/B, one 1-GPU canary | 2 dry runs, canary `fb-smolb-can-fb` | canary COMPLETED: 2 updates, grad norm 0.056 / 0.066, learning signal 0.625, brevity term only paid on correct answers; 25-37% of eval completions fail on the `#### N` format | `fetch` top-level files only (19 GB of ONNX skipped), verify refuses canaries, derived env_class diff, canary semantics and gate documented |
+| C | add a new environment (`countdown`) from extending.md | 2 dry runs | dry run passed (80 overrides, reward contract 7 cases, 512/100 rows); the env is now shipped | `score_result` declared, generic verify re-scoring, launch prints dry-run gates, extending.md single-turn walkthrough, `assets/` ignored |
+| D | Qwen3-30B-A3B MoE full FT, 2 x 8 feasibility | stage-model (61 GB, ~5 min), 2-node dry run | dry run passed (HSDP 8 + offload, TP2); found the offline final eval hard-coded to TP1 (a 61 GB model would train then fail its eval) | TP-aware offline eval, measured probe by default, collective-cost estimate, FSDP buffers in memory, MoE section |
+| E (second loop, after the fixes) | countdown + OLMo-2 1B LoRA 4 GPUs, own reward A/B; 2 x 8 full plan; launch + preemption plan | stage-model (~40 s), 2 dry runs | both dry runs passed; correct, budget-aware recommendations (advised against 2 x 8 full FT for a 1.5B model) | offload advice size-aware, eval shards a maximum, single-turn W&B keys, dry-run limits |
+
+### 2 x 8 GPU proof launched from a fresh agent's preparation (2026-10-09)
+
+`mimo-qwen3-8b-lora-2node-proof.yaml` (then `fa-qwen3-8b-cc-proof.yaml`), prepared, sized and dry-run by fresh agent A; launched by the
+coordinator after the user confirmed (the agent's own GPU launch was blocked by its harness permission policy: a sub-agent cannot see the
+user's approval). Attempt `fa-q3pf-a1-fb`, job_db4g8armjdjg07lcrs20, ledger `evidence/ledgers/fresh-agent-multinode.json`:
+- won route `fb` after 1 s; no other route submitted (the stop-submitting change); reservation 6,240 node-s booked at stage, released at record.
+- COMPLETED in 1,715 s: 2 nodes, socket NCCL (cross-node 0.63 GB/s, intra 344 GB/s), step-0 eval 229 s, steps ~300 s, LoRA sync across hosts,
+  exports gathered from BOTH nodes (`exports_gathered.nodes[*].synced`), in-loop paired result (base step 0, trained step 2; 8B scores 0 on the
+  4+4 capped held-out tasks: infrastructure evidence, not a training effect).
+- `strl verify`: verified (coverage complete). W&B readback: `infra/*`, per-domain `generate/*` / `eval/*`, `qualitative/{fixed,broken}_by_training`,
+  `qualitative/critic`, `trajectories/*`, `test/*`, `gpu/mem_peak_gb`, `timing/step`.
+- Charged 3,634 node-s (agent's estimate: ~4,800; worst case 5,880); 5,366 left.
