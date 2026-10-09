@@ -301,15 +301,21 @@ def latest_export(root: Path) -> Path | None:
     return steps[-1][1] if steps else None
 
 
+def retention_in_pod(cfg, resolved='retention-resolved.json'):
+    """The retention experiment as STAGED (retention-resolved.json, paths re-rooted at the pod): the pod payload ships only that file and
+    its data, never the retention experiment's YAML chain (v3smk3-fb: `experiment file not found: base/gsm8k.yaml`)."""
+    from .experiment import load_resolved, retention_config
+    return load_resolved(resolved) if Path(resolved).is_file() else retention_config(cfg)
+
+
 def run_retention(cfg, runtime, root, trained, deadline):
     """evaluation.retention: base vs trained on another environment's held-out set (e.g. GSM8K for a MiMo run). Never raises: the result
     or the reason it is missing goes to artifacts/final_eval/retention/result.json and W&B retention/<env>/*."""
-    from .experiment import retention_config
     from .tasks import get_environment
     out_dir = Path('artifacts/final_eval/retention')
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        rcfg = retention_config(cfg)
+        rcfg = retention_in_pod(cfg)
         if trained is None:
             raise RuntimeError('no trained export to evaluate')
         renv = get_environment(rcfg['environment']['name'])
@@ -564,7 +570,7 @@ def main():
         steps = int(progress.get('optimizer_steps', progress.get('optimizer_step', 0)))
         if steps < 2 or not (root / 'canary.json').is_file():
             raise RuntimeError('Missing successful real training canary' + (f' ({stalled})' if stalled else ''))
-        extra = {'nodes': nodes, 'network': identity.get('network')} if multi else {}
+        extra = {'nodes': nodes, 'network': identity.get('network'), 'exports_gathered': identity.get('exports_gathered')} if multi else {}
         if mode == 'canary' or not cfg['evaluation']['final_eval']:
             final = dict(status='completed', mode=mode, optimizer_steps=steps, stalled=stalled, phases=phases,
                          elapsed_seconds=time.time() - begin['started_at'], gpus=gpus, experiment_sha=cfg['_meta']['sha'], **extra)

@@ -726,6 +726,24 @@ class Resume(unittest.TestCase):
 class Retention(unittest.TestCase):
     """Plan P15: base vs trained on another environment's held-out set, with THIS experiment's model."""
 
+    def test_the_pod_uses_the_staged_retention_config_not_the_yaml(self):
+        # v3smk3-fb: the pod has no base/gsm8k.yaml; it must read the staged retention-resolved.json
+        import os as _os
+        from strl.experiment import retention_config, save_resolved
+        from strl import worker
+        cfg = load('experiments/mimo-qwen38-27b-lora.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml, limit: 300}'])
+        staged = retention_config(cfg)
+        with tempfile.TemporaryDirectory() as temp:
+            save_resolved(staged, Path(temp) / 'retention-resolved.json', root='/workspace/strl-run')
+            here = _os.getcwd()
+            _os.chdir(temp)
+            try:
+                cfg['evaluation']['retention']['experiment'] = 'base/does-not-exist-in-the-pod.yaml'
+                got = worker.retention_in_pod(cfg)
+            finally:
+                _os.chdir(here)
+        self.assertEqual((got['environment']['name'], got['_retention_limit'], got['model']['id']), ('gsm8k', 300, cfg['model']['id']))
+
     def test_retention_config_uses_the_experiment_model(self):
         from strl.experiment import retention_config
         cfg = load('experiments/mimo-qwen38-27b-lora.yaml', overrides=['evaluation.retention={experiment: base/gsm8k.yaml, limit: 300}'])
