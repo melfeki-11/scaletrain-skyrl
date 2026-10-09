@@ -37,7 +37,7 @@ one job per route and keeps the first that starts:
   started (no `budget.json` / `worker-started.json`, never seen allocated). A loser ever seen allocated is charged from that observation
   (minus one poll) through a 180 s cancel tail. S3 errors count as "a pod may have run": charged, but never picked as the winner.
 - Exit codes: 0 ok; 2 no route started; 3 a job could not be settled or recorded in the ledger (the log prints `UNSETTLED` / `LEDGER`
-  lines with the exact `strl ledger` command); 4 the winner was preempted and no relaunch was left; 5 (with `--watch`) the winner ran and FAILED.
+  lines with the exact `strl ledger` command); 4 the winner was preempted and no relaunch was left; 5 (with `--watch`) the winner ended FAILED or CANCELED. A preempted job that cannot be settled stops the relaunch (two attempts could otherwise train at once), and with exit 3 the `--fallback-set` race is skipped.
 - `--max-wait-hours H --fallback-set compute.nodes=1` (repeatable) gives up on the shape after H hours and races again with the overrides
   as `<attempt>-alt`, e.g. a 2 x 8 run that falls back to 1 x 8 (what the user asked for when 2 nodes were scarce). The fallback starts fresh:
   a checkpoint resumes only at the same world size.

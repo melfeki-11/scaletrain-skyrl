@@ -181,6 +181,12 @@ A separate reviewer read the whole `platform-hardening` diff and simulated the l
   overrides; concurrent launchers could lose ledger entries (file lock + atomic replace).
 - a LoRA rank vLLM does not accept (e.g. 24) would crash the engines after the run had started: `plan` rejects it.
 
+A second review of those fixes found six more gaps, all fixed with tests: an unsettled preempted job did not stop the relaunch nor fail the
+launch; the `--fallback-set` race ran even when a loser could not be settled; unknown pod evidence on routes that all ended could poll forever;
+"never started" was decided at the CANCELED observation although a pod's trace can arrive ~90 s later (now confirmed after the cancel tail, and a
+"pod ran" refusal re-records the job as charged); an interrupt while waiting orphaned the queued routes; the manual `strl ledger` hint ignored
+`--set` (now `strl ledger --set`). Also: a ledger entry spelled `CANCELLED` broke every later budget check.
+
 Known limits, not fixed:
 - `stage` checks the remaining budget but reserves nothing: concurrent launches against one ledger can overspend it together.
 - coding_harbor hardening: the program under test runs as `python -I` (without `-S`, so a planted `.pth` in system site-packages still loads), and an

@@ -239,5 +239,70 @@ class ReviewFindings(unittest.TestCase):
         self.assertIn('run.resume_from=run1-fb', p2['overrides'])
 
 
+class SecondReview(unittest.TestCase):
+    """Re-review of the launcher fixes (2026-10-09)."""
+
+    def setUp(self):
+        self.cwd = os.getcwd()
+        self.tmp = tempfile.TemporaryDirectory()
+        os.chdir(self.tmp.name)
+
+    def tearDown(self):
+        os.chdir(self.cwd)
+        self.tmp.cleanup()
+
+    def test_a_trace_appearing_after_canceled_is_charged(self):
+        fake = FakeScaleTrain({'fb': [('QUEUED', 'w'), ('IN_PROGRESS', 'absent')]})
+        api = fake.api()
+        cancelled_at = {}
+        original_cancel = fake.cancel
+
+        def cancel(job_id):
+            cancelled_at.setdefault(job_id, fake.now)
+            original_cancel(job_id)
+        api.cancel = cancel
+        # rb's pod writes budget.json 90 s after it was cancelled (never seen allocated by the launcher)
+        api.pods_started = lambda experiment, attempt: attempt.endswith('-rb') and fake.now >= cancelled_at.get('job-run1-rb', 1e9) + 90
+        L.race('exp.yaml', 'run1', 'train', api, poll=15)
+        self.assertIn(('run1-rb', False), fake.recorded)
+        self.assertIn(('run1-ro', True), fake.recorded)
+
+    def test_unknown_evidence_forever_ends_the_race(self):
+        fake = FakeScaleTrain({'fb': [('FAILED', 'image pull')], 'rb': [('FAILED', 'image pull')]})
+        api = fake.api()
+        api.pods_started = lambda experiment, attempt: None
+        out = L.race('exp.yaml', 'run1', 'train', api, routes='fb,rb', poll=5)
+        self.assertIsNone(out['winner'])
+        self.assertTrue(all(not never for _, never in fake.recorded))     # unknown is charged
+
+    def test_an_interrupt_while_waiting_cancels_every_route(self):
+        fake = FakeScaleTrain({})
+        api = fake.api()
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 3:
+                raise KeyboardInterrupt
+            fake.sleep(seconds)
+        api.sleep = sleep
+        with self.assertRaises(KeyboardInterrupt):
+            L.race('exp.yaml', 'run1', 'train', api, poll=5)
+        self.assertEqual(len(fake.cancelled), 4)
+
+    def test_an_unsettled_preempted_job_stops_the_relaunch_and_is_a_problem(self):
+        script = {'fb': [('IN_PROGRESS', 'absent'), ('QUEUED', 'preemption_reported')]}
+        fake = FakeScaleTrain(script, started={'run1-fb'})
+        api = fake.api()
+        api.cancel = lambda job_id: None                                       # the requeued job never leaves QUEUED
+        history = L.launch('exp.yaml', 'run1', 'train', api, poll=1, follow=True, relaunch_on_preempt=2)
+        self.assertEqual(len(history), 1)
+        self.assertTrue(L._problems(history))
+
+    def test_a_cancelled_spelling_never_breaks_the_budget(self):
+        from strl.budget import remaining_seconds
+        self.assertEqual(remaining_seconds([{'job_id': 'j', 'status': 'CANCELLED', 'allocated_at': None, 'terminal_at': 'x'}], 100), 100)
+
+
 if __name__ == '__main__':
     unittest.main()

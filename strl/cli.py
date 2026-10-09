@@ -329,7 +329,8 @@ def record_attempt(experiment: str, attempt: str, job_id: str, *, terminal_at: s
 
 def cmd_ledger(a):
     try:
-        out = record_attempt(a.experiment, a.attempt, a.job_id, terminal_at=a.terminal_at, never_started=a.never_started, ledger=a.ledger)
+        out = record_attempt(a.experiment, a.attempt, a.job_id, terminal_at=a.terminal_at, never_started=a.never_started, ledger=a.ledger,
+                             overrides=a.set)
     except ValueError as error:
         raise SystemExit(str(error))
     print(json.dumps(out, indent=1))
@@ -423,7 +424,8 @@ def main(argv=None):
     s.add_argument('--interval', type=float, default=60); s.add_argument('--once', action='store_true')
     s = sub.add_parser('ledger'); s.add_argument('experiment'); s.add_argument('--attempt', required=True); s.add_argument('--job-id', required=True)
     s.add_argument('--terminal-at', help='ISO time of the terminal observation (default: now)')
-    s.add_argument('--never-started', action='store_true', help='a CANCELLED job that never left the queue (verified: no worker-started.json): not charged')
+    s.add_argument('--never-started', action='store_true', help='a terminal job whose pod never ran (verified: no worker-started.json / budget.json): not charged')
+    s.add_argument('--set', action='append', default=[], metavar='KEY=VALUE', help="the launch's --set overrides (ledger, storage)")
     s.add_argument('--ledger', help='program budget ledger (default: budget.ledger of the experiment)')
     s = sub.add_parser('verify'); s.add_argument('experiment'); s.add_argument('--attempt', required=True)
     s = sub.add_parser('compare'); s.add_argument('runs', nargs='+', help='experiment.yaml:attempt')

@@ -119,7 +119,7 @@ one route and started first on another; dry runs start in seconds on `fb`.
 - Borrowed capacity can be reclaimed (`preemption_reported`): use `--watch --relaunch-on-preempt 2` with `evaluation.durable_checkpoints: true`
   (+ `budget.save_optimizer_state: true`; in-loop-result envs such as mimo) so the relaunch resumes from S3 (verified: `v2res2-fb`);
   or `--routes ro,fo` to avoid borrowing. Launch exit codes: 0 ok, 2 no capacity, 3 a job unsettled/unrecorded (fix the ledger by hand
-  as printed), 4 preempted with no relaunch left, 5 the watched job FAILED.
+  as printed), 4 preempted with no relaunch left, 5 the watched job ended FAILED or CANCELED.
 - Keep CPU work (prepare, image prebuild, dry runs, docs) going while a GPU job queues. `strl capacity` (read-only, `ml-admin`) explains waits.
 Details: references/launch-and-capacity.md.
 
