@@ -147,6 +147,7 @@ ledger is append-only; correcting it is the user's call).
 | `v1phi2-fb` | 1 x 2 GPU | past policy init (the fix works); FAILED at step 2 on the same music overflow fail-fast (staged before that fix) | Phi-4-mini's ABC pieces overflow 2,048 tokens: the experiment now uses 4,096 |
 | `v3smk2-fb` | 2 x 8 | both updates done (352 / 250 s; generate 222 / 221 s, policy_train 81 / 21 s; LoRA sync across nodes), no overflow masks; then FAILED after the LAST step: `Fail-fast (step_slow): 250s > 1.5 x the plan estimate 39s` | an UNCALIBRATED estimate (a 27B profile scaled down by size) stopped a healthy run at its last step. Only calibrated estimates stop a run now, no rule stops at the last step (advisory alert instead), and the estimator floors agentic generation at 0.35 x step deadline (212 s planned for this smoke) |
 | `v1phid3-fb` | CPU | dry_run_passed; the new shaping contract ran the shipped term in the pod (`turn_efficiency_bonus`: pass 1.035, fail 0.0 in both domains) | - |
+| `v1phi3-fb` | 1 x 2 GPU | step-0 eval (513 s, 4,096-token music), 2 updates (395 / 394 s; policy_train 14 s), no fail-fast; then FAILED saving the step-2 durable checkpoint: `No such file or directory ... "/workspace/strl-run/s3://..."` | pinned SkyRL writes every FSDP checkpoint file through its cloud io EXCEPT the LoRA adapter (`safetensors.save_file(path)`). Exact-source patch `LORA_ADAPTER_CLOUD_SAVE` (tested on the pinned source); the dry run now round-trips a safetensors file through SkyRL io at the real S3 `ckpt_path` (`durable_checkpoint_io` gate) |
 
 ### Forward test (a fresh agent with only the repo and the skill, CPU only)
 
@@ -156,3 +157,22 @@ rank; `plan` silent on a missing ledger or unprepared data; BUDGET warning noise
 `max_generate_length` 1024; the fallback name `-fb1` collided with route codes and could truncate to the original name; a relaunch name could
 exceed 26 characters hours into a launch) and the documentation ones are in SKILL.md (lr by size, `result`/`ctx` fields, data dirs, large-model
 staging, start-up times, A/B groups). Its experiment files were removed after the gaps were fixed.
+
+### Independent code review of the branch (2026-10-09)
+
+A separate reviewer read the whole `platform-hardening` diff and simulated the launcher with fakes. Fixed, each with a regression test:
+- **resume never worked:** `prepare_resume` looked for the checkpoint under the NEW attempt's prefix (`run_name` passed for `previous`); every relaunch
+  would have failed in the pod after its GPUs were allocated.
+- durable checkpoints with the offline final eval (`final_eval: true`) failed every finished run (local checkpoint dir moved to S3): now rejected by
+  `plan` until supported.
+- launcher accounting: losers were charged their whole queue wait when their pod left no trace yet (now from the first allocated observation minus
+  one poll); a loser seen running only while settling was recorded uncharged; a queued job that FAILED without a pod was charged; an S3 error could
+  crown a route that never ran as the winner; ledger write failures vanished into `launch.json` (now retried, exit 3); a stage/submit error mid-race
+  left submitted routes running unmanaged (now cancelled first); a preempted run with no relaunch left exited 0 (now 4); recording ignored `--set`
+  overrides; concurrent launchers could lose ledger entries (file lock + atomic replace).
+- a LoRA rank vLLM does not accept (e.g. 24) would crash the engines after the run had started: `plan` rejects it.
+
+Known limits, not fixed:
+- `stage` checks the remaining budget but reserves nothing: concurrent launches against one ledger can overspend it together.
+- coding_harbor hardening: the program under test runs as `python -I` (without `-S`, so a planted `.pth` in system site-packages still loads), and an
+  agent running as root could replace `/usr/local/bin/python3` itself. Single-turn `coding_exec` runs in the separate Modal executor and is not affected.

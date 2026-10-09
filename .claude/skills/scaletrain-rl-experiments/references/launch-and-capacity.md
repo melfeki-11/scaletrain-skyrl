@@ -33,9 +33,11 @@ one job per route and keeps the first that starts:
   submitting once one has started. When capacity is free that is usually `fb` alone (on 2026-10-08, submitting all four at once had a
   second route allocated, cancelled and charged in every GPU race); when it is scarce every route is still in the queue within ~2 min.
 - `--routes fb,ro` restricts the race. Every route uses high priority (never lower it).
-- The losers are cancelled the moment the winner leaves the queue and recorded uncharged, on positive evidence that their pods never
-  started (no `budget.json` / `worker-started.json`). Two routes starting inside one poll interval: the extra one is charged for the
-  seconds its pod was up.
+- The losers are cancelled the moment the winner leaves the queue and recorded uncharged only on positive evidence that their pods never
+  started (no `budget.json` / `worker-started.json`, never seen allocated). A loser ever seen allocated is charged from that observation
+  (minus one poll) through a 180 s cancel tail. S3 errors count as "a pod may have run": charged, but never picked as the winner.
+- Exit codes: 0 ok; 2 no route started; 3 a job could not be settled or recorded in the ledger (the log prints `UNSETTLED` / `LEDGER`
+  lines with the exact `strl ledger` command); 4 the winner was preempted and no relaunch was left.
 - `--max-wait-hours H --fallback-set compute.nodes=1` (repeatable) gives up on the shape after H hours and races again with the overrides
   as `<attempt>-alt`, e.g. a 2 x 8 run that falls back to 1 x 8 (what the user asked for when 2 nodes were scarce). The fallback starts fresh:
   a checkpoint resumes only at the same world size.
@@ -52,8 +54,10 @@ one job per route and keeps the first that starts:
 ScaleTrain reports it as `QUEUED` + `status_detail: preemption_reported`; the worker records `completion.json` status `preempted`.
 A preempted attempt cannot continue in place (its budget window is anchored at its first start). Two defences:
 - `strl launch ... --watch --relaunch-on-preempt N` cancels the requeued job, records it, and races again as `<x>-a1-p1`.
-- With `evaluation.durable_checkpoints: true` (and `budget.save_optimizer_state: true`) every checkpoint (model, optimizer, data
-  position) goes to the attempt's S3 prefix, and the relaunch RESUMES (`run.resume_from=<preempted attempt>` is added automatically):
+- With `evaluation.durable_checkpoints: true` (and `budget.save_optimizer_state: true`; in-loop-result environments only, i.e.
+  `evaluation.final_eval: false`, e.g. mimo) every checkpoint (model, optimizer, data position, LoRA adapter) goes to the attempt's S3
+  prefix, and the relaunch RESUMES from the latest attempt that left a checkpoint (`run.resume_from` is added automatically; none yet ->
+  it starts fresh):
   same weights, optimizer and step, and the earlier attempt's step-0 evaluation stays the base of the paired result. You can also
   resume by hand: `strl launch <exp> --attempt <x>-r1 --mode train --set run.resume_from=<attempt>`. A resume needs the same world size.
   Cost: a 27B LoRA checkpoint holds the full model state (~7 GB per rank), so use it for long runs on borrowed capacity.
@@ -64,6 +68,8 @@ A preempted attempt cannot continue in place (its budget window is anchored at i
 - An attempt is charged `(terminal - pod start) x nodes x gpus/8`, pod start = the worker's write-once `budget.json` `started_at` minus
   420 s (image pull + bootstrap). Queue time is never charged. CPU dry runs are free. (Entries recorded before 2026-10-08 charged from job
   creation.)
+- Several launches can share one ledger: entries are written under a file lock, but `stage` only CHECKS the remaining budget (nothing is
+  reserved), so concurrent launches can overspend it together. Sum their reservations yourself before launching in parallel.
 - `stage` refuses when the remaining budget cannot cover bootstrap + training + the final-eval/retention reserve; a canary job is capped
   at `budget.canary_max_seconds` + 600 s.
 - `strl launch --watch` records the winner and the losers itself. Otherwise, after every terminal attempt:

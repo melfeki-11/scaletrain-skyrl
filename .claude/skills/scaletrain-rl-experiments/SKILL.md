@@ -76,7 +76,7 @@ Extra preparation by case:
 | Axis | Keys | Example |
 | --- | --- | --- |
 | **Model** | `model.id`, `model.revision` (a commit sha). Leave `model.local_path` and `model.profile` unset (auto). | `--set model.id=microsoft/Phi-4-mini-instruct --set model.revision=cfbefacb99257ffa30c83adab238a50856ac3083` |
-| **Fine-tuning** | `finetune.mode: lora\|full` (full ignores an inherited `finetune.lora`), `finetune.lora.{rank,alpha,target_modules}`. lr: LoRA 1e-5; full 2e-6 at <= 2B (verified on 0.8B), 1e-6 at 7B+ | `--set finetune.mode=full --set algorithm.lr=1e-6` |
+| **Fine-tuning** | `finetune.mode: lora\|full` (full ignores an inherited `finetune.lora`), `finetune.lora.{rank,alpha,target_modules}` (rank must be a vLLM rank: 8/16/32/64/128/256). lr: LoRA 1e-5; full 2e-6 at <= 2B (verified on 0.8B), 1e-6 at 7B+ | `--set finetune.mode=full --set algorithm.lr=1e-6` |
 | **Environment** | `environment.name` (`gsm8k`, `coding_exec`, `coding_harbor`, `mimo`); for mimo `environment.mimo.domains.<d>.{train,test,weight,filters,max_turns,max_agent_sec}` | `--set environment.mimo.domains.code.train=0 --set environment.mimo.domains.code.test=0` (off) |
 | **Reward** | `reward.components`: weighted named terms or `module:function` from `user_rewards/` | see below |
 | **Scale** | `compute.nodes`, `compute.gpus_per_node` (1/2/4/8), `inference.tensor_parallel_size`, `limits.max_nodes` | `--set compute.gpus_per_node=8 --set inference.tensor_parallel_size=2` |
