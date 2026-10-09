@@ -218,7 +218,7 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
     if nondefault:
         out.append(f'REWARD: shaping terms {[c["fn"] for c in nondefault]} are trained on but NOT the yardstick: judge the run by eval/task_metric '
                    'and the held-out test, and watch environment/reward_components/* for terms that rise while the task metric does not (reward hacking).')
-    seconds = b['attempt_max_seconds'] - b['bootstrap_margin_seconds'] - b['final_eval_reserve_seconds'] - 550
+    seconds = b['attempt_max_seconds'] - b['bootstrap_margin_seconds'] - train_reserve(cfg) - 550
     steps = int(seconds / timing['step_s']) if timing['step_s'] > 0 else 0
     if steps < min(20, int(a.get('max_steps') or 20)):   # silent when the configured max_steps already fits
         out.append(f'BUDGET: only ~{steps} optimizer steps fit in the attempt after startup and final-eval reserve (max_steps {a.get("max_steps")}); '
@@ -290,6 +290,15 @@ def params_and_config(cfg: dict) -> tuple[models.ModelProfile, dict | None, floa
     return profile, hf, params_b
 
 
+def train_reserve(cfg: dict) -> int:
+    """What the worker keeps free at the end of a train attempt (strl.worker.train_reserve_seconds, mirrored without importing the pod code):
+    the offline final eval's reserve, or the in-loop result's forced eval + export window (480 s hard stop + 120 s), + retention."""
+    retention = 900 if (cfg.get('evaluation') or {}).get('retention') else 0
+    if cfg['evaluation'].get('final_eval', True):
+        return int(cfg['budget']['final_eval_reserve_seconds']) + retention
+    return 480 + 120 + retention
+
+
 def plan(cfg: dict, network: dict | None = None) -> dict:
     """``network``: a probe result (artifacts/network.json of an earlier attempt) the layout recommendation is based on."""
     env = get_environment(cfg['environment']['name'])
@@ -301,7 +310,7 @@ def plan(cfg: dict, network: dict | None = None) -> dict:
         memory['measured_peak_gb'] = max(r['memory_peak_gb'] for r in seen)
         memory['measured_in'] = seen[-1]['name']
     budget = cfg['budget']
-    usable = budget['attempt_max_seconds'] - budget['bootstrap_margin_seconds'] - budget['final_eval_reserve_seconds'] - 550
+    usable = budget['attempt_max_seconds'] - budget['bootstrap_margin_seconds'] - train_reserve(cfg) - 550
     a = cfg['algorithm']
     per_gpu = cfg['derived']['rollouts_per_step'] // max(1, cfg['derived']['world_size'])
     out = {

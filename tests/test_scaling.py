@@ -336,7 +336,7 @@ class Staging(unittest.TestCase):
         first = self._stage_as('mn-a1-fb', reservation='mn-a1')
         self._stage_as('mn-a1-rb', reservation='mn-a1')                       # a race's routes share ONE reservation
         self.assertEqual(list(held()), ['mn-a1'])
-        self.assertEqual(held()['mn-a1']['node_seconds'], int(first['remaining_seconds'] * 2))
+        self.assertEqual(held()['mn-a1']['node_seconds'], int((first['remaining_seconds'] + 420) * 2))   # + pod-start slack
         self.assertEqual(held()['mn-a1']['attempts'], ['mn-a1-fb', 'mn-a1-rb'])
         with self.assertRaises(RuntimeError):                                  # another launch sees only what is left
             self._stage_as('mn-b1')
@@ -899,3 +899,12 @@ class FullModeSwitch(unittest.TestCase):
         from strl.overrides import scaling_values
         cfg = load(str(ROOT / 'experiments/mimo-phi4-mini-lora-verify.yaml'), overrides=['finetune.mode=full', 'algorithm.lr=1e-6'])
         self.assertFalse(any(k.startswith('trainer.policy.model.lora') for k in scaling_values(cfg, 10)))
+
+
+class PlanMirrorsWorker(unittest.TestCase):
+    def test_plan_train_reserve_matches_the_worker(self):
+        from strl.derive import train_reserve
+        from strl.worker import train_reserve_seconds
+        for path in ('experiments/gsm8k-qwen35.yaml', 'experiments/mimo-phi4-mini-lora-verify.yaml', 'experiments/mimo-qwen35-0p8b-2node-smoke.yaml'):
+            cfg = load(path)
+            self.assertEqual(train_reserve(cfg), train_reserve_seconds(cfg, 'train'), path)

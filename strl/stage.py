@@ -243,7 +243,8 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
         snapshot = {k: v for k, v in ledger_data.items() if k != 'reservations'}   # the attempt's write-once copy: charges only
         if charge:   # GPU modes book their worst case until record_attempt releases it
             booked = ledger_data.setdefault('reservations', {}).setdefault(group, {'node_seconds': 0, 'attempts': [], 'created': time.time()})
-            booked['node_seconds'] = max(int(booked['node_seconds']), int(remaining * charge))
+            # the ledger charges from pod start - POD_START_SLACK_SECONDS (image pull + bootstrap), so book that too
+            booked['node_seconds'] = max(int(booked['node_seconds']), int((remaining + 420) * charge))
             booked['attempts'] = sorted(set(booked['attempts']) | {attempt})
     except BaseException:
         lock.__exit__(*sys.exc_info())   # no write-back
