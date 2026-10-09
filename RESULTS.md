@@ -15,6 +15,29 @@ Common protocol for every run:
 - Δ is a paired bootstrap CI.
 - `strl verify` re-scored every completion independently (in Modal for coding) and found 0 disagreements with the worker.
 
+## Platform hardening: capacity race, a non-Qwen model, 2 × 8 re-verification, resume (2026-10-08/09)
+
+An infrastructure round, not a training-effect study: every run below is 2-4 LoRA updates on small held-out sets, and their task metrics are 0
+(Qwen3.5-0.8B and Phi-4-mini on ARVO cyber and constrained ABC music). What they establish:
+
+| Claim | Evidence |
+| --- | --- |
+| GPUs as fast as ScaleTrain allows | every launch raced the routes; all were won by foundation+borrowing in 4-19 s (CPU dry runs never started on the research quota) |
+| a non-Qwen OSS model trains with LoRA on a MiMo subset | Phi-4-mini (`dense` profile): `v1phi4-fb` 2 updates on music + cyber with a shaped reward, in-loop paired result, `strl verify`-compatible evidence |
+| shaped rewards are exercised before GPUs | the dry run calls every shaping term in the pod (`turn_efficiency_bonus`: pass 1.035, fail 0.0) |
+| multi-node is stable | `v3smk3-fb`, 2 × 8 H100: rendezvous, probe (socket NCCL, 0.68 GB/s cross-node, 343 GB/s intra-node), 2 updates, LoRA sync across hosts, export gathered to S3, in-loop paired result; `strl verify` verified (8/8 coverage, statistics agree, 6 music artifacts re-graded, 0 disagreements) |
+| W&B carries the new evidence | readback of `v3smk3-fb`: `infra/*`, per-domain `generate/*` / `environment/*` / `eval/*` (incl. `num_output_exceeded`), `qualitative/{fixed,broken}_by_training`, critic and trajectory tables, `test/*`, `gpu/mem_peak_gb`; `strl report` built the W&B report |
+| preempted runs can continue | durable LoRA checkpoints in S3 (`v1phi4-fb` step 2, incl. the adapter); `v2res-fb` resumed from it (see below) |
+
+Bugs the GPU runs found (each fixed with a test; details in validation.md): Phi's bundled remote code under transformers 5; single-shot
+output overflows counted as infrastructure failures (they tripped the fail-fast on two healthy runs); an uncalibrated step estimate (39 s vs
+250-350 s measured) stopping a healthy 2 × 8 run after its last step; SkyRL's LoRA adapter save unable to write to S3; the retention eval reading a
+YAML the pod does not have; a cancelled loser's pod outliving CANCELED by 89 s. An independent code review then found that resume read the wrong
+S3 prefix and seven ledger/launcher accounting errors, all fixed before the resume run.
+
+Budget: 14,400 node-seconds authorized (4 node-hours); 11,748 spent before the resume run, 87% of it on the three 2 × 8 attempts and their charged losing routes (two attempts killed by
+the false fail-fasts above, one complete). Ledger: `evidence/ledgers/platform-hardening.json`.
+
 ## MiMo-V2.6-RL suite · Qwen3.8-27B LoRA · 8×H100 (attempt run1-n1-a, 2026-10-08)
 
 The first 27B agentic GRPO run on the platform: all five MiMo domains (music, cyber, code, general, webdev) in one trainer, Qwen3.8-27B with
