@@ -291,7 +291,8 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
         if full % gpus or (full // gpus) % a['micro_forward_per_gpu']:
             problems.append(f'prompts_per_step*n_samples={full} must divide evenly into {gpus} GPUs x micro_forward_per_gpu={a["micro_forward_per_gpu"]}')
     shards, etp = e['eval_shards_per_model'], int(i.get('tensor_parallel_size') or 1)
-    if e.get('final_eval', True) and (shards < 1 or shards * 2 > gpn or etp > gpn):   # TP > 1 shrinks the shards automatically (eval_layout)
+    # TP > 1 shrinks the shards automatically and 1 shard may run base then trained on the same GPUs (eval_layout): a 1-GPU run can final-eval
+    if e.get('final_eval', True) and (shards < 1 or (shards * 2 > gpn and shards != 1) or etp > gpn):
         problems.append(f'evaluation.eval_shards_per_model={shards} / tensor_parallel_size={etp}: the offline final eval needs >= 1 shard of '
                         f'{etp} GPU(s) on one {gpn}-GPU node; set evaluation.final_eval: false to skip it')
     if e['interval_steps'] < 1 or e['checkpoint_interval_steps'] < 1:
