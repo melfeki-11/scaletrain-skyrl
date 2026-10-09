@@ -19,7 +19,7 @@ class FakeScaleTrain:
         return L.Api(stage=self.stage, submit=self.submit, get=self.get, cancel=self.cancel, record=self.record,
                      pods_started=lambda experiment, attempt: attempt in self.started, clock=lambda: self.now, sleep=self.sleep, log=lambda m: None)
 
-    def stage(self, experiment, *, attempt, mode, team, allow_borrowing, overrides):
+    def stage(self, experiment, *, attempt, mode, team, allow_borrowing, overrides, reservation=None):
         self.staged.append({'attempt': attempt, 'team': team, 'borrow': allow_borrowing, 'overrides': list(overrides)})
         return {'job_file': f'evidence/{attempt}/job.json'}
 

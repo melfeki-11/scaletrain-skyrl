@@ -188,6 +188,13 @@ launch; the `--fallback-set` race ran even when a loser could not be settled; un
 `--set` (now `strl ledger --set`). Also: a ledger entry spelled `CANCELLED` broke every later budget check.
 
 Known limits, not fixed:
-- `stage` checks the remaining budget but reserves nothing: concurrent launches against one ledger can overspend it together.
 - coding_harbor hardening: the program under test runs as `python -I` (without `-S`, so a planted `.pth` in system site-packages still loads), and an
   agent running as root could replace `/usr/local/bin/python3` itself. Single-turn `coding_exec` runs in the separate Modal executor and is not affected.
+
+## Verification round 2 (2026-10-09)
+
+- Ledger: `v1phi-rb` corrected with the user's permission (+86 node-s: its pod ran 89 s after CANCELED); four losers whose "recorded" entries were
+  lost to concurrent unlocked ledger writes before the lock existed (`v1phi-ro`, `v1phi-fo`, `v1phid2-ro`, `v1phid3-rb`, none with a pod trace)
+  re-recorded uncharged through the locked path.
+- Budget reservations: `stage` now books each launch's worst case under the ledger lock (a race's routes share one booking), so parallel launches
+  cannot overspend a program; released on record or on a failed stage, expired after 72 h.

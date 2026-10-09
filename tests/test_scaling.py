@@ -325,6 +325,53 @@ class Staging(unittest.TestCase):
         with self.assertRaises(RuntimeError):      # 1800 node-s left = 900 s at 2 nodes: not enough for an attempt
             self.stage('train')
 
+    def _stage_as(self, attempt, mode='train', s3=None, reservation=None):
+        from strl.stage import stage
+        return stage(str(TMP / 'exp.yaml'), attempt=attempt, mode=mode, ledger=str(TMP / 'ledger.json'), output=str(TMP / f'{attempt}.json'),
+                     s3=s3 or FakeS3(), now=time.struct_time((2026, 10, 6, 12, 0, 0, 0, 279, 0)), reservation=reservation)
+
+    def test_concurrent_launches_cannot_overspend_one_ledger(self):
+        held = lambda: json.loads((TMP / 'ledger.json').read_text()).get('reservations') or {}
+        (TMP / 'ledger.json').write_text(json.dumps({'total_seconds': 5000, 'nodes': 2, 'attempts': []}))   # one 2 x 8 booking = 1800 s x 2 = 3600
+        first = self._stage_as('mn-a1-fb', reservation='mn-a1')
+        self._stage_as('mn-a1-rb', reservation='mn-a1')                       # a race's routes share ONE reservation
+        self.assertEqual(list(held()), ['mn-a1'])
+        self.assertEqual(held()['mn-a1']['node_seconds'], int(first['remaining_seconds'] * 2))
+        self.assertEqual(held()['mn-a1']['attempts'], ['mn-a1-fb', 'mn-a1-rb'])
+        with self.assertRaises(RuntimeError):                                  # another launch sees only what is left
+            self._stage_as('mn-b1')
+        self._stage_as('mn-d1', mode='dry')                                    # CPU dry runs are free: never blocked, never booked
+        self.assertEqual(list(held()), ['mn-a1'])
+        from strl.stage import release_reservation
+        release_reservation(TMP / 'ledger.json', 'mn-a1', 'mn-a1-rb')
+        release_reservation(TMP / 'ledger.json', 'mn-a1', 'mn-a1-fb')
+        self.assertEqual(held(), {})
+        self._stage_as('mn-b1')                                                # released: the budget is available again
+
+    def test_recording_an_attempt_releases_its_reservation(self):
+        from unittest import mock
+        from strl import cli
+        (TMP / 'ledger.json').write_text(json.dumps({'total_seconds': 5000, 'nodes': 2, 'attempts': [],
+                                                    'reservations': {'mn-a1': {'node_seconds': 3600, 'attempts': ['mn-a1-fb'], 'created': time.time()}}}))
+        Path('evidence/mn-a1-fb').mkdir(parents=True, exist_ok=True)
+        Path('evidence/mn-a1-fb/stage.json').write_text(json.dumps({'gpu_fraction': 1.0, 'nodes': 2}))
+        try:
+            with mock.patch.object(cli, 'allocation_start', lambda cfg, attempt: None), mock.patch.object(cli, 'worker_started', lambda cfg, attempt: False):
+                out = cli.record_attempt(str(TMP / 'exp.yaml'), 'mn-a1-fb', 'job-1', ledger=str(TMP / 'ledger.json'), never_started=True,
+                                         job={'status': 'CANCELED', 'created_at': '2026-10-06 00:00:00+00:00'})
+        finally:
+            shutil.rmtree('evidence/mn-a1-fb', ignore_errors=True)
+        self.assertIsNone(out['recorded']['allocated_at'])
+        self.assertEqual(json.loads((TMP / 'ledger.json').read_text()).get('reservations'), {})
+
+    def test_a_failed_stage_releases_its_reservation(self):
+        class Broken(FakeS3):
+            def put_object(self, **kw):
+                raise OSError('S3 down')
+        with self.assertRaises(OSError):
+            self._stage_as('mn-x1', s3=Broken())
+        self.assertEqual(json.loads((TMP / 'ledger.json').read_text()).get('reservations') or {}, {})
+
     def test_model_already_in_s3(self):
         from strl.stage import MODEL_MANIFEST, model_prefix, stage_model
         shutil.rmtree(TMP / 'model')

@@ -21,12 +21,13 @@ import json
 import shlex
 import tarfile
 import tempfile
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import models
-from .budget import node_fraction, remaining_seconds
+from .budget import locked_ledger, node_fraction, remaining_seconds, reserved_seconds
 from .experiment import REPO_ROOT, deep_merge, load, save_resolved, validate, derive_placement, experiment_sha
 from .tasks import get_environment
 
@@ -192,7 +193,8 @@ NCCL_TIMEOUT_MULTINODE = 900   # cross-host collectives and 2-node engine start-
 
 def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None = None, team: str | None = None,
           allow_borrowing: bool = False, output: str = 'job.json', s3=None, now: time.struct_time | None = None,
-          overrides: list[str] | None = None) -> dict:
+          overrides: list[str] | None = None, reservation: str | None = None) -> dict:
+    """``reservation``: the budget group this attempt books its node-seconds under (a race's routes share their base name; default the attempt)."""
     if mode not in {'dry', 'canary', 'train'}:
         raise ValueError('mode must be dry, canary or train')
     if not (len(attempt) <= 32 and attempt == attempt.lower() and attempt.replace('-', '').isalnum()):
@@ -203,36 +205,71 @@ def stage(experiment_path: str, *, attempt: str, mode: str, ledger: str | None =
     env = get_environment(cfg['environment']['name'])
     profile = models.detect(cfg['model'])[0]
     ledger_path = Path(ledger or (REPO_ROOT / cfg['budget']['ledger']))
-    ledger_data = json.loads(ledger_path.read_text())
-    remaining = remaining_seconds(ledger_data['attempts'], ledger_data['total_seconds'])
-    reserve = cfg['budget']['final_eval_reserve_seconds']
-    gpus, nodes = cfg['compute']['gpus_per_node'], cfg['compute']['nodes']
-    gpu_fraction = 0.0 if mode == 'dry' else gpus / 8.0      # per node; the ledger charges nodes x gpu_fraction
-    charge = node_fraction(cfg, mode)
-    if mode == 'train':
-        # the ledger counts node-seconds; a k-GPU slice may run (8/k) wall-seconds per node-second, N nodes 1/N
-        affordable = int(remaining / charge) if charge else remaining
-        if affordable <= reserve + 900:
-            raise RuntimeError(f'Insufficient remaining budget ({remaining} node-s = {affordable}s at {nodes} x {gpus} GPU(s)) for bootstrap, training and evaluation')
-        remaining = min(affordable, cfg['budget']['attempt_max_seconds'])
-        worker_seconds = remaining - cfg['budget']['bootstrap_margin_seconds']
-    elif mode == 'canary':
-        affordable = int(remaining / charge) if charge else remaining
-        # the canary must write canary.json within budget.canary_max_seconds of the child start; the job adds pod start + Ray
-        remaining = min(affordable, min(3600, int(cfg['budget']['canary_max_seconds']) + 600))
-        if remaining < 900:
-            raise RuntimeError(f'Insufficient remaining budget for a canary ({affordable}s at {gpus} GPU(s))')
-        worker_seconds = remaining - cfg['budget']['bootstrap_margin_seconds']
-    else:   # multi-node dry runs also wait for every peer's preflight + Ray join and run the CPU probe
-        dry_seconds = env_dry_seconds(env) + (600 if nodes > 1 else 0)
-        if (cfg.get('run') or {}).get('ceiling_per_domain'):   # the reference agent runs the held-out tasks within the experiment's caps
-            from .tasks.mimo.data import mimo_config
-            from .tasks.mimo.export import DOMAIN_SPECS
-            caps = [int(d.get('max_agent_sec') or DOMAIN_SPECS[n].agent_timeout_sec) + int(d.get('max_verifier_sec') or DOMAIN_SPECS[n].verifier_timeout_sec)
-                    for n, d in mimo_config(cfg)['domains'].items() if d.get('test')]
-            dry_seconds += max(caps or [0]) * int(cfg['run']['ceiling_per_domain']) + 600
-        remaining, worker_seconds = dry_seconds, dry_seconds - 100
+    import contextlib
+    lock = contextlib.ExitStack()
+    ledger_data = lock.enter_context(locked_ledger(ledger_path))   # check + reserve atomically (concurrent launchers share the ledger)
+    group = reservation or attempt
+    try:
+        held = reserved_seconds(ledger_data, exclude=group)   # other launches staged but not yet recorded (concurrent launchers)
+        remaining = max(0, remaining_seconds(ledger_data['attempts'], ledger_data['total_seconds']) - held)
+        reserve = cfg['budget']['final_eval_reserve_seconds']
+        gpus, nodes = cfg['compute']['gpus_per_node'], cfg['compute']['nodes']
+        gpu_fraction = 0.0 if mode == 'dry' else gpus / 8.0      # per node; the ledger charges nodes x gpu_fraction
+        charge = node_fraction(cfg, mode)
+        if mode == 'train':
+            # the ledger counts node-seconds; a k-GPU slice may run (8/k) wall-seconds per node-second, N nodes 1/N
+            affordable = int(remaining / charge) if charge else remaining
+            if affordable <= reserve + 900:
+                raise RuntimeError(f'Insufficient remaining budget ({remaining} node-s = {affordable}s at {nodes} x {gpus} GPU(s)) for bootstrap, training and evaluation')
+            remaining = min(affordable, cfg['budget']['attempt_max_seconds'])
+            worker_seconds = remaining - cfg['budget']['bootstrap_margin_seconds']
+        elif mode == 'canary':
+            affordable = int(remaining / charge) if charge else remaining
+            # the canary must write canary.json within budget.canary_max_seconds of the child start; the job adds pod start + Ray
+            remaining = min(affordable, min(3600, int(cfg['budget']['canary_max_seconds']) + 600))
+            if remaining < 900:
+                raise RuntimeError(f'Insufficient remaining budget for a canary ({affordable}s at {gpus} GPU(s))')
+            worker_seconds = remaining - cfg['budget']['bootstrap_margin_seconds']
+        else:   # multi-node dry runs also wait for every peer's preflight + Ray join and run the CPU probe
+            dry_seconds = env_dry_seconds(env) + (600 if nodes > 1 else 0)
+            if (cfg.get('run') or {}).get('ceiling_per_domain'):   # the reference agent runs the held-out tasks within the experiment's caps
+                from .tasks.mimo.data import mimo_config
+                from .tasks.mimo.export import DOMAIN_SPECS
+                caps = [int(d.get('max_agent_sec') or DOMAIN_SPECS[n].agent_timeout_sec) + int(d.get('max_verifier_sec') or DOMAIN_SPECS[n].verifier_timeout_sec)
+                        for n, d in mimo_config(cfg)['domains'].items() if d.get('test')]
+                dry_seconds += max(caps or [0]) * int(cfg['run']['ceiling_per_domain']) + 600
+            remaining, worker_seconds = dry_seconds, dry_seconds - 100
 
+        snapshot = {k: v for k, v in ledger_data.items() if k != 'reservations'}   # the attempt's write-once copy: charges only
+        if charge:   # GPU modes book their worst case until record_attempt releases it
+            booked = ledger_data.setdefault('reservations', {}).setdefault(group, {'node_seconds': 0, 'attempts': [], 'created': time.time()})
+            booked['node_seconds'] = max(int(booked['node_seconds']), int(remaining * charge))
+            booked['attempts'] = sorted(set(booked['attempts']) | {attempt})
+    except BaseException:
+        lock.__exit__(*sys.exc_info())   # no write-back
+        raise
+    lock.close()                          # writes the reservation
+    try:
+        return _stage_after_budget(experiment_path, cfg, env, profile, attempt, mode, team, allow_borrowing, output, s3, now, snapshot,
+                                   remaining, worker_seconds, gpu_fraction, nodes, gpus, charge)
+    except BaseException:
+        if charge:
+            release_reservation(ledger_path, group, attempt)
+        raise
+
+
+def release_reservation(ledger_path, group: str, attempt: str) -> None:
+    """Drop ``attempt`` from its launch's reservation (the group goes when no attempt is left): staging failed or the attempt was recorded."""
+    with locked_ledger(ledger_path) as data:
+        held = (data.get('reservations') or {}).get(group)
+        if held:
+            held['attempts'] = [x for x in held.get('attempts', []) if x != attempt]
+            if not held['attempts']:
+                del data['reservations'][group]
+
+
+def _stage_after_budget(experiment_path, cfg, env, profile, attempt, mode, team, allow_borrowing, output, s3, now, ledger_data, remaining,
+                        worker_seconds, gpu_fraction, nodes, gpus, charge):
     st = cfg['storage']
     bucket, base_prefix = st['bucket'], st['prefix']
     stamp = time.strftime('%y%m%d%H%M%S', now or time.gmtime())

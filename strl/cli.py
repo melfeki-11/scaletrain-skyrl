@@ -98,6 +98,8 @@ def cmd_plan(a):
     if ledger_path.is_file():   # the program budget the next stage would draw from (node-seconds)
         from .budget import remaining_seconds
         ledger = json.loads(ledger_path.read_text())
+        from .budget import reserved_seconds
+        held = reserved_seconds(ledger)
         left = remaining_seconds(ledger['attempts'], ledger['total_seconds'])
         from .budget import node_fraction
         from .stage import CANARY_OVERLAY, canary_overlay_for
@@ -105,8 +107,9 @@ def cmd_plan(a):
         small = canary_overlay_for(cfg) == CANARY_OVERLAY
         canary = int(min(3600, cfg['budget']['canary_max_seconds'] + 600) * (1 / 8 if small else node_fraction(cfg)))
         shape = '1-GPU' if small else '{}x{}-GPU'.format(cfg['compute']['nodes'], cfg['compute']['gpus_per_node'])
-        print(f"  budget       {ledger_path}: {left} of {ledger['total_seconds']} node-s left; a train attempt reserves up to "
-              f"{train} node-s, a {shape} canary up to {canary} ({len(ledger['attempts'])} attempts recorded)")
+        print(f"  budget       {ledger_path}: {left} of {ledger['total_seconds']} node-s left"
+              + (f" ({held} held by {len(ledger.get('reservations') or {})} staged launch(es))" if held else '')
+              + f"; a train attempt reserves up to {train} node-s, a {shape} canary up to {canary} ({len(ledger['attempts'])} attempts recorded)")
     for w in report['warnings']:
         print(f'  ! {w}')
     for k, rows in report.get('diff_vs', {}).items():
@@ -286,8 +289,6 @@ def record_attempt(experiment: str, attempt: str, job_id: str, *, terminal_at: s
     observation of the job leaving the queue, minus one poll) when known, else conservatively from created_at. ``never_started`` (positive
     evidence that no pod ran) records it uncharged for ANY terminal status. ``overrides`` are the launch's --set values (ledger, storage).
     The read-modify-write is serialized with a file lock and an atomic replace: concurrent launchers share one ledger."""
-    import fcntl
-    import os
     cfg = _load(experiment, overrides)
     ledger_path = Path(ledger) if ledger else ROOT / cfg['budget']['ledger']
     job = job or json.loads(_scaletrain('get', job_id).stdout)
@@ -313,16 +314,16 @@ def record_attempt(experiment: str, attempt: str, job_id: str, *, terminal_at: s
             entry.update(allocated_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(max(created_s, allocated_floor))),
                          evidence='no worker trace: charged from the launcher\'s first observation of the job leaving the queue (minus one poll) '
                                   f'to the terminal observation; queue time (created_at {created}) is not charged')
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(str(ledger_path) + '.lock', 'w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        data = json.loads(ledger_path.read_text())
+    from .budget import locked_ledger
+    with locked_ledger(ledger_path) as data:
         if any(x['job_id'] == job_id for x in data['attempts']):
             raise ValueError(f'{job_id} already recorded')
         data['attempts'].append(entry)
-        tmp = Path(str(ledger_path) + '.tmp')
-        tmp.write_text(json.dumps(data, indent=2) + '\n')
-        os.replace(tmp, ledger_path)
+        for group, held in list((data.get('reservations') or {}).items()):   # release this attempt's share of its launch's reservation
+            if attempt in held.get('attempts', []):
+                held['attempts'] = [x for x in held['attempts'] if x != attempt]
+                if not held['attempts']:
+                    del data['reservations'][group]
     from .budget import remaining_seconds
     return {'recorded': entry, 'remaining_node_seconds': remaining_seconds(data['attempts'], data['total_seconds'])}
 

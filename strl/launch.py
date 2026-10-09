@@ -222,7 +222,8 @@ def _submit_routes(api, experiment, attempt, mode, chosen, overrides, jobs, rece
             api.log(f'a submitted route already started: not submitting {name} or later routes')
             break
         extra = [] if borrow else ['compute.allow_borrowing=false']
-        receipts[name] = api.stage(experiment, attempt=name, mode=mode, team=team, allow_borrowing=borrow, overrides=[*(overrides or []), *extra])
+        receipts[name] = api.stage(experiment, attempt=name, mode=mode, team=team, allow_borrowing=borrow, overrides=[*(overrides or []), *extra],
+                                   reservation=attempt)   # the routes of one race share one budget reservation
         job_id = api.submit(receipts[name]['job_file'])
         if job_id:
             jobs[name] = job_id
@@ -288,9 +289,9 @@ def real_api(user_id: str, overrides: list[str] | None = None) -> Api:
     from . import cli
     from .stage import stage as stage_fn
 
-    def stage(experiment, *, attempt, mode, team, allow_borrowing, overrides):
+    def stage(experiment, *, attempt, mode, team, allow_borrowing, overrides, reservation=None):
         receipt = stage_fn(experiment, attempt=attempt, mode=mode, team=team, allow_borrowing=allow_borrowing,
-                           output=f'evidence/{attempt}/job.json', overrides=overrides)
+                           output=f'evidence/{attempt}/job.json', overrides=overrides, reservation=reservation)
         Path(f'evidence/{attempt}').mkdir(parents=True, exist_ok=True)
         Path(f'evidence/{attempt}/stage.json').write_text(json.dumps(receipt, indent=2))
         return receipt

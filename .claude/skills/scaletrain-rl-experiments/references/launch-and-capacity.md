@@ -68,8 +68,9 @@ A preempted attempt cannot continue in place (its budget window is anchored at i
 - An attempt is charged `(terminal - pod start) x nodes x gpus/8`, pod start = the worker's write-once `budget.json` `started_at` minus
   420 s (image pull + bootstrap). Queue time is never charged. CPU dry runs are free. (Entries recorded before 2026-10-08 charged from job
   creation.)
-- Several launches can share one ledger: entries are written under a file lock, but `stage` only CHECKS the remaining budget (nothing is
-  reserved), so concurrent launches can overspend it together. Sum their reservations yourself before launching in parallel.
+- Several launches can share one ledger safely: `stage` checks AND books the attempt's worst case (`reservations` in the ledger, one booking
+  per race) under a file lock, `record_attempt` releases it, and a booking nobody released expires after 72 h. `strl plan` shows what is held.
+  A launch that cannot fit next to the others' bookings is refused at stage time instead of overspending.
 - `stage` refuses when the remaining budget cannot cover bootstrap + training + the final-eval/retention reserve; a canary job is capped
   at `budget.canary_max_seconds` + 600 s.
 - `strl launch --watch` records the winner and the losers itself. Otherwise, after every terminal attempt:
