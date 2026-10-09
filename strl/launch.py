@@ -395,5 +395,36 @@ def main_launch(a) -> int:
     if (last.get('outcome') or {}).get('outcome') == 'preempted':
         print(f"\n{last['winner']} was preempted and no relaunch was left (--relaunch-on-preempt N to continue)", file=sys.stderr)
         return 4
+    if a.mode == 'dry' and (last.get('outcome') or {}).get('status') == 'COMPLETED':
+        print(dry_run_summary(a.experiment, last['winner'], a.set))
     print(f"\nnext: python -m strl monitor {a.experiment} --attempt {last['winner']} --job-id {last['job_id']}")
     return 0
+
+
+def dry_run_summary(experiment: str, attempt: str, overrides: list[str] | None = None) -> str:
+    """One screen of what a finished dry run proved (artifacts/dry-run.json), so nobody has to dig through S3 for it."""
+    try:
+        import boto3
+        from . import cli
+        st = cli._load(experiment, overrides)['storage']
+        key = f"{st['prefix']}/attempts/{attempt}/artifacts/dry-run.json"
+        d = json.loads(boto3.Session(profile_name=st['profile']).client('s3').get_object(Bucket=st['bucket'], Key=key)['Body'].read())
+    except (Exception, SystemExit) as error:
+        return f'\ndry run {attempt}: could not read dry-run.json ({type(error).__name__}: {error})'
+    g = d.get('gates') or {}
+    v = g.get('skyrl_validate') or {}
+    lines = [f"\ndry run {attempt}: {d.get('status')}  (s3://{st['bucket']}/{key})",
+             f"  model_code   {(d.get('model_code') or {}).get('status')} {(d.get('model_code') or {}).get('class')}",
+             f"  skyrl        validated={v.get('validated')} overrides={v.get('overrides')} generator_contract="
+             f"{'passed' if (v.get('generator') or {}).get('generator_config_passed') else (v.get('generator') or {})}",
+             f"  layout       {json.dumps(v.get('layout') or {}, default=str)[:400]}",
+             f"  environment  {json.dumps(g.get('environment'), default=str)[:300]}",
+             f"  wandb        {json.dumps(g.get('wandb'), default=str)[:160]}"]
+    for name in ('critic', 'durable_checkpoint_io', 'ceiling'):
+        if name in g:
+            lines.append(f"  {name:<12} {json.dumps(g[name], default=str)[:300]}")
+    if (v.get('generator') or {}).get('shaping'):
+        lines.append(f"  shaping      {json.dumps(v['generator']['shaping'])[:300]}")
+    if d.get('network'):
+        lines.append(f"  network      {json.dumps(d['network'], default=str)[:200]}")
+    return '\n'.join(lines)

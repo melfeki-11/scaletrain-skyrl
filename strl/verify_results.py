@@ -16,7 +16,7 @@ from .tasks import get_environment
 
 
 def rescore(cfg: dict, env, rows: list[dict]) -> list[bool]:
-    if env.name == 'gsm8k':
+    if not env.name.startswith('coding'):   # any locally scorable env (gsm8k, countdown, yours): the spec's own scorer vs local truth
         import pyarrow.parquet as pq
         truth = {r['extra_info']['sample_id']: r['reward_spec']['ground_truth'] for r in pq.read_table(Path(cfg['run']['data_dir']) / 'test.parquet').to_pylist()}
         return [bool(env.score(r['completion'], truth[r['sample_id']], r['finish_reason'])) for r in rows]

@@ -73,6 +73,13 @@ class EnvironmentSpec:
         return [self.sample_id_format % i for i in range(cfg['environment']['test_size'])]
 
     # ------------------------------------------------------------------ scoring: the yardstick (never the training reward)
+    def score_result(self, action: str, extras: dict, cfg: dict) -> dict:
+        """Score one completion in the training env (strl_env calls it; the reward components consume the dict). ``extras`` is the dataset
+        row's {reward_spec: {ground_truth}, extra_info: {...}}. Return at least: ``correct`` (bool: the task metric), ``failure_class`` (one of
+        ``failure_classes``, 'ok' when correct), ``completion`` (the text; length_penalty reads it), ``parsed`` (what was extracted); add any
+        fields your reward components read (coding: passed/total/compiled; countdown: value/target)."""
+        raise NotImplementedError
+
     def parse(self, text: str) -> Any:
         raise NotImplementedError
 

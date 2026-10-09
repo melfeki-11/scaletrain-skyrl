@@ -34,7 +34,11 @@ def main():
     Path('artifacts/schema.json').write_text(json.dumps({'validated': True, 'stage': stage, 'overrides': values,
                                                          'generator': receipt}, indent=2, default=str))
     if '--validate-only' in sys.argv:
-        print(json.dumps({'validated': True, 'overrides': len(values), 'generator': receipt}, default=str))
+        layout_keys = ('trainer.placement.', 'trainer.policy.fsdp_config.', 'trainer.policy.model.lora.', 'trainer.strategy',
+                       'generator.inference_engine.tensor_parallel_size', 'generator.inference_engine.num_engines',
+                       'generator.inference_engine.gpu_memory_utilization', 'trainer.ckpt_path', 'trainer.resume_mode')
+        layout = {k: v for k, v in (x.split('=', 1) for x in values) if k.startswith(layout_keys)}   # WHAT was validated, not just how many
+        print(json.dumps({'validated': True, 'overrides': len(values), 'layout': layout, 'generator': receipt}, default=str))
         return
     subprocess.run([sys.executable, '-m', 'strl.entrypoint', *values], check=True)
 
