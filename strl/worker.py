@@ -76,7 +76,7 @@ def prepare_resume(prefix: str, run_name: str, previous: str, root: Path) -> dic
     read by strl.overrides in the training child), and carry over its in-loop eval records (the step-0 eval stays the base of the paired
     result) and its canary record (the canary rule ran in the earlier attempt)."""
     import boto3
-    old = previous_prefix(prefix, run_name)
+    old = previous_prefix(prefix, previous)   # the EARLIER attempt's prefix (run_name is this attempt: its prefix is empty)
     bucket, key = split_uri(f'{old}/checkpoints/latest_ckpt_global_step.txt')
     s3 = boto3.client('s3')
     try:

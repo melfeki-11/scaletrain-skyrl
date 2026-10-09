@@ -8,18 +8,18 @@ Why: capacity for the same shape is granted per (team quota, borrowing) route, a
 capacity was reclaimed after 70 s and after 30 min; a CPU job on another team's quota never started while the same job on the foundation
 team started at once. No single route is reliably fastest, so the launcher RACES all of them:
 
-  1. stage one attempt per route (`<name>-fb`, `-rb`, `-ro`, `-fo`: team foundation/research x borrowing on/off; same experiment, same budget
-     reservation; the ownership defaults of the ScaleTrain runbook - foundation team, high priority, borrowing - are route `fb`, tried first);
-  2. submit all of them (each with its own write-once receipt);
+  1. stage one attempt per route (`<name>-fb`, `-rb`, `-ro`, `-fo`: team foundation/research x borrowing on/off; same experiment; the
+     ownership defaults of the ScaleTrain runbook - foundation team, high priority, borrowing - are route `fb`, tried first);
+  2. submit them in order (each with its own write-once receipt), stopping once a submitted one has started;
   3. poll; the FIRST job that leaves the queue wins, every other job is cancelled at once;
-  4. record every loser in the program ledger: not charged when its pod never started (no budget.json / worker-started.json), charged from
-     pod start otherwise (two routes can start inside one poll interval);
+  4. record every loser in the program ledger: uncharged only on positive evidence that no pod ran; a job ever seen allocated is charged from
+     that observation (minus one poll) through a cancel tail, because its pod outlives CANCELED;
   5. with --watch: follow the winner to its terminal state and record it; when ScaleTrain reports a preemption (the job falls back to QUEUED with
-     `preemption_reported`), cancel it (a preempted attempt cannot resume: budget window anchored at the first start, no optimizer-state
-     checkpoints), record it, and with --relaunch-on-preempt N race again as `<name>-p<k>`.
+     `preemption_reported`), cancel and record it, and with --relaunch-on-preempt N race again as `<name>-p<k>`, resuming from the latest
+     attempt that left a durable checkpoint (evaluation.durable_checkpoints) or starting fresh.
 
-Only one route can ever train: the loser cancellation is the guarantee, not luck. Budget: each route reserves the attempt's budget at stage
-time, but only the winner (plus at most one poll interval of a loser that started concurrently) is ever charged.
+Only one route can ever train: the loser cancellation is the guarantee, not luck; a loser that cannot be settled fails the launch loudly.
+Budget: stage only CHECKS the remaining budget (no reservation), so concurrent launches against one ledger can overspend it together.
 """
 from __future__ import annotations
 
@@ -55,8 +55,9 @@ class Api:
     submit: Callable[[str], str | None]            # job file -> job id (None: rejected)
     get: Callable[[str], dict]                     # job id -> {'status', 'status_detail', ...}
     cancel: Callable[[str], Any]
-    record: Callable[..., Any]                     # (experiment, attempt, job_id, never_started=, terminal_at=) -> ledger receipt
-    pods_started: Callable[[str, str], bool]       # (experiment, attempt) -> did a pod ever run (budget.json / worker-started.json; fail closed)
+    record: Callable[..., Any]                     # (experiment, attempt, job_id, never_started=, terminal_at=, allocated_floor=) -> ledger receipt
+    pods_started: Callable[[str, str], bool | None]   # (experiment, attempt) -> did a pod ever run (budget.json / worker-started.json); None = unknown
+    has_checkpoint: Callable[[str, str], bool] = lambda experiment, attempt: True   # durable checkpoint in S3 (resume candidates)
     clock: Callable[[], float] = time.time
     sleep: Callable[[float], Any] = time.sleep
     log: Callable[[str], Any] = field(default=lambda m: print(m, flush=True))
@@ -71,13 +72,35 @@ def _state(api: Api, job_id: str) -> tuple[str, str]:
 
 
 CANCEL_TAIL_SECONDS = 180   # a job cancelled after allocation can keep its pod for minutes (measured: budget.json written 89 s after CANCELED)
+ACTIVE = lambda status: status not in TERMINAL | {'QUEUED', 'UNKNOWN'}   # noqa: E731  allocated / running
+
+
+def _iso(epoch: float) -> str:
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(epoch))
+
+
+def _record(api: Api, experiment: str, attempt: str, job_id: str, tries: int = 3, **kwargs) -> dict:
+    """Write one ledger entry, retrying; a failure is returned as {'error', 'unrecorded': True} so the launch exits non-zero (never silent)."""
+    error = None
+    for i in range(tries):
+        try:
+            return api.record(experiment, attempt, job_id, **kwargs)
+        except (Exception, SystemExit) as exc:   # cli._load raises SystemExit on an invalid YAML
+            if 'already recorded' in str(exc):
+                return {'already_recorded': True}
+            error = exc
+            if i + 1 < tries:
+                api.sleep(10)
+    api.log(f'LEDGER: could not record {attempt} ({job_id}): {error}; record it by hand: strl ledger {experiment} --attempt {attempt} --job-id {job_id}')
+    return {'error': str(error), 'unrecorded': True}
 
 
 def _settle_losers(api: Api, experiment: str, losers: dict[str, str], poll: float, timeout: float = 600.0,
-                   allocated: set[str] | frozenset = frozenset()) -> list[dict]:
-    """Cancel every loser, wait until each is terminal, record it in the ledger. Uncharged only on positive evidence that no pod ran: a
-    job ever seen allocated (IN_PROGRESS) is charged even before its pod leaves a trace, through CANCEL_TAIL_SECONDS after the terminal
-    observation, because the pod outlives the API's CANCELED."""
+                   seen: dict[str, float] | None = None) -> list[dict]:
+    """Cancel every loser, wait until each is terminal, record it in the ledger. ``seen`` maps attempt -> first time it was observed
+    allocated. Uncharged only on positive evidence that no pod ran; a job ever seen allocated (before or while settling) is charged from that
+    observation minus one poll, through CANCEL_TAIL_SECONDS after the terminal observation (its pod outlives CANCELED)."""
+    seen = dict(seen or {})
     for attempt, job_id in losers.items():
         try:
             api.cancel(job_id)
@@ -87,24 +110,28 @@ def _settle_losers(api: Api, experiment: str, losers: dict[str, str], poll: floa
     while pending and api.clock() < until:
         for attempt, job_id in list(pending.items()):
             status, _ = _state(api, job_id)
+            if ACTIVE(status):
+                seen.setdefault(attempt, api.clock())
             if status in TERMINAL:
-                never = attempt not in allocated and not api.pods_started(experiment, attempt)
-                tail = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(api.clock() + CANCEL_TAIL_SECONDS)) if attempt in allocated else None
-                try:
-                    receipt = api.record(experiment, attempt, job_id, never_started=never and status in {'CANCELED', 'CANCELLED'}, terminal_at=tail)
-                except Exception as error:
-                    receipt = {'error': str(error)}
+                ran = api.pods_started(experiment, attempt)
+                never = attempt not in seen and ran is False    # unknown (None) is charged: fail closed
+                kwargs = {'never_started': never}
+                if attempt in seen:
+                    kwargs.update(terminal_at=_iso(api.clock() + CANCEL_TAIL_SECONDS), allocated_floor=seen[attempt] - poll)
+                receipt = _record(api, experiment, attempt, job_id, **kwargs)
                 out.append({'attempt': attempt, 'job_id': job_id, 'status': status, 'charged': not never, 'ledger': receipt})
                 pending.pop(attempt)
             elif status != 'UNKNOWN':
                 try:
                     api.cancel(job_id)
-                except Exception:
-                    pass
+                except Exception as error:
+                    api.log(f'cancel {attempt} ({job_id}) failed again: {error}')
         if pending:
             api.sleep(poll)
-    out += [{'attempt': a, 'job_id': j, 'status': 'NOT_TERMINAL', 'charged': None, 'ledger': {'error': 'record it with strl ledger once terminal'}}
-            for a, j in pending.items()]
+    for a, j in pending.items():
+        api.log(f'UNSETTLED: {a} ({j}) is still not terminal after {timeout:.0f} s: cancel it by hand and record it with strl ledger')
+    out += [{'attempt': a, 'job_id': j, 'status': 'NOT_TERMINAL', 'charged': None, 'unsettled': True,
+             'ledger': {'error': 'record it with strl ledger once terminal', 'unrecorded': True}} for a, j in pending.items()]
     return out
 
 
@@ -113,13 +140,62 @@ def race(experiment: str, attempt: str, mode: str, api: Api, *, overrides: list[
     """Stage + submit one job per route, keep the first that starts, cancel the rest. Returns the launch receipt."""
     if len(attempt) > MAX_BASE_NAME:
         raise ValueError(f'attempt name {attempt!r} is longer than {MAX_BASE_NAME} characters (route suffixes need room)')
-    chosen, jobs, receipts = select_routes(routes), {}, {}
+    chosen, jobs, receipts, seen = select_routes(routes), {}, {}, {}
+    try:
+        _submit_routes(api, experiment, attempt, mode, chosen, overrides, jobs, receipts, seen)
+    except BaseException:   # never leave submitted routes running unmanaged (a transient stage/submit error mid-race)
+        if jobs:
+            api.log(f'launch error while submitting: cancelling the {len(jobs)} submitted route(s) first')
+            _settle_losers(api, experiment, dict(jobs), poll, seen=seen)
+        raise
+    if not jobs:
+        raise RuntimeError('no route was accepted by ScaleTrain')
+    started_at, last, ran = api.clock(), {}, {}
+    while True:
+        states = {name: _state(api, job_id) for name, job_id in jobs.items()}
+        for n, (st, _) in states.items():
+            if ACTIVE(st):
+                seen.setdefault(n, api.clock())
+        if states != last:
+            api.log(time.strftime('%H:%M:%S ') + ' '.join(f'{n}[{s} {d}]' for n, (s, d) in states.items()))
+            last = states
+        running = [n for n, (s, _) in states.items() if ACTIVE(s)]
+        if not running:   # a short job (a CPU dry run) can start AND finish between two polls: it ran if its pod left a trace
+            for n, (s, _) in states.items():
+                if s in TERMINAL and ran.get(n) is None:
+                    ran[n] = api.pods_started(experiment, n)   # None (S3 unknown) is retried next poll, never a winner
+            running = [n for n in jobs if ran.get(n) is True]
+            for n in running:
+                seen.setdefault(n, api.clock())
+        if running:
+            winner = running[0]
+            losers = {n: j for n, j in jobs.items() if n != winner}
+            settled = _settle_losers(api, experiment, losers, poll, seen=seen)
+            api.log(f'WINNER {winner} ({jobs[winner]}) after {api.clock() - started_at:.0f} s; cancelled {sorted(losers)}')
+            return {'winner': winner, 'job_id': jobs[winner], 'waited_seconds': round(api.clock() - started_at), 'routes': [c for c, _, _ in chosen],
+                    'jobs': jobs, 'losers': settled, 'receipt': receipts[winner], 'winner_seen_at': seen.get(winner)}
+        dead = [n for n, (s, _) in states.items() if s in TERMINAL and ran.get(n) is False]   # ended without a pod
+        if dead and len(dead) == len(jobs):
+            settled = _settle_losers(api, experiment, dict(jobs), poll, seen=seen)
+            return {'winner': None, 'reason': 'every route ended before starting', 'jobs': jobs, 'losers': settled}
+        if max_wait_seconds is not None and api.clock() - started_at > max_wait_seconds:
+            settled = _settle_losers(api, experiment, dict(jobs), poll, seen=seen)
+            api.log(f'no route started within {max_wait_seconds / 3600:.1f} h: all cancelled')
+            return {'winner': None, 'reason': f'no capacity within {max_wait_seconds:.0f} s', 'jobs': jobs, 'losers': settled}
+        api.sleep(poll)
+
+
+def _submit_routes(api, experiment, attempt, mode, chosen, overrides, jobs, receipts, seen):
     for code, team, borrow in chosen:
         name = f'{attempt}-{code}'
         # Staging takes ~30 s per route; when capacity is free the first route is often running before the last is submitted. Measured: in
         # all 5 GPU races of 2026-10-08 a second route was allocated in the same poll and had to be cancelled and charged. Stop submitting
         # once any submitted route started (no added latency when capacity is scarce: every route is still submitted).
-        if jobs and any(_state(api, j)[0] not in TERMINAL | {'QUEUED', 'UNKNOWN'} for j in jobs.values()):
+        states = {n: _state(api, j)[0] for n, j in jobs.items()}
+        if any(ACTIVE(st) for st in states.values()):
+            for n, st in states.items():
+                if ACTIVE(st):
+                    seen.setdefault(n, api.clock())
             api.log(f'a submitted route already started: not submitting {name} or later routes')
             break
         extra = [] if borrow else ['compute.allow_borrowing=false']
@@ -130,53 +206,21 @@ def race(experiment: str, attempt: str, mode: str, api: Api, *, overrides: list[
             api.log(f'submitted {name}: team={team} borrowing={borrow} job={job_id}')
         else:
             api.log(f'{name} was not accepted by ScaleTrain; continuing with the other routes')
-    if not jobs:
-        raise RuntimeError('no route was accepted by ScaleTrain')
-    started_at, last, ran, allocated = api.clock(), {}, {}, set()
-    while True:
-        states = {name: _state(api, job_id) for name, job_id in jobs.items()}
-        allocated |= {n for n, (s, _) in states.items() if s not in TERMINAL | {'QUEUED', 'UNKNOWN'}}
-        if states != last:
-            api.log(time.strftime('%H:%M:%S ') + ' '.join(f'{n}[{s} {d}]' for n, (s, d) in states.items()))
-            last = states
-        running = [n for n, (s, _) in states.items() if s not in TERMINAL | {'QUEUED', 'UNKNOWN'}]
-        if not running:   # a short job (a CPU dry run) can start AND finish between two polls: it ran if its pod left a trace
-            for n, (s, _) in states.items():
-                if s in TERMINAL and n not in ran:
-                    ran[n] = api.pods_started(experiment, n)
-            running = [n for n in jobs if ran.get(n)]
-        if running:
-            winner = running[0]
-            losers = {n: j for n, j in jobs.items() if n != winner}
-            settled = _settle_losers(api, experiment, losers, poll, allocated=allocated)
-            api.log(f'WINNER {winner} ({jobs[winner]}) after {api.clock() - started_at:.0f} s; cancelled {sorted(losers)}')
-            return {'winner': winner, 'job_id': jobs[winner], 'waited_seconds': round(api.clock() - started_at), 'routes': [c for c, _, _ in chosen],
-                    'jobs': jobs, 'losers': settled, 'receipt': receipts[winner]}
-        dead = [n for n, (s, _) in states.items() if s in TERMINAL]   # ended without a pod
-        if dead and len(dead) == len(jobs):
-            settled = _settle_losers(api, experiment, dict(jobs), poll, allocated=allocated)
-            return {'winner': None, 'reason': 'every route ended before starting', 'jobs': jobs, 'losers': settled}
-        if max_wait_seconds is not None and api.clock() - started_at > max_wait_seconds:
-            settled = _settle_losers(api, experiment, dict(jobs), poll, allocated=allocated)
-            api.log(f'no route started within {max_wait_seconds / 3600:.1f} h: all cancelled')
-            return {'winner': None, 'reason': f'no capacity within {max_wait_seconds:.0f} s', 'jobs': jobs, 'losers': settled}
-        api.sleep(poll)
 
 
-def watch(experiment: str, attempt: str, job_id: str, api: Api, *, poll: float = 60.0) -> dict:
-    """Follow a started job to its end. Returns {'outcome': 'terminal'|'preempted', 'status', ...} after recording it in the ledger."""
+def watch(experiment: str, attempt: str, job_id: str, api: Api, *, poll: float = 60.0, seen_at: float | None = None) -> dict:
+    """Follow a started job to its end. Returns {'outcome': 'terminal'|'preempted', 'status', ...} after recording it in the ledger.
+    ``seen_at``: when the race first saw it allocated (the charge floor when the pod left no budget.json, e.g. a bootstrap failure)."""
+    seen_at = seen_at if seen_at is not None else api.clock()
     while True:
         status, detail = _state(api, job_id)
         if status in TERMINAL:
-            try:
-                receipt = api.record(experiment, attempt, job_id)
-            except Exception as error:
-                receipt = {'error': str(error)}
+            receipt = _record(api, experiment, attempt, job_id, allocated_floor=seen_at - poll)
             return {'outcome': 'terminal', 'status': status, 'attempt': attempt, 'job_id': job_id, 'ledger': receipt}
         if status == 'QUEUED' and 'preempt' in detail:
-            api.log(f'{attempt} was preempted ({detail}): cancelling the requeued job (a preempted attempt cannot resume)')
-            terminal_at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(api.clock()))
-            settled = _settle_losers(api, experiment, {attempt: job_id}, poll=min(poll, 15.0), allocated={attempt})
+            api.log(f'{attempt} was preempted ({detail}): cancelling the requeued job (the budget window is anchored at its first start)')
+            terminal_at = _iso(api.clock())
+            settled = _settle_losers(api, experiment, {attempt: job_id}, poll=min(poll, 15.0), seen={attempt: seen_at})
             return {'outcome': 'preempted', 'status': status, 'attempt': attempt, 'job_id': job_id, 'terminal_at': terminal_at, 'settled': settled}
         api.sleep(poll)
 
@@ -186,18 +230,23 @@ def launch(experiment: str, attempt: str, mode: str, api: Api, *, overrides: lis
            resume_on_preempt: bool = False) -> list[dict]:
     """race (+ watch, + relaunch after preemption; with resume_on_preempt, which needs evaluation.durable_checkpoints, the relaunch continues
     the preempted attempt from its latest checkpoint instead of starting over). Returns one receipt per race."""
-    history, name, extra = [], attempt, []
+    history, name, extra, winners = [], attempt, [], []
     for k in range(relaunch_on_preempt + 1):
         result = race(experiment, name, mode, api, overrides=[*(overrides or []), *extra], routes=routes, poll=poll, max_wait_seconds=max_wait_seconds)
         history.append(result)
         if not result.get('winner') or not follow:
             break
-        outcome = watch(experiment, result['winner'], result['job_id'], api)
+        outcome = watch(experiment, result['winner'], result['job_id'], api, seen_at=result.get('winner_seen_at'))
         result['outcome'] = outcome
         if outcome['outcome'] != 'preempted':
             break
         name = f'{attempt}-p{k + 1}'
-        extra = [f"run.resume_from={result['winner']}"] if resume_on_preempt else []
+        winners.append(result['winner'])
+        # continue from the latest attempt that left a durable checkpoint (a relaunch preempted before its first save has none)
+        source = next((w for w in reversed(winners) if api.has_checkpoint(experiment, w)), None) if resume_on_preempt else None
+        extra = [f'run.resume_from={source}'] if source else []
+        if resume_on_preempt and not source:
+            api.log('no durable checkpoint yet in any preempted attempt: the relaunch starts fresh')
         if k < relaunch_on_preempt:
             api.log(f'relaunching as {name} (preemption {k + 1} of {relaunch_on_preempt} allowed)')
     receipt_dir = Path('evidence') / attempt
@@ -206,7 +255,7 @@ def launch(experiment: str, attempt: str, mode: str, api: Api, *, overrides: lis
     return history
 
 
-def real_api(user_id: str) -> Api:
+def real_api(user_id: str, overrides: list[str] | None = None) -> Api:
     """The real ScaleTrain wiring (tools/scaletrain.py via the CLI helpers, strl.stage, the ledger)."""
     from . import cli
     from .stage import stage as stage_fn
@@ -234,19 +283,34 @@ def real_api(user_id: str) -> Api:
         return json.loads(cli._scaletrain('get', job_id).stdout)
 
     def cancel(job_id: str):
-        return cli._scaletrain('cancel', '--user-id', user_id, job_id)
+        out = cli._scaletrain('cancel', '--user-id', user_id, job_id)
+        if out.returncode:
+            raise RuntimeError(f'cancel {job_id} failed: {(out.stderr or out.stdout)[-300:]}')
+        return out
 
-    def record(experiment, attempt, job_id, never_started=False, terminal_at=None):
-        return cli.record_attempt(experiment, attempt, job_id, never_started=never_started, terminal_at=terminal_at)
+    def record(experiment, attempt, job_id, never_started=False, terminal_at=None, allocated_floor=None):
+        return cli.record_attempt(experiment, attempt, job_id, never_started=never_started, terminal_at=terminal_at,
+                                  overrides=overrides, allocated_floor=allocated_floor)
 
-    def pods_started(experiment: str, attempt: str) -> bool:
-        cfg = cli._load(experiment)   # fails closed (any S3 error other than not-found raises -> treated as started below)
+    def pods_started(experiment: str, attempt: str) -> bool | None:
+        """True / False on positive S3 evidence; None when S3 cannot tell (expired credentials...): charged, but never a winner."""
         try:
-            return cli.worker_started(cfg, attempt) or cli.allocation_start(cfg, attempt) is not None
-        except Exception:
-            return True
+            cfg = cli._load(experiment, overrides)
+            return bool(cli.worker_started(cfg, attempt) or cli.allocation_start(cfg, attempt) is not None)
+        except (Exception, SystemExit):
+            return None
 
-    return Api(stage=stage, submit=submit, get=get, cancel=cancel, record=record, pods_started=pods_started)
+    def has_checkpoint(experiment: str, attempt: str) -> bool:
+        try:
+            import boto3
+            st = cli._load(experiment, overrides)['storage']
+            boto3.Session(profile_name=st['profile']).client('s3').head_object(
+                Bucket=st['bucket'], Key=f"{st['prefix']}/attempts/{attempt}/artifacts/checkpoints/latest_ckpt_global_step.txt")
+            return True
+        except (Exception, SystemExit):
+            return False
+
+    return Api(stage=stage, submit=submit, get=get, cancel=cancel, record=record, pods_started=pods_started, has_checkpoint=has_checkpoint)
 
 
 FALLBACK_SUFFIX = '-alt'   # not '-fb...': route codes already end attempt names (fb/rb/ro/fo)
@@ -267,7 +331,7 @@ def main_launch(a) -> int:
     except ValueError as error:
         print(error, file=sys.stderr)
         return 2
-    api = real_api(a.user_id)
+    api = real_api(a.user_id, a.set)
     from . import cli
     from .overrides import durable
     resumable = durable(cli._load(a.experiment, a.set))
@@ -283,5 +347,13 @@ def main_launch(a) -> int:
     if not last.get('winner'):
         print(f"\nno route started ({last.get('reason')}); fall back to a smaller shape (e.g. --set compute.nodes=1) or wait longer", file=sys.stderr)
         return 2
+    problems = [l for h in history for l in h.get('losers') or [] if l.get('unsettled') or (l.get('ledger') or {}).get('unrecorded')]
+    problems += [h['outcome'] for h in history if (h.get('outcome') or {}).get('ledger', {}).get('unrecorded')]
+    if problems:
+        print(f'\nLAUNCH NEEDS ATTENTION: {len(problems)} job(s) unsettled or not recorded in the ledger (see UNSETTLED / LEDGER lines above)', file=sys.stderr)
+        return 3
+    if (last.get('outcome') or {}).get('outcome') == 'preempted':
+        print(f"\n{last['winner']} was preempted and no relaunch was left (--relaunch-on-preempt N to continue)", file=sys.stderr)
+        return 4
     print(f"\nnext: python -m strl monitor {a.experiment} --attempt {last['winner']} --job-id {last['job_id']}")
     return 0

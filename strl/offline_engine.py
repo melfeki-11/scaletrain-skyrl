@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .experiment import VLLM_LORA_RANKS
+
 
 def lora_rank(adapter: str | Path) -> int:
     return int(json.loads((Path(adapter) / 'adapter_config.json').read_text()).get('r') or 16)
@@ -26,7 +28,7 @@ def build(cfg: dict, profile: Any, model: str | Path, *, max_model_len: int, gpu
     if is_adapter(model):
         from vllm.lora.request import LoRARequest
         rank = lora_rank(model)
-        engine = LLM(model=cfg['model']['local_path'], enable_lora=True, max_lora_rank=max(8, rank), max_loras=1, **kwargs)
+        engine = LLM(model=cfg['model']['local_path'], enable_lora=True, max_lora_rank=min(r for r in VLLM_LORA_RANKS if r >= max(8, rank)), max_loras=1, **kwargs)
         return engine, LoRARequest('trained', 1, str(model))
     return LLM(model=str(model), **kwargs), None
 

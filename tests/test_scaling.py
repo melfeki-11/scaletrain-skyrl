@@ -3,6 +3,7 @@ memory model, sharded/LoRA exports, canary overlay choice, exact-source SkyRL pa
 import ast
 import io
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -721,6 +722,41 @@ class Resume(unittest.TestCase):
         with self.assertRaises(ExperimentError) as error:
             load(SMOKE, overrides=['evaluation.durable_checkpoints=true', 'budget.save_optimizer_state=false'])
         self.assertIn('save_optimizer_state', str(error.exception))
+
+
+class ResumePrefix(unittest.TestCase):
+    def test_prepare_resume_reads_the_previous_attempt_not_this_one(self):
+        # review: prepare_resume passed run_name where it meant previous, so every resume looked in its own (empty) prefix
+        from unittest import mock
+        from strl import worker
+        asked = []
+
+        class S3:
+            def get_object(self, Bucket, Key):
+                asked.append(Key)
+                if '/attempts/run1-fb/' not in Key:
+                    raise KeyError(Key)
+                return {'Body': io.BytesIO(b'2\n')}
+
+            def download_file(self, b, k, target):
+                raise KeyError(k)
+        with tempfile.TemporaryDirectory() as temp, mock.patch('boto3.client', lambda *a, **k: S3()), mock.patch.dict(os.environ, {}):
+            out = worker.prepare_resume('s3://b/p/attempts/run1-p1-fb/artifacts', 'run1-p1-fb', 'run1-fb', Path(temp))
+            self.assertEqual(os.environ['STRL_RESUME_PATH'], 's3://b/p/attempts/run1-fb/artifacts/checkpoints/global_step_2')
+        self.assertEqual(out['step'], 2)
+        self.assertTrue(asked[0].startswith('p/attempts/run1-fb/'))
+
+    def test_lora_rank_must_be_a_vllm_rank(self):
+        from strl.experiment import ExperimentError
+        with self.assertRaises(ExperimentError):
+            load('experiments/mimo-phi4-mini-lora-verify.yaml', overrides=['finetune.lora.rank=24'])
+        load('experiments/mimo-phi4-mini-lora-verify.yaml', overrides=['finetune.lora.rank=32'])
+
+    def test_durable_checkpoints_need_the_in_loop_result(self):
+        from strl.experiment import ExperimentError
+        with self.assertRaises(ExperimentError):
+            load('experiments/gsm8k-qwen35.yaml', overrides=['evaluation.durable_checkpoints=true'])
+        load('experiments/mimo-phi4-mini-lora-verify.yaml')     # final_eval: false: fine
 
 
 class Retention(unittest.TestCase):

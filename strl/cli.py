@@ -278,34 +278,51 @@ def allocation_start(cfg: dict, attempt: str, s3=None) -> float | None:
 
 
 def record_attempt(experiment: str, attempt: str, job_id: str, *, terminal_at: str | None = None, never_started: bool = False,
-                   ledger: str | None = None, job: dict | None = None) -> dict:
-    """Append one terminal attempt to the program ledger. Returns {'recorded', 'remaining_node_seconds'}; raises ValueError when it must not."""
-    cfg = _load(experiment)
+                   ledger: str | None = None, job: dict | None = None, overrides: list[str] | None = None,
+                   allocated_floor: float | None = None) -> dict:
+    """Append one terminal attempt to the program ledger. Returns {'recorded', 'remaining_node_seconds'}; raises ValueError when it must not.
+
+    Charged from the pod start (budget.json started_at - slack) when a worker ran; otherwise from ``allocated_floor`` (the launcher's first
+    observation of the job leaving the queue, minus one poll) when known, else conservatively from created_at. ``never_started`` (positive
+    evidence that no pod ran) records it uncharged for ANY terminal status. ``overrides`` are the launch's --set values (ledger, storage).
+    The read-modify-write is serialized with a file lock and an atomic replace: concurrent launchers share one ledger."""
+    import fcntl
+    import os
+    cfg = _load(experiment, overrides)
     ledger_path = Path(ledger) if ledger else ROOT / cfg['budget']['ledger']
-    data = json.loads(ledger_path.read_text())
-    if any(x['job_id'] == job_id for x in data['attempts']):
-        raise ValueError(f'{job_id} already recorded')
     job = job or json.loads(_scaletrain('get', job_id).stdout)
     if job['status'] not in {'COMPLETED', 'FAILED', 'CANCELED', 'CANCELLED'}:
         raise ValueError(f'job is {job["status"]}; record it only after a terminal state')
     stage_receipt = json.loads(Path(f'evidence/{attempt}/stage.json').read_text())
-    entry = {'job_id': job_id, 'attempt': attempt, 'status': job['status'], 'allocated_at': str(job['created_at']).replace(' ', 'T')[:19] + 'Z',
+    created = str(job['created_at']).replace(' ', 'T')[:19] + 'Z'
+    entry = {'job_id': job_id, 'attempt': attempt, 'status': job['status'], 'allocated_at': created,
              'terminal_at': terminal_at or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'gpu_fraction': stage_receipt['gpu_fraction'],
              'nodes': int(stage_receipt.get('nodes', 1)),
              'evidence': 'conservative: job created_at to first terminal observation (includes queue/pod start)'}
-    started = None if never_started else allocation_start(cfg, attempt)
-    if started is not None:   # a worker ran: charge the time the pods were up, never the time the job waited in the queue
-        created = datetime.fromisoformat(entry['allocated_at'].replace('Z', '+00:00')).timestamp()
-        entry.update(allocated_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(max(created, started))),
-                     evidence=f'worker budget.json started_at - {POD_START_SLACK_SECONDS} s (pods up) to the terminal observation; queue time (created_at {entry["allocated_at"]}) is not charged')
-    if never_started:   # cancelled while QUEUED: no pod, no GPU time -> not charged (budget.remaining_seconds skips an unallocated terminal job)
-        if job['status'] not in {'CANCELED', 'CANCELLED'}:
-            raise ValueError('--never-started applies only to a cancelled job')
+    created_s = datetime.fromisoformat(created.replace('Z', '+00:00')).timestamp()
+    if never_started:   # no pod, no GPU time -> not charged (budget.remaining_seconds skips an unallocated terminal job)
         if worker_started(cfg, attempt) or allocation_start(cfg, attempt) is not None:   # budget.json is written before rendezvous: pods were up
             raise ValueError(f'{attempt} has worker-started.json or budget.json: a pod ran, so it is charged (omit --never-started)')
-        entry.update(allocated_at=None, evidence='cancelled while QUEUED; no worker-started.json in the attempt artifacts: the pod never started (not charged)')
-    data['attempts'].append(entry)
-    ledger_path.write_text(json.dumps(data, indent=2) + '\n')
+        entry.update(allocated_at=None, evidence=f"{job['status']} without a pod: no worker-started.json / budget.json in the attempt artifacts (not charged)")
+    else:
+        started = allocation_start(cfg, attempt)
+        if started is not None:   # a worker ran: charge the time the pods were up, never the time the job waited in the queue
+            entry.update(allocated_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(max(created_s, started))),
+                         evidence=f'worker budget.json started_at - {POD_START_SLACK_SECONDS} s (pods up) to the terminal observation; queue time (created_at {created}) is not charged')
+        elif allocated_floor is not None:   # allocated but no worker trace yet (a cancelled loser, a bootstrap failure)
+            entry.update(allocated_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(max(created_s, allocated_floor))),
+                         evidence='no worker trace: charged from the launcher\'s first observation of the job leaving the queue (minus one poll) '
+                                  f'to the terminal observation; queue time (created_at {created}) is not charged')
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(str(ledger_path) + '.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        data = json.loads(ledger_path.read_text())
+        if any(x['job_id'] == job_id for x in data['attempts']):
+            raise ValueError(f'{job_id} already recorded')
+        data['attempts'].append(entry)
+        tmp = Path(str(ledger_path) + '.tmp')
+        tmp.write_text(json.dumps(data, indent=2) + '\n')
+        os.replace(tmp, ledger_path)
     from .budget import remaining_seconds
     return {'recorded': entry, 'remaining_node_seconds': remaining_seconds(data['attempts'], data['total_seconds'])}
 

@@ -42,7 +42,9 @@ class FakeScaleTrain:
     def cancel(self, job_id):
         self.cancelled.add(job_id)
 
-    def record(self, experiment, attempt, job_id, never_started=False, terminal_at=None):
+    def record(self, experiment, attempt, job_id, never_started=False, terminal_at=None, allocated_floor=None):
+        self.floors = getattr(self, 'floors', {})
+        self.floors[attempt] = allocated_floor
         self.recorded.append((attempt, never_started))
         self.terminal_at = getattr(self, 'terminal_at', {})
         self.terminal_at[attempt] = terminal_at
@@ -155,6 +157,86 @@ class Race(unittest.TestCase):
         self.assertTrue(Path('evidence/run1/launch.json').is_file())
         relaunched = [x for x in fake.staged if x['attempt'].startswith('run1-p1-')]
         self.assertTrue(all('run.resume_from=run1-fb' in x['overrides'] for x in relaunched))   # continues the preempted attempt
+
+
+class ReviewFindings(unittest.TestCase):
+    """Independent review of the launcher (2026-10-09): accounting and failure paths."""
+
+    def setUp(self):
+        self.cwd = os.getcwd()
+        self.tmp = tempfile.TemporaryDirectory()
+        os.chdir(self.tmp.name)
+
+    def tearDown(self):
+        os.chdir(self.cwd)
+        self.tmp.cleanup()
+
+    def test_a_loser_charged_from_first_allocation_not_from_its_queue_wait(self):
+        fake = FakeScaleTrain({'fb': [('QUEUED', 'w')] * 5 + [('IN_PROGRESS', 'absent')], 'rb': [('QUEUED', 'w')] * 5 + [('IN_PROGRESS', 'absent')]})
+        L.race('exp.yaml', 'run1', 'train', fake.api(), poll=60)
+        self.assertIn(('run1-rb', False), fake.recorded)
+        self.assertGreaterEqual(fake.floors['run1-rb'], 4 * 60)        # first seen allocated after 5 polls, minus one poll: not created_at
+
+    def test_a_loser_seen_running_only_while_settling_is_charged(self):
+        fake = FakeScaleTrain({'fb': [('QUEUED', 'w'), ('IN_PROGRESS', 'absent')], 'rb': [('QUEUED', 'w'), ('QUEUED', 'w'), ('IN_PROGRESS', 'absent')]})
+        original_cancel = fake.cancel
+        calls = []
+
+        def slow_cancel(job_id):      # the first cancel does not take effect at once: rb starts before it ends
+            calls.append(job_id)
+            if calls.count(job_id) > 2:
+                original_cancel(job_id)
+        api = fake.api()
+        api.cancel = slow_cancel
+        L.race('exp.yaml', 'run1', 'train', api, poll=5)
+        self.assertIn(('run1-rb', False), fake.recorded)
+
+    def test_a_queued_job_that_fails_without_a_pod_is_not_charged(self):
+        fake = FakeScaleTrain({'fb': [('QUEUED', 'w'), ('IN_PROGRESS', 'absent')], 'rb': [('FAILED', 'admission')]})
+        L.race('exp.yaml', 'run1', 'train', fake.api(), poll=5)
+        self.assertIn(('run1-rb', True), fake.recorded)
+
+    def test_an_error_while_submitting_cancels_the_routes_already_submitted(self):
+        fake = FakeScaleTrain({})
+        api = fake.api()
+        original = api.stage
+
+        def stage(experiment, **kw):
+            if kw['attempt'].endswith('-ro'):
+                raise OSError('S3 upload failed')
+            return original(experiment, **kw)
+        api.stage = stage
+        with self.assertRaises(OSError):
+            L.race('exp.yaml', 'run1', 'train', api, poll=5)
+        self.assertEqual(fake.cancelled, {'job-run1-fb', 'job-run1-rb'})
+
+    def test_unknown_pod_evidence_never_crowns_a_winner(self):
+        fake = FakeScaleTrain({'fb': [('FAILED', 'x')], 'rb': [('QUEUED', 'w'), ('QUEUED', 'w'), ('IN_PROGRESS', 'absent')]})
+        api = fake.api()
+        api.pods_started = lambda experiment, attempt: None if attempt.endswith('-fb') else False
+        out = L.race('exp.yaml', 'run1', 'train', api, poll=5)
+        self.assertEqual(out['winner'], 'run1-rb')
+        self.assertIn(('run1-fb', False), fake.recorded)               # unknown is charged (fail closed), but it did not win
+
+    def test_a_ledger_failure_is_reported_not_swallowed(self):
+        fake = FakeScaleTrain({'fb': [('QUEUED', 'w'), ('IN_PROGRESS', 'absent')]})
+        api = fake.api()
+
+        def broken(*a, **k):
+            raise RuntimeError('scale-train get failed')
+        api.record = broken
+        out = L.race('exp.yaml', 'run1', 'train', api, poll=5)
+        self.assertTrue(all(l['ledger'].get('unrecorded') for l in out['losers']))
+
+    def test_a_relaunch_resumes_from_the_latest_attempt_with_a_checkpoint(self):
+        script = {'fb': [('IN_PROGRESS', 'absent'), ('QUEUED', 'preemption_reported')]}
+        fake = FakeScaleTrain(script, started={'run1-fb', 'run1-p1-fb'})
+        api = fake.api()
+        api.has_checkpoint = lambda experiment, attempt: attempt == 'run1-fb'     # run1-p1-fb was preempted before its first save
+        history = L.launch('exp.yaml', 'run1', 'train', api, poll=1, follow=True, relaunch_on_preempt=2, resume_on_preempt=True)
+        self.assertEqual([h['winner'] for h in history], ['run1-fb', 'run1-p1-fb', 'run1-p2-fb'])
+        p2 = [x for x in fake.staged if x['attempt'] == 'run1-p2-fb'][0]
+        self.assertIn('run.resume_from=run1-fb', p2['overrides'])
 
 
 if __name__ == '__main__':

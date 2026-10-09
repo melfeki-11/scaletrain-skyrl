@@ -83,6 +83,9 @@ TRAINING_TYPES = {'fsdp_size': (int, type(None)), 'cpu_offload': bool, 'reshard_
                   'max_tokens_per_microbatch': (int, type(None)), 'gradient_checkpointing': bool}
 
 
+VLLM_LORA_RANKS = frozenset({1, 8, 16, 32, 64, 128, 256, 320, 512})   # vllm/config/lora.py MaxLoRARanks at v0.26.0 (the image's vLLM)
+
+
 def finetune(cfg: dict) -> dict:
     """The experiment's finetune section with defaults (mode full; LoRA settings only meaningful in lora mode)."""
     raw = cfg.get('finetune') or {}
@@ -250,6 +253,9 @@ def validate(cfg: dict, *, check_registries: bool = True) -> None:
             problems.append('evaluation.retention.limit must be a positive integer (number of held-out examples)')
     if (e.get('durable_checkpoints') or (cfg.get('run') or {}).get('resume_from')) and not b.get('save_optimizer_state', True):
         problems.append('evaluation.durable_checkpoints / run.resume_from need budget.save_optimizer_state: true (a resumable checkpoint carries the optimizer)')
+    if (e.get('durable_checkpoints') or (cfg.get('run') or {}).get('resume_from')) and e.get('final_eval', True):
+        problems.append('evaluation.durable_checkpoints / run.resume_from are supported only with the in-loop result (evaluation.final_eval: false, '
+                        'e.g. mimo): the offline final eval selects checkpoints from the local checkpoint dir, which durable checkpoints move to S3')
     if e.get('final_eval', True) and b['final_eval_reserve_seconds'] < MIN_FINAL_EVAL_RESERVE:
         problems.append(f'budget.final_eval_reserve_seconds={b["final_eval_reserve_seconds"]} < {MIN_FINAL_EVAL_RESERVE}: the training child is hard-killed '
                         '480 s before the deadline, so a smaller reserve kills a run that reaches its deadline before its final eval')
@@ -336,6 +342,8 @@ def _scaling_problems(cfg: dict, gpus: int) -> list[str]:
     if isinstance(rank, int) and not isinstance(rank, bool):
         if mode == 'lora' and rank <= 0:
             problems.append('finetune.mode lora needs finetune.lora.rank > 0')
+        elif mode == 'lora' and rank not in VLLM_LORA_RANKS:   # SkyRL passes the rank to vLLM as max_lora_rank; other values crash engine start
+            problems.append(f'finetune.lora.rank={rank} is not a vLLM max_lora_rank (vLLM 0.26 accepts {sorted(VLLM_LORA_RANKS)})')
         # mode full ignores finetune.lora entirely (an inherited LoRA block must not block `--set finetune.mode=full`)
     if isinstance(lora.get('dropout', 0.0), (int, float)) and not 0 <= lora.get('dropout', 0.0) < 1:
         problems.append('finetune.lora.dropout must be in [0, 1)')
