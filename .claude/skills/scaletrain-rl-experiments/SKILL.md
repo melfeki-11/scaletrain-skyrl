@@ -117,7 +117,9 @@ one route and started first on another; dry runs start in seconds on `fb`.
   experiment). The fallback races as `<attempt>-alt` and starts fresh (a checkpoint resumes only at the same world size). `launch`
   checks up front that every name it may create (`-alt`, `-p<k>` relaunches, route suffix) fits; ~19 characters is safe with all flags.
 - Borrowed capacity can be reclaimed (`preemption_reported`): use `--watch --relaunch-on-preempt 2` with `evaluation.durable_checkpoints: true`
-  (+ `budget.save_optimizer_state: true`) so the relaunch resumes from S3; or `--routes ro,fo` to avoid borrowing.
+  (+ `budget.save_optimizer_state: true`; in-loop-result envs such as mimo) so the relaunch resumes from S3 (verified: `v2res2-fb`);
+  or `--routes ro,fo` to avoid borrowing. Launch exit codes: 0 ok, 2 no capacity, 3 a job unsettled/unrecorded (fix the ledger by hand
+  as printed), 4 preempted with no relaunch left, 5 the watched job FAILED.
 - Keep CPU work (prepare, image prebuild, dry runs, docs) going while a GPU job queues. `strl capacity` (read-only, `ml-admin`) explains waits.
 Details: references/launch-and-capacity.md.
 
@@ -167,7 +169,10 @@ Details: references/monitoring.md, references/decision-points.md.
   (rendezvous + validate_cfg at that GPU count) -> a 0.8B smoke at the same shape (`experiments/mimo-qwen35-0p8b-2node-smoke.yaml`) -> the run.
   Cross-node NCCL runs over sockets (~0.69 GB/s): LoRA is fine, full fine-tuning of large models is slow (references/scaling.md).
 - **New MiMo-style suite**: references/extending.md ("A new MiMo-style suite"): graders, nop/tamper gates, judge outside the sandbox.
-- **Resume / continue**: `--set run.resume_from=<attempt> --set algorithm.max_steps=<more>` on an attempt run with durable checkpoints.
+- **Resume / continue**: `--set run.resume_from=<attempt> --set algorithm.max_steps=<more>` on an attempt run with durable checkpoints
+  (same GPU count); its paired result keeps the earlier attempt's step-0 base.
+- **Retention (did RL break general ability?)**: `evaluation.retention: {experiment: base/gsm8k.yaml, limit: 200}` (>= 2 GPUs); read
+  `retention/gsm8k/{base,trained,delta,ci_*}`.
 
 ## Gotchas that cost real cycles
 
