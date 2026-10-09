@@ -65,7 +65,8 @@ AWS_PROFILE=production-developer .venv/bin/python -m strl launch experiments/my-
 
 Extra preparation by case:
 - **Model revision**: `curl -s https://huggingface.co/api/models/<id> | python3 -c 'import sys,json;print(json.load(sys.stdin)["sha"])'`.
-- **Model weights**: up to ~10 GB, `strl fetch` downloads locally and `stage` uploads them. Above ~10 GB (e.g. a 7B in bf16 is 15 GB) skip the
+- **Model weights**: up to ~10 GB, `strl fetch` downloads locally and `stage` uploads them (`fetch` also runs `prepare` when the
+  experiment's data is missing; `stage-model` works for any size and touches nothing local). Above ~10 GB (e.g. a 7B in bf16 is 15 GB) skip the
   local download: `strl stage-model experiments/my-exp.yaml --attempt myexp-sm --team gen_ai.agent_training_foundation`, then
   `strl submit evidence/myexp-sm/job.json` (a CPU job copies HF -> S3 with a sha256 manifest: 16 GB ~2 min, 61 GB ~5 min; free, not
   ledgered); follow it with `strl status <job_id>` until COMPLETED. `stage` (dry runs included: the pod skips the weights but the manifest must
@@ -108,7 +109,9 @@ tokens (generated tokens summed over turns, prompts excluded; 0 for a placeholde
 string). Shaping changes the TRAINING reward only. The dry run calls every term on a synthetic pass/fail per domain (`shaping` in the receipt).
 For single-turn envs (gsm8k, coding_exec, countdown) `result` is the scorer's dict (`completion`, `parsed`, `correct`, `failure_class`;
 coding adds `passed`, `total`, `compiled`, `suspicious`) and `ctx` has `ground_truth`, `extras`, `max_generate_length` and `count_tokens`
-(the model's real tokenizer in the pod); the dry run reports them as `generic_reward_samples`. Any custom term moves gsm8k from SkyRL's
+(the model's real tokenizer in the pod). countdown adds `target`, `value`, `valid`, `legal_numbers`, `numbers_used`, `distance`
+(`strl/tasks/countdown/scoring.py`). The dry run's reward-contract cases (per-case reward, components) are printed by `launch --watch` (from
+`skyrl_validate.generator.cases` / `generic_reward_samples` / `shaping` in `dry-run.json`). Any custom term moves gsm8k from SkyRL's
 built-in env to `strl_env` (proven equivalent; `plan B --against A` shows it as a derived diff).
 Built-in names: `strl/tasks/<env>/rewards.py`, common `length_penalty`, `format_ok`. `strl plan` rejects unknown names/params.
 
@@ -129,7 +132,8 @@ one route and started first on another; dry runs start in seconds on `fb`.
   experiment). The fallback races as `<attempt>-alt` and starts fresh (a checkpoint resumes only at the same world size). `launch`
   checks up front that every name it may create (`-alt`, `-p<k>` relaunches, route suffix) fits; ~19 characters is safe with all flags.
 - Borrowed capacity can be reclaimed (`preemption_reported`): use `--watch --relaunch-on-preempt 2` with `evaluation.durable_checkpoints: true`
-  (+ `budget.save_optimizer_state: true`; in-loop-result envs such as mimo) so the relaunch resumes from S3 (verified: `v2res2-fb`);
+  (+ `budget.save_optimizer_state: true`; in-loop-result envs such as mimo) so the relaunch resumes from S3 (verified: `v2res2-fb`).
+  Single-turn envs with the offline final eval cannot resume yet: a relaunch restarts (keep their attempts short);
   or `--routes ro,fo` to avoid borrowing. Launch exit codes: 0 ok, 2 no capacity, 3 a job unsettled/unrecorded (fix the ledger by hand
   as printed), 4 preempted with no relaunch left, 5 the watched job ended FAILED or CANCELED.
 - Keep CPU work (prepare, image prebuild, dry runs, docs) going while a GPU job queues. `strl capacity` explains waits but needs the
@@ -146,7 +150,7 @@ AWS_PROFILE=production-developer .venv/bin/python -m strl monitor experiments/my
 ```
 
 W&B: the URL is on `strl plan`'s `monitoring` line (`tracking.entity`/`project`, e.g. `https://scaleai.wandb.io/mohamed-elfeki/scaletrain-rl-envs`),
-group = `tracking.group`, run id = the attempt, x-axis `optimizer_step`. S3 `attempts/<attempt>/artifacts/` is the source of truth (`completion.json`, `training.log`, `failure.log`).
+group = `tracking.group`, run id = `<attempt>-<stamp>`, x-axis `optimizer_step`. S3 `attempts/<attempt>/artifacts/` is the source of truth (`completion.json`, `training.log`, `failure.log`).
 
 | Question | Look at | Healthy |
 | --- | --- | --- |
@@ -167,7 +171,11 @@ After the run (in order):
 .venv/bin/python -m strl report experiments/my-exp.yaml:<winner>                      # evidence/results/<group>-report.md + W&B report run
 ```
 
-How to decide: the change helped only if `test/<d>/delta` (or `test/macro`) has a CI excluding 0 and exceeds `eval/<d>/judge_variance`
+Single-turn envs (gsm8k, coding_exec, countdown) use the same panels without the domain level: `eval/task_metric`,
+`environment/reward_components/<fn>`, `environment/failure/<class>`, `environment/task_metric` (training hit rate), and the final
+`test/{baseline_accuracy,candidate_accuracy,accuracy_delta,ci_lower,ci_upper}`; compare two arms with `strl compare a.yaml:<A> b.yaml:<B>`.
+
+How to decide: the change helped only if `test/<d>/delta` (or `test/macro`, or single-turn `test/accuracy_delta`) has a CI excluding 0 and exceeds `eval/<d>/judge_variance`
 for judged domains; check `retention/*` did not drop (general ability) and compare against the ceiling (`dry-run.json` `gates.ceiling` from a
 dry run with `--set run.ceiling_per_domain=2`). A few updates are infrastructure evidence, not a training effect: say so.
 Details: references/monitoring.md, references/decision-points.md.
@@ -177,6 +185,10 @@ Details: references/monitoring.md, references/decision-points.md.
 (no GPU mode fits), `MEMORY` (fits=False), `CANARY`, `HARBOR` (turns will not merge: correct but several times more training tokens; no YAML
 fix exists yet). Step-time estimates marked UNCALIBRATED come from another model/env: size `max_steps` / `attempt_max_seconds` as start-up
 (5-16 min) + step-0 eval + steps x step time + final eval, then let the canary or a short run measure it.
+
+**What a dry run does NOT prove**: weights are skipped, so vLLM never loads the model or its LoRA, and the reward-contract cases use fixed
+strings, not the model's chat template; the canary (1 GPU) is the first real load. Point `budget.ledger` at the ledger in the YAML (not via
+`--set`) so the dry run proves the same experiment sha the GPU run will use.
 
 **After a dry run** `strl launch --watch` prints the gates it passed (`model_code`, validated layout, environment checks, W&B, critic, durable
 checkpoint I/O, ceiling, shaping). An environment with no external services shows `environment {}`: that is normal.

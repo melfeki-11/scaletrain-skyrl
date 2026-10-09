@@ -15,7 +15,8 @@ on 2 nodes, more than 2 nodes, MoE models, Megatron, the fully-async trainer. Ea
   TOTAL parameters for memory (all experts are resident) with a `MOE` warning; FSDP over experts works but is slow and unverified.
   Expert parallelism needs Megatron (`trainer.strategy=megatron` + `megatron_config.*`), SkyRL-supported but not wired here.
 - Memory: `strl plan` estimates weights + optimizer + KV cache, and prints the MEASURED peak from `strl/profiles.json` when a run of the
-  same model exists (`memory: ... measured peak 62 GB`). With no measurement it warns `MEMORY unknown`: the 1-node canary is the check.
+  same model exists (`memory: ... measured peak 62 GB`). With no `config.json` it prints `memory: unknown`; with a config but no measured run of that model the estimate is model-only (no
+measured peak shown): the canary is the check.
 
 ## LoRA vs full fine-tuning, FSDP layout (experiment keys; defaults render nothing)
 
