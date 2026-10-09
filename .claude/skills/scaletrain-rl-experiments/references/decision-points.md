@@ -1,7 +1,7 @@
 # Decision points: the knobs you change, what they do, and where to see the effect
 
 All knobs live in an experiment YAML (`experiments/*.yaml`). `python -m strl plan <exp>` prints the derived consequences and warnings
-before you spend anything. "Watch" names the W&B key (project `scaletrain-rl-envs`, x-axis `optimizer_step`).
+before you spend anything. "Watch" names the W&B key (project = `tracking.project`, printed on plan's `monitoring` line; x-axis `optimizer_step`).
 
 ## The three free axes
 

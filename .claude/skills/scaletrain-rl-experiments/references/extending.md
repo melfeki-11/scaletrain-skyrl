@@ -45,8 +45,11 @@ Each recipe ends with the same proof ladder: `strl plan` -> `.venv/bin/python -m
    Mistral and DeepSeek-R1 distills do not.
 7. Terminal EOS markers differ by family (`<|im_end|>` Qwen, `<|eot_id|>` Llama, `<|end|>` Phi, `</s>` Mistral): the GSM8K scorer strips
    the known list (`strl/tasks/gsm8k/answers.py` `TERMINAL_TOKENS`); add a new family's marker there.
-8. Ladder for a new model: plan -> dry -> canary on the smallest GPU slice that fits (LoRA) -> run. Add a row to `strl/profiles.json` from the
-   canary (step seconds, tokens/s, memory peak) so later plans are calibrated.
+8. Ladder for a new model: plan -> dry -> canary (1 GPU when the model fits) -> run. Calibrate later plans with a row in `strl/profiles.json`
+   `runs` from a FULL run (canaries lack `tokens_per_second_per_gpu`, which marks a calibrated row): `{name, environment, model, params_b, gpus,
+   rollouts_per_step, max_generate_length, mean_response_tokens, median_step_seconds, median_generate_seconds, median_policy_train_seconds,
+   tokens_per_second_per_gpu, startup_seconds, base_task_metric, memory_peak_gb?, mean_prompt_tokens?, source}` (W&B `timing/*`,
+   `trainer/tokens_per_second_per_gpu`, `generate/avg_num_tokens`).
 9. Add the model to `limits.models` only if your config uses an allowlist (the default is `["*"]`).
 
 ## A new reward design (YAML, or one Python function)

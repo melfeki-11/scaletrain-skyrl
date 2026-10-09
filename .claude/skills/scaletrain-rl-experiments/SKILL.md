@@ -106,6 +106,10 @@ A term is `fn(result: dict, ctx, **params) -> float` in `user_rewards/<module>.p
 tokens (generated tokens summed over turns, prompts excluded; 0 for a placeholder), seconds, stop ('complete', 'agent_timeout',
 'output_length', ...), artifact (the deliverable, truncated)}` and `ctx` has only `extras['domain']` and `max_generate_length` (no completion
 string). Shaping changes the TRAINING reward only. The dry run calls every term on a synthetic pass/fail per domain (`shaping` in the receipt).
+For single-turn envs (gsm8k, coding_exec, countdown) `result` is the scorer's dict (`completion`, `parsed`, `correct`, `failure_class`;
+coding adds `passed`, `total`, `compiled`, `suspicious`) and `ctx` has `ground_truth`, `extras`, `max_generate_length` and `count_tokens`
+(the model's real tokenizer in the pod); the dry run reports them as `generic_reward_samples`. Any custom term moves gsm8k from SkyRL's
+built-in env to `strl_env` (proven equivalent; `plan B --against A` shows it as a derived diff).
 Built-in names: `strl/tasks/<env>/rewards.py`, common `length_penalty`, `format_ok`. `strl plan` rejects unknown names/params.
 
 Models: any dense decoder works through the `dense`/`generic` profiles (Qwen2/3/3.5/3.8, Phi-3/4, Mistral, OLMo, Gemma text, Granite, GLM4...);
@@ -179,9 +183,15 @@ checkpoint I/O, ceiling, shaping). An environment with no external services show
 
 ## Checklists by experiment type
 
+- **Canary = the experiment on 1 GPU** with a small batch (8 prompts x 4 samples, 2 updates, no final eval) whenever the model fits one
+  GPU (`base/canary_overlay.yaml`), else on the experiment's own placement (`canary_overlay_large.yaml`). Its gate is
+  `attempts/<a>/artifacts/<a>/canary.json` (finite non-zero gradient, environment-failure fraction); `strl verify` is for train attempts.
+  Not every key exists in every env: `generate/num_error_trajectories`, `environment/masked_group_fraction` and `gpu/mem_peak_gb` are
+  Harbor/mimo (fail-fast) keys, and the critic table only appears when `tracking.critic.enabled` (off in `base/gsm8k.yaml`).
 - **New OSS model**: revision sha -> `plan` (profile, memory, warnings) -> `fetch` or `stage-model` -> `check-template` (agentic) -> dry
   (proves `model_code`, validate_cfg) -> canary on a 1-2 GPU slice with LoRA -> run. Add its measured row to `strl/profiles.json`.
-- **New reward design**: function in `user_rewards/`, unit-test it (`tests/`), `plan` -> dry (calls the terms in the pod) -> an A/B:
+- **New reward design**: function in `user_rewards/`, unit-test it (`tests/`), `plan` -> dry (calls the terms in the pod; read the
+  per-case rewards in `generic_reward_samples`) -> an A/B:
   experiments identical except `reward.components`, their own `tracking.group` (one group per study; arms told apart by `tracking.tags`),
   launched together -> `compare a:attA b:attB [c:attC]`. Check `plan B --against A` shows only the reward diff.
 - **Different env subset / mix (mimo)**: change `domains.<d>.{train,weight}` only (held-out `test` sets are fixed and comparable); a new
