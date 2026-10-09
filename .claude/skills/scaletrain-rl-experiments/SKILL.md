@@ -1,148 +1,194 @@
 ---
-name: scaletrain-rl
-description: Train, plan, stage, launch, monitor, verify and compare RL post-training of open-weight LLMs on ScaleTrain (1 to N nodes, LoRA or full fine-tuning) with SkyRL GRPO, W&B (quantitative + qualitative), Modal-executed rewards, Harbor agentic sandboxes and a LiteLLM critic/judge. Use to switch the model, the RL environment (GSM8K, coding single-turn, coding agentic, the 5-domain MiMo suite: music, cyber, code, general, webdev) or the reward design and see the effect, or to add new models/environments/rewards. Self-contained; run from this repo.
+name: scaletrain-rl-experiments
+description: Launch, run, monitor, verify and compare RL post-training experiments (SkyRL GRPO) of open-weight LLMs on ScaleTrain GPUs as fast as capacity allows. Use to train any OSS model (Qwen, Phi, Mistral, OLMo, Llama...; LoRA or full; 1 GPU to multi-node) on any RL environment (GSM8K, coding, Harbor agentic sandboxes in Modal, the 5-domain MiMo suite or a new MiMo-style suite) with any reward design, to get GPUs ASAP by racing every team/borrowing route, to watch W&B metrics and tables, and to judge whether a change helped. Self-contained: needs only this repo.
 ---
 
-# ScaleTrain RL experiment platform (strl)
+# ScaleTrain RL experiments (`strl`)
 
-Everything is driven by ONE experiment YAML and ONE CLI, run from the repo root with the local control venv:
+One experiment = one YAML in `experiments/`. One CLI, `.venv/bin/python -m strl`, run from the repo root (every path below is relative
+to it). You change the model, the environment, the reward, the scale; everything else (placement, engines, credentials, sandboxes, budget,
+checkpoints, evaluation, monitoring) is derived and validated by `strl plan` before anything costs money.
+
+## Golden rules
+
+1. **Never spend GPUs before `strl plan` is clean and a `--mode dry` passed.** Dry runs are free (CPU pod, the real image) and catch
+   most bugs. A new model, environment or reward gets a `--mode canary` (2 updates, small) before its first real run.
+2. **Always launch with `strl launch`.** It races every capacity route (team x borrowing) at once and keeps the first that starts.
+   Never submit one job and wait. Never lower the priority.
+3. **Judge on the task metric, never the training reward.** `eval/task_metric` (per domain: `eval/<d>/task_metric`) and the paired
+   held-out result `test/*` with its CI. A shaping term that rises while the task metric is flat is being gamed.
+4. **Budget is real.** Each program has a ledger (`budget.ledger`); `strl launch --watch` records every attempt. A new GPU program needs the
+   user's authorization and its own ledger file. Never edit recorded ledger entries.
+5. **Secrets**: never print, paste or put a key in YAML, argv, tags or W&B. Never read `.env*` files. The repo holds only locators
+   (references/credentials.md). Do not delete or overwrite the Modal bundle in S3. Ask the user before any new credential action.
+6. **One attempt name per submission**, lowercase, <= 26 chars, never reused. Do not touch other people's jobs.
+
+## Setup (once per machine, ~2 min)
 
 ```bash
-uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements-local.txt   # once (~2 min)
-.venv/bin/python -m unittest discover -s tests -t .                                                # unit, contract and golden tests (all of them load every experiment under experiments/)
-.venv/bin/python -m strl plan experiments/mbpp-qwen35-partial.yaml --against experiments/mbpp-qwen35-binary.yaml
+uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements-local.txt
+.venv/bin/python -m unittest discover -s tests -t .          # ~300 tests; they also plan every file under experiments/
+aws sts get-caller-identity --profile production-developer     # S3 staging; ScaleTrain CLI: scale-train --version
 ```
 
-You change three axes; everything else (placement, batching, engines, credentials, sandboxes, budget, checkpoints, eval,
-monitoring) is derived and validated:
+Use `AWS_PROFILE=production-developer` for every `stage`/`launch`/`monitor`/`verify` command.
 
-| Axis | Change | Shipped |
+## Zero to launched (copy a template, change one axis)
+
+| Start from | When |
+| --- | --- |
+| `experiments/gsm8k-qwen35.yaml` | single-turn math, no external services (fastest loop) |
+| `experiments/mbpp-qwen35-binary.yaml` | single-turn coding, tests executed in Modal |
+| `experiments/harbor-qwen35.yaml` | multi-turn agent (Terminus-2) in Modal sandboxes |
+| `experiments/mimo-qwen35-0p8b-smoke.yaml` | MiMo agentic suite, 0.8B, 1 GPU (cheap end-to-end) |
+| `experiments/mimo-phi4-mini-lora-verify.yaml` | MiMo subset, a non-Qwen model, LoRA, shaped reward, durable checkpoints, retention eval |
+| `experiments/mimo-qwen38-27b-lora.yaml` / `-full.yaml` | 27B on 2 x 8 H100, LoRA / full |
+
+```bash
+cp experiments/mimo-phi4-mini-lora-verify.yaml experiments/my-exp.yaml       # set name, description, tracking.group, then the axis you study
+.venv/bin/python -m strl plan experiments/my-exp.yaml                         # errors, layout, memory, step time, budget, warnings: read them all
+.venv/bin/python -m strl plan experiments/my-exp.yaml --against experiments/mimo-phi4-mini-lora-verify.yaml   # the exact resolved diff
+.venv/bin/python -m strl fetch experiments/my-exp.yaml                        # small models: pinned snapshot + data (mimo/coding: runs prepare)
+.venv/bin/python -m strl check-template experiments/my-exp.yaml               # agentic envs: do this model's turns merge into one sequence?
+AWS_PROFILE=production-developer .venv/bin/python -m strl launch experiments/my-exp.yaml --attempt myexp-dry --mode dry --watch
+AWS_PROFILE=production-developer .venv/bin/python -m strl launch experiments/my-exp.yaml --attempt myexp-can --mode canary --watch
+AWS_PROFILE=production-developer .venv/bin/python -m strl launch experiments/my-exp.yaml --attempt myexp-a1 --mode train --watch --relaunch-on-preempt 2
+```
+
+`launch` prints the WINNING attempt name (`myexp-a1-fb`, `-rb`, `-ro` or `-fo`); use it in every later command. Run it in the background
+(`... > evidence/launch-myexp-a1.log 2>&1 &`) and follow the log for `WINNER`, `preempt`, `Traceback`, `next:`.
+
+Extra preparation by case:
+- **Model weights**: up to ~10 GB, `strl fetch` downloads locally and `stage` uploads them. Above ~10 GB (e.g. a 7B in bf16 is 15 GB) skip the
+  local download: `strl stage-model experiments/my-exp.yaml --attempt myexp-sm --team gen_ai.agent_training_foundation`, then
+  `strl submit evidence/myexp-sm/job.json` (a CPU job copies HF -> S3 with a sha256 manifest, ~12 min for 55 GB). Already staged? Read-only:
+  `aws s3 ls s3://scale-ml/tmp/mohamedelfeki/scaletrain/qwen35-grpo-v2/models/<name>@<rev12>/ --profile production-developer`.
+- **Coding envs**: `strl executor deploy` once. **Harbor/MiMo**: `strl overlay` once (Modal/Harbor packages for the image).
+- **MiMo data**: `run.data_dir` holds the prepared tasks. Shipped: `assets/mimo/data` (all 5 domains, 24 train / 24 test), `data-smoke`
+  (5 x 4/2), `data-2node` (music + cyber, 16/4). `plan` prints `DATA` when the dir does not cover the selection. Lowering counts reuses a
+  dir; more tasks, other filters or another seed need a new `run.data_dir` and `strl prepare experiments/my-exp.yaml` (downloads the pinned
+  parquet from HF and exports task dirs locally; no Modal, no GPUs), then
+  `.venv/bin/python tools/prebuild_mimo_images.py <run.data_dir>/tasks --concurrency 8` and the nop gate
+  `.venv/bin/python tools/gate_mimo.py <domain> <task dir>...` (nop must score 0 with the verifier proven to have run).
+
+## What to change (YAML keys; or try without editing: `--set key=value` on plan/stage/launch, recorded in the experiment sha)
+
+| Axis | Keys | Example |
 | --- | --- | --- |
-| model | `model.id` / `model.revision` (profile auto-detected) | `qwen3_5` (GPU-verified +18 pts GSM8K), `qwen3`, `llama`, `generic` |
-| environment | `environment.name` | `gsm8k`, `coding_exec` (MBPP/HumanEval, tests in Modal), `coding_harbor` (Terminus-2 in Modal sandboxes) |
-| reward | `reward.components` (weighted named terms or `module:function`; for `mimo`: the native `verifier_score` plus optional custom terms that shape training only) | coding: `pass_all_tests`, `partial_tests`, `compiles`, `no_suspicious_code`; gsm8k: `strict_answer`, `contains_number_answer`; common: `length_penalty`, `format_ok`; mimo: the per-domain native verifier (`verifier_score`) |
+| **Model** | `model.id`, `model.revision` (a commit sha). Leave `model.local_path` and `model.profile` unset (auto). | `--set model.id=microsoft/Phi-4-mini-instruct --set model.revision=cfbefacb99257ffa30c83adab238a50856ac3083` |
+| **Fine-tuning** | `finetune.mode: lora\|full` (full ignores an inherited `finetune.lora`), `finetune.lora.{rank,alpha,target_modules}`. lr: LoRA 1e-5; full 2e-6 at <= 2B (verified on 0.8B), 1e-6 at 7B+ | `--set finetune.mode=full --set algorithm.lr=1e-6` |
+| **Environment** | `environment.name` (`gsm8k`, `coding_exec`, `coding_harbor`, `mimo`); for mimo `environment.mimo.domains.<d>.{train,test,weight,filters,max_turns,max_agent_sec}` | `--set environment.mimo.domains.code.train=0 --set environment.mimo.domains.code.test=0` (off) |
+| **Reward** | `reward.components`: weighted named terms or `module:function` from `user_rewards/` | see below |
+| **Scale** | `compute.nodes`, `compute.gpus_per_node` (1/2/4/8), `inference.tensor_parallel_size`, `limits.max_nodes` | `--set compute.gpus_per_node=8 --set inference.tensor_parallel_size=2` |
+| **GRPO** | `algorithm.{prompts_per_step,n_samples,lr,temperature,max_generate_length,max_steps,use_kl_loss}` | `--set algorithm.n_samples=8` |
+| **Evaluation** | `evaluation.{interval_steps,retention,durable_checkpoints}`, `environment.mimo.eval_repeats`, `run.ceiling_per_domain` (dry) | `--set evaluation.retention.limit=200` |
 
-Two more switches, also one YAML key each: **`finetune.mode: lora | full`** (LoRA rank/targets under `finetune.lora`) and
-**`compute.nodes`** (1..N; `limits.max_nodes` gates it). `strl plan` derives the layout (FSDP group, TP x engines, per-GPU memory) and
-warns. Any key can be tried without editing YAML: `strl plan|stage <exp> --set finetune.mode=full --set compute.nodes=1`.
+Reward designs:
 
-The held-out evaluation always reports the environment's **task metric** (accuracy / pass@1), never the training reward, so reward
-designs, models and environments are compared on the same yardstick. Read [decision-points.md](references/decision-points.md) for
-every knob, its expected effect and the W&B key that shows it.
-
-## Agent path: one experiment, end to end
-
-```bash
-cp experiments/mbpp-qwen35-binary.yaml experiments/my-exp.yaml      # edit name, tracking.group and the axis you study
-.venv/bin/python -m strl plan experiments/my-exp.yaml                # free: errors, derived infra, estimates, warnings
-.venv/bin/python -m strl fetch experiments/my-exp.yaml               # pinned model snapshot + data (coding: refs validated in Modal)
-.venv/bin/python -m strl executor deploy                              # coding envs only: deploy + version-check the Modal executor
-.venv/bin/python -m strl overlay                                     # once: Modal/Harbor packages for the training image
-.venv/bin/python -m strl check-template experiments/my-exp.yaml     # Harbor/agentic envs: does the chat template let SkyRL merge a trajectory's turns?
-.venv/bin/python -m strl capacity --nodes 1 --gpus-per-node 8,4,1
-.venv/bin/python -m strl stage experiments/my-exp.yaml --attempt my-exp-dry1 --mode dry && .venv/bin/python -m strl submit evidence/my-exp-dry1/job.json
-.venv/bin/python -m strl stage experiments/my-exp.yaml --attempt my-exp-can1 --mode canary && .venv/bin/python -m strl submit evidence/my-exp-can1/job.json
-.venv/bin/python -m strl stage experiments/my-exp.yaml --attempt my-exp-a1 --mode train && .venv/bin/python -m strl submit evidence/my-exp-a1/job.json
-.venv/bin/python -m strl monitor experiments/my-exp.yaml --attempt my-exp-a1 --job-id <job_id>
-.venv/bin/python -m strl ledger experiments/my-exp.yaml --attempt my-exp-a1 --job-id <job_id>
-.venv/bin/python -m strl verify experiments/my-exp.yaml --attempt my-exp-a1
-.venv/bin/python -m strl compare experiments/my-exp.yaml:my-exp-a1 experiments/mbpp-qwen35-binary.yaml:<other-attempt>
-.venv/bin/python -m strl report experiments/my-exp.yaml:my-exp-a1           # markdown + W&B summary: per-domain tables, curves, infra, judge cost
+```yaml
+reward:
+  components:
+    - {fn: verifier_score, weight: 1.0}                               # mimo: the native grader, exactly once; coding: pass_all_tests; gsm8k: strict_answer
+    - {fn: partial_tests, weight: 0.5}                                # built-in shaping (coding_exec)
+    - {fn: 'user_rewards.examples:turn_efficiency_bonus', weight: 1.0, bonus: 0.05, max_turns: 10}   # your function
 ```
 
-Models too large for a laptop upload (`strl stage-model <exp> --attempt A`) are copied from HF to S3 by a CPU job, one shard at a time.
-Multi-node programs have their own budget ledger (`evidence/ledgers/mimo-27b.json`); a wall-clock second costs `nodes x gpus/8`, counted from when the
-pods started (the worker's `budget.json`), never from job creation: a 2 x 8 job can wait hours in the queue for two nodes in ONE network domain.
+A term is `fn(result: dict, ctx, **params) -> float` in `user_rewards/<module>.py` (shipped to the pod automatically). For mimo, `result` =
+`{domain, task, reward (native 0-1), metric, passed (grader's verdict, else metric >= 0.999), components (grader sub-scores), turns,
+tokens (generated tokens summed over turns, prompts excluded; 0 for a placeholder), seconds, stop ('complete', 'agent_timeout',
+'output_length', ...), artifact (the deliverable, truncated)}` and `ctx` has only `extras['domain']` and `max_generate_length` (no completion
+string). Shaping changes the TRAINING reward only. The dry run calls every term on a synthetic pass/fail per domain (`shaping` in the receipt).
+Built-in names: `strl/tasks/<env>/rewards.py`, common `length_penalty`, `format_ok`. `strl plan` rejects unknown names/params.
 
-Rules: `stage` never submits; `submit` writes a receipt first and reconciles by name if anything is ambiguous (never resubmit);
-always `dry` -> `canary` before a new model/environment/reward's first real run; record every terminal attempt in the ledger.
+Models: any dense decoder works through the `dense`/`generic` profiles (Qwen2/3/3.5/3.8, Phi-3/4, Mistral, OLMo, Gemma text, Granite, GLM4...);
+`plan` refuses unmapped vision-language wrappers and contradictory profiles, warns on MoE (memory counts all experts) and unknown memory.
+Gated models (Llama, Gemma) need the HF license accepted. Checkpoints that bundle remote modeling code (`auto_map`, e.g. Phi) are switched
+to transformers' native class in the pod (`model_code` in `worker-started`/`dry-run.json`). Details: references/extending.md.
 
-| Mode | Preset | What it proves | Cost |
-| --- | --- | --- | --- |
-| `dry` | m5.2xlarge | in the real image: payload, credentials (W&B, Modal, LiteLLM), real SkyRL parser + `validate_cfg` at the target GPU count, reward contract on good/bad inputs, executor/sandbox calls from the pod, W&B write+readback, a critic call | CPU only |
-| `canary` | p5.48xlarge:1 | the experiment with `base/canary_overlay.yaml` (same model/env/reward, 1 GPU, 8 prompts x 4 samples, 2 updates, no final eval): engines, generator, rewards, every W&B table | `canary_max_seconds` + 600 s (1,800 s; Harbor 3,000 s) x 1/8 node |
-| `train` | the experiment's preset | time-bounded GRPO, validation-only checkpoint selection, base vs trained held-out eval, paired bootstrap | per ledger |
+## Getting capacity ASAP (every launch, every time)
 
-## GSM8K vs RL environments
+`strl launch` submits one job per route and keeps the first that starts (losers are cancelled and recorded; queue time is never charged):
+`fb` foundation+borrowing, `rb` research+borrowing, `ro` research own quota, `fo` foundation own quota. Measured: the same job waited ~23 h on
+one route and started first on another; dry runs start in seconds on `fb`.
+- Prefer the smallest shape that answers the question: `gpus_per_node` 1/2/4 slices admit far faster than 8, and 1 node far faster than 2.
+- Multi-node needs nodes in one network domain (`waiting_for_network_domain_capacity` can last hours on every route). Add
+  `--max-wait-hours 2 --fallback-set compute.nodes=1` (repeatable) when a 1-node result is acceptable (ask the user: it changes the
+  experiment). The fallback races as `<attempt>-alt` and starts fresh (a checkpoint resumes only at the same world size). `launch`
+  checks up front that every name it may create (`-alt`, `-p<k>` relaunches, route suffix) fits; ~19 characters is safe with all flags.
+- Borrowed capacity can be reclaimed (`preemption_reported`): use `--watch --relaunch-on-preempt 2` with `evaluation.durable_checkpoints: true`
+  (+ `budget.save_optimizer_state: true`) so the relaunch resumes from S3; or `--routes ro,fo` to avoid borrowing.
+- Keep CPU work (prepare, image prebuild, dry runs, docs) going while a GPU job queues. `strl capacity` (read-only, `ml-admin`) explains waits.
+Details: references/launch-and-capacity.md.
 
-- **GSM8K** (`base/gsm8k.yaml`, `experiments/gsm8k-qwen35.yaml`): single-turn math, in-process strict scorer, no external services.
-  Verified: Qwen3.5-0.8B, 36 updates, 50.80% -> 68.84% on the 1,319-example official test (+18.04, CI [+15.31, +20.77]).
-- **coding_exec** (`base/coding_exec.yaml`): MBPP/HumanEval; the model writes one python block; tests run in the deployed Modal
-  executor `strl-code-exec` (no network, limits, nonce-gated pass, candidate `__eq__` rejected); infra failures mask whole GRPO
-  groups. 364 train / 96 validation / 663 held-out (499 MBPP-test + 164 HumanEval) after reference validation.
-  Verified: Qwen3.5-0.8B on 4 GPUs, ~66 updates in ~48 min. Binary reward 23.38% -> 36.05% (+12.67 [+9.20, +16.29]);
-  + 0.5 partial credit 33.33% (+9.95). The reward A/B and its W&B evidence are in RESULTS.md.
-- **coding_harbor** (`base/coding_harbor.yaml`): the same tasks as Harbor task dirs; Terminus-2 operates a Modal sandbox and writes
-  `/app/solution.py`; the sandbox verifier runs the same harness. Rewards come from the verifier (`pass_all_tests` only).
-  One knob, `environment.harbor.max_seq_len` (default 8192), sizes the engine, the agent and the trainer: Terminus-2's first
-  turn alone is 0.8-2.5k tokens. Canary-level evidence only (see validation.md).
+## What to monitor
 
-- **mimo** (`base/mimo.yaml`; `experiments/mimo-*.yaml`): any subset of XiaomiMiMo/MiMo-V2.6-RL-oss as Harbor tasks, one trainer, five
-  domains (music single-shot ABC with a deterministic scorer; cyber ARVO crash reproduction; code SWE with test patches; general
-  MCP-tool tasks with a rubric judge; webdev render + vision judge). Choose domains and counts at run time:
-  `--set environment.mimo.domains.code.train=0`. Held-out test sets are fixed per domain (grouped by project/repo/scenario) and
-  independent of the training selection, so runs with different selections stay comparable. Graders run in the sandbox; judge calls
-  run outside it (the key never enters a sandbox). Held-out evaluation is in the training loop (step 0 = base, last step = trained,
-  same engines and agent). How to read it: [monitoring.md](references/monitoring.md); how to add a domain or a similar suite:
-  [extending.md](references/extending.md).
+```bash
+AWS_PROFILE=production-developer .venv/bin/python -m strl monitor experiments/my-exp.yaml --attempt <winner> --job-id <job>   # 1 line/min + flags
+```
 
-## References (read what the task needs)
+W&B: the URL is on `strl plan`'s `monitoring` line (`tracking.entity`/`project`, e.g. `https://scaleai.wandb.io/mohamed-elfeki/scaletrain-rl-envs`),
+group = `tracking.group`, run id = the attempt, x-axis `optimizer_step`. S3 `attempts/<attempt>/artifacts/` is the source of truth (`completion.json`, `training.log`, `failure.log`).
 
-- [architecture.md](references/architecture.md) - data/control flow, package map, why each design choice
-- [decision-points.md](references/decision-points.md) - every knob -> mechanism -> effect -> W&B key
-- [extending.md](references/extending.md) - add a model, a reward, an environment (and the proof ladder)
-- [launch-and-capacity.md](references/launch-and-capacity.md) - lifecycle, presets, capacity routes, budget ledger
-- [monitoring.md](references/monitoring.md) - W&B quantitative/qualitative, critic, live monitor, alerts, verify/compare
-- [credentials.md](references/credentials.md) - every credential locator and check (never paste secrets)
-- [scaling.md](references/scaling.md) - bigger models, more nodes, fully-async agentic RL
-- [troubleshooting.md](references/troubleshooting.md) - symptoms seen while building this, with fixes
-- [validation.md](references/validation.md) - dated evidence for every gate and run
+| Question | Look at | Healthy |
+| --- | --- | --- |
+| Did it start right? | monitor line, `artifacts/worker-started.json` (`model_code`), `training.log` | first generation ~5-10 min (0.8-4B), ~12-16 min (27B); the step-0 eval then takes as long as its slowest trial (agentic: up to `max_agent_sec`) |
+| Is it learning? | `eval/task_metric`, `eval/<d>/task_metric`, `eval/delta_from_baseline` | rises above step 0 (base) |
+| Is there signal? | `train/learning_signal_fraction`, `generate/<d>/pass_rate` | > 0.3; ~0 or ~1 pass rate = no gradient |
+| Is the reward honest? | `generate/<d>/reward_terms/<fn>`, `environment/reward_components/*` vs task metric, `qualitative/critic` | terms do not rise alone |
+| Is the env healthy? | `environment/<d>/{masked,timeout,dropped}_group_fraction`, `eval/<d>/no_artifact_rate`, flags `DOMAIN_MASKED`, `TIMEOUTS`, `ENV_FAILURES` | masked < 5%; timeouts mean raise caps or lower `max_turns` |
+| Is the policy stable? | `policy/grad_norm`, `train/entropy`, `policy/policy_kl`, `train/truncation_rate`, flag `NAN` | entropy not -> 0 |
+| Is it fast / fitting? | `timing/step` vs plan (`STEP_SLOW`), `gpu/mem_peak_gb` (`MEM` > 76), `infra/*` and `NODE_LOST`/`NETWORK` (multi-node) | |
+| Qualitative | tables `trajectories/train`, `trajectories/eval`, `qualitative/fixed_validation`, `qualitative/critic`, `qualitative/{fixed,broken}_by_training` | read 5 rows per domain |
 
-## Gotchas (each one cost a debugging cycle)
+After the run (in order):
 
-- SkyRL lets a dataset row's `env_class` override `environment.env_class`; GSM8K rows say `gsm8k`, so a custom reward would silently
-  not apply. `strl.entrypoint.prepare_dataset` ignores the row column on the generic reward path.
-- SkyRL silently drops prompts longer than `max_prompt_tokens`; `strl prepare` asserts none exceed it, and the entrypoint checks row
-  counts. Held-out prompts are never filtered: the offline evaluator sizes its context from the longest test prompt.
-- Executor anti-hack checks must not reject legitimate stdlib types: `collections.Counter.__eq__` is Python code; only
-  candidate-defined `__eq__` (compiled as `<solution>`) is rejected. Reference validation in `strl prepare` catches regressions.
-- Modal deploys roll gradually; a warm old container answers the version ping. `executor deploy` uses `strategy='recreate'` and
-  polls until the new harness version answers; every result carries `harness_version`.
-- The image skips `vllm-router`; `strl/runtime.py` loads the SkyRL-locked wheel (`assets/runtime`, SHA256 `4a1fa0bc...`).
-- Qwen3.5 needs `language_model_only`, no sample packing, and a wrapped export for vLLM reload (profile `qwen3_5`).
-- `transformers` 5 `apply_chat_template(tokenize=True)` returns a dict: count `input_ids`, not keys.
-- Pinned SkyRL forwards `MODAL_TOKEN_*` into Ray if set: only `MODAL_CONFIG_PATH/PROFILE/ENVIRONMENT` are forwarded.
-- `ml-admin` cannot write `s3://scale-ml`; staging uses `production-developer`. LiteLLM on a laptop needs ambient creds to assume
-  `ml-worker` (`eval "$(aws configure export-credentials --profile ml-admin --format env)"`).
-- A wall-clock second costs `nodes x gpus/8` node-seconds (slices and multi-node alike); `stage` converts the ledger accordingly.
-- A canary that "completes" can still be hollow. `can-hb-b` ran 2 updates while every Harbor trial died on turn 1, because the
-  context was too small. The step-2 canary rule now fails when >= 50% of GRPO groups are masked by environment failures.
-  Still read the canary yourself: `environment/masked_group_fraction`, `generate/num_error_trajectories`, and for Harbor
-  `harbor-trials/*/exception.txt`.
-- Judge reward designs only on `eval/task_metric` and the held-out test. In the A/B, partial credit raised the learning
-  signal and the training reward, but not pass@1. Validation is 96 tasks (about ±5 points), so close arms need a larger
-  validation split or more seeds.
-- Agentic sandboxes: Harbor starts a Modal sandbox with NO command, so an image without `CMD`/`ENTRYPOINT` (the MiMo code images have
-  none, nor any `ENV`) exits at once (status 128, `ConflictError: Sandbox is shutting down`). Export Dockerfiles define
-  `CMD ["sleep","infinity"]` there; test new images with `tools/gate_mimo.py` (nop agent) before any GPU.
-- Step-wise multi-turn training merges a trajectory's turns into one sequence only if the chat template keeps history verbatim
-  (`strl check-template`): Qwen3.5 never merges (811 turns -> 811 sequences), Qwen3.8 with `enable_thinking=false` does (-> 209).
-- Local tools put `assets/overlay` (Linux pod packages) AFTER the venv on `sys.path`: first, its x86_64 `.so` files shadow the Mac's.
-- Everything reaching Hugging Face or Modal paths must be percent-encoded (workspace file names carry spaces and non-ASCII).
-- Verification ladder for a new suite: unit tests -> real tasks through the real path (`prepare`, nop gate per domain, image prebuild
-  in Modal) -> CPU dry run in the image (judge selftest, validate_cfg at the target GPU count, 2 nodes if needed) -> 1-GPU canary with a
-  small model -> a 1-node canary with the target model (it measures decode speed, step time, memory, export) -> the run. Each rung found
-  bugs the previous one could not (see validation.md).
-- Agentic RL and timeouts: ~30 s per Terminus turn on Qwen3.8-27B means turns x 35 s must stay under `max_agent_sec`
-  (`environment.mimo.domains.<d>.max_turns` caps turns at run time). A trial that times out is a scored failure: evaluation scores it 0 (never
-  masked: masking it flatters the policy); in training it trains on the verifier's reward when it left tokens (most agentic trials do) and
-  otherwise (single-shot music, some webdev) stays in its GRPO group as a tokenless zero-loss placeholder, because SkyRL would otherwise mask
-  the whole prompt group. `environment/<d>/timeout_group_fraction` and the
-  `TIMEOUTS` flag show it; the fail-fast rules read infrastructure masks only.
-- Borrowed GPU capacity can be reclaimed within a minute (`status_detail: preemption_reported`; the worker records `preempted`): a
-  preempted attempt does not resume (no optimizer-state checkpoints, the budget window is anchored at the first start); restage a new
-  attempt, preferably on a team's own quota (`strl capacity` ranks the routes). Every job still carries foundation team, high priority
-  and `allow_borrowing: true` unless the user approves another route; CPU jobs on another team's quota may never start.
-- The in-pod model download is gentle by design (4 files x 8 parts; a 55 GB model filled a 30 GiB CPU pod with 16 x 16), and `--mode dry`
-  skips the weights. One-pod CPU diagnostics that write status to S3 are the way to debug a pod that dies before the worker starts.
-- Custom `module:function` rewards must live in `user_rewards/` (or another top-level package of this repo) to ship to the pod.
+```bash
+.venv/bin/python -m strl verify experiments/my-exp.yaml --attempt <winner>          # independent recomputation/re-scoring -> verified: true
+.venv/bin/python -m strl compare experiments/a.yaml:<attA> experiments/b.yaml:<attB>   # paired, same held-out ids, per domain + macro
+.venv/bin/python -m strl report experiments/my-exp.yaml:<winner>                      # evidence/results/<group>-report.md + W&B report run
+```
+
+How to decide: the change helped only if `test/<d>/delta` (or `test/macro`) has a CI excluding 0 and exceeds `eval/<d>/judge_variance`
+for judged domains; check `retention/*` did not drop (general ability) and compare against the ceiling (`dry-run.json` `gates.ceiling` from a
+dry run with `--set run.ceiling_per_domain=2`). A few updates are infrastructure evidence, not a training effect: say so.
+Details: references/monitoring.md, references/decision-points.md.
+
+## Checklists by experiment type
+
+- **New OSS model**: revision sha -> `plan` (profile, memory, warnings) -> `fetch` or `stage-model` -> `check-template` (agentic) -> dry
+  (proves `model_code`, validate_cfg) -> canary on a 1-2 GPU slice with LoRA -> run. Add its measured row to `strl/profiles.json`.
+- **New reward design**: function in `user_rewards/`, unit-test it (`tests/`), `plan` -> dry (calls the terms in the pod) -> an A/B:
+  experiments identical except `reward.components`, their own `tracking.group` (one group per study; arms told apart by `tracking.tags`),
+  launched together -> `compare a:attA b:attB [c:attC]`. Check `plan B --against A` shows only the reward diff.
+- **Different env subset / mix (mimo)**: change `domains.<d>.{train,weight}` only (held-out `test` sets are fixed and comparable); a new
+  `run.data_dir` + `strl prepare` when the selection changes. Turn a domain off with `train: 0` AND `test: 0`.
+- **Scale up (more GPUs / 2+ nodes)**: `plan` shows the layout (multi-node LoRA = HSDP automatically); dry with the target `compute.nodes`
+  (rendezvous + validate_cfg at that GPU count) -> a 0.8B smoke at the same shape (`experiments/mimo-qwen35-0p8b-2node-smoke.yaml`) -> the run.
+  Cross-node NCCL runs over sockets (~0.69 GB/s): LoRA is fine, full fine-tuning of large models is slow (references/scaling.md).
+- **New MiMo-style suite**: references/extending.md ("A new MiMo-style suite"): graders, nop/tamper gates, judge outside the sandbox.
+- **Resume / continue**: `--set run.resume_from=<attempt> --set algorithm.max_steps=<more>` on an attempt run with durable checkpoints.
+
+## Gotchas that cost real cycles
+
+- A canary that "completes" can be hollow: read `environment/*masked*`, `generate/num_error_trajectories`, `harbor-trials/*/exception.txt`.
+- Agentic trials: turns x seconds-per-turn must fit `max_agent_sec`; timeouts score 0 in eval. Size `environment.harbor.max_seq_len` above
+  the first turn (Terminus-2: 0.8-2.5k tokens).
+- Templates that drop `<think>` history (Qwen3.5) do not merge turns: several times more training tokens (`check-template`).
+- A CPU dry run on the research team's quota may never start: the race wins on `fb` anyway.
+- Small models on single-shot music often overflow `max_generate_length`: those trials are scored placeholders (`generate/<d>/num_output_exceeded`,
+  `environment/<d>/dropped_group_fraction`), not infrastructure masks; raise `algorithm.max_generate_length` if a domain has no trainable groups.
+- `plan` also runs the chat-template merge check when the tokenizer is local (`HARBOR` warning); `check-template` forces it from the hub.
+- `assets/overlay` must come after the venv on `sys.path` locally (Linux `.so` files). Custom reward modules must live in this repo.
+- LiteLLM (judge, critic, ceiling) runs in the pod via its role; do not export admin credentials locally (references/credentials.md).
+
+## References
+
+[launch-and-capacity.md](references/launch-and-capacity.md) routes, preemption, resume, budget ·
+[decision-points.md](references/decision-points.md) every knob -> effect -> W&B key ·
+[monitoring.md](references/monitoring.md) metrics, tables, flags, verify/compare/report ·
+[extending.md](references/extending.md) new model / reward / environment / suite ·
+[scaling.md](references/scaling.md) big models, multi-node, network ·
+[troubleshooting.md](references/troubleshooting.md) symptom -> fix ·
+[credentials.md](references/credentials.md) locators and checks ·
+[architecture.md](references/architecture.md) data/control flow, package map ·
+[validation.md](references/validation.md) what is proven, with job ids

@@ -6,7 +6,7 @@ argv, job tags or W&B config. If a credential is missing or expired, stop and as
 | What | Where it lives | Who reads it | Check |
 | --- | --- | --- | --- |
 | AWS SSO (S3, staging) | profile `production-developer` (account 307185671274; bucket `scale-ml`) | `strl stage`, `strl verify/compare/monitor` | `aws sts get-caller-identity --profile production-developer` |
-| AWS SSO (EKS capacity) | profile `ml-admin` (account 692474966980) | `strl capacity` | same with `--profile ml-admin` |
+| AWS SSO (EKS capacity) | profile `ml-admin` (account 692474966980) | `strl capacity` (read-only, optional: the launch race does not need it) | same with `--profile ml-admin` |
 | ScaleTrain CLI | `scale-train` (0.10.9), `~/.scaletrain/config`, user id `mohamed.elfeki` | `tools/scaletrain.py` (headless; resolves the CLI's own Python) | `scale-train --version`; `python -m strl status --list` |
 | W&B key | encrypted S3 locator `tracking.credentials_uri` (an existing approved object) | the worker (pod role), scoped to `WANDB_BASE_URL=https://scaleai.wandb.io` | dry run gate `wandb` (write + readback) |
 | Modal tokens (pod) | encrypted S3 bundle `services.modal.credentials_uri` = `s3://scale-ml/tmp/mohamedelfeki/scaletrain/modal-harbor/private/mh-cpu-261006a-modal.env` (user asked to KEEP and reuse it; do not delete or overwrite without asking) | worker -> mode-600 profile TOML; only `MODAL_CONFIG_PATH/PROFILE/ENVIRONMENT` reach Ray | dry run gate `modal` |
@@ -16,11 +16,14 @@ argv, job tags or W&B config. If a credential is missing or expired, stop and as
 | LiteLLM billing | project ObjectId `696011502a26dc4a64b24f55` (`services.litellm.project_id`), sent as `user` + `metadata.tags` | every LiteLLM call | budget caps: `tracking.critic.budget_usd` |
 | GitHub | `gh` authenticated as the repo owner | PRs | `gh auth status` |
 
-Laptop LiteLLM calls need ambient credentials to assume `ml-worker` (there is no `ml-worker` profile locally):
+LiteLLM from the laptop needs ambient credentials that can assume `ml-worker`. An agent session usually must NOT export admin
+credentials (permission policies deny it, and it is a credential action: ask the user). Use the pod-side paths instead; they reach the
+key through the pod role and never touch the laptop:
+- judge/critic selftest and the ceiling: a free CPU dry run, `strl launch <exp> --attempt <x>-dry --mode dry --set run.ceiling_per_domain=2`
+  (result in `dry-run.json` `gates.ceiling`);
+- the in-run judge and critic: the worker.
 
-```bash
-eval "$(aws configure export-credentials --profile ml-admin --format env)" && .venv/bin/python -m strl eval-llm base/coding_exec.yaml --limit 20
-```
+If the user runs it themselves in their own terminal, `strl eval-llm <exp> --limit 20` works once their shell can assume `ml-worker`.
 
 Gotchas that cost real time:
 - Pinned SkyRL copies `MODAL_TOKEN_ID/SECRET` into Ray `runtime_env` if they are set: the worker unsets them; `strl.entrypoint`

@@ -10,15 +10,15 @@ You change three axes in one YAML file; everything else is derived, validated an
 
 | Axis | Where | Shipped |
 | --- | --- | --- |
-| **model** | `model.id` + `model.revision` (profile auto-detected from `config.json`) | `qwen3_5` (GPU-verified), `qwen3` (canary-verified), `llama`, `generic` |
-| **RL environment** | `environment.name` | `gsm8k`, `coding_exec` (MBPP/HumanEval, tests run in Modal), `coding_harbor` (Terminus-2 agent in Modal sandboxes) |
+| **model** | `model.id` + `model.revision` (profile auto-detected from `config.json`) | `qwen3_5` (Qwen3.5/3.6/3.8, GPU-verified), `qwen3`, `qwen3_moe`, `qwen3_5_moe`, `llama`, `dense` (Phi, Mistral, OLMo, Qwen2, Gemma text, ...), `generic` |
+| **RL environment** | `environment.name` | `gsm8k`, `coding_exec` (MBPP/HumanEval, tests run in Modal), `coding_harbor` (Terminus-2 agent in Modal sandboxes), `mimo` (5 agentic domains, any subset) |
 | **reward design** | `reward.components`: a weighted sum of named terms, or your own `module:function` | `pass_all_tests`, `partial_tests`, `compiles`, `no_suspicious_code`, `strict_answer`, `length_penalty`, `format_ok`, ... |
 
 Held-out evaluation always reports the environment's **task metric** (accuracy or pass@1), never the training reward. That
 keeps runs that change different axes comparable on one yardstick.
 
-The agent-facing manual is the in-repo Claude Code skill [`.claude/skills/scaletrain-rl/SKILL.md`](.claude/skills/scaletrain-rl/SKILL.md).
-Its [decision-points reference](.claude/skills/scaletrain-rl/references/decision-points.md) lists every knob, its mechanism, its
+The agent-facing manual is the in-repo Claude Code skill [`.claude/skills/scaletrain-rl-experiments/SKILL.md`](.claude/skills/scaletrain-rl-experiments/SKILL.md).
+Its [decision-points reference](.claude/skills/scaletrain-rl-experiments/references/decision-points.md) lists every knob, its mechanism, its
 expected effect, and the W&B key that shows the effect.
 
 ## GSM8K vs RL environments
@@ -84,7 +84,7 @@ limits). What it demonstrates is the platform: five graders and two judges in on
 monitoring, and an independent `strl verify` that re-scored the evaluation without disagreement. Held-out sets are fixed per domain (grouped by project, repo, scenario or tag), so runs with a different
 training selection remain comparable; evaluation is in the training loop (step 0 = base, last step = trained) and reported per domain plus a macro average
 with paired bootstrap CIs (`strl verify`, `strl compare`, `strl report`). The verification ladder and what each rung caught are in
-[validation.md](.claude/skills/scaletrain-rl/references/validation.md).
+[validation.md](.claude/skills/scaletrain-rl-experiments/references/validation.md).
 
 ## Quickstart
 
@@ -95,21 +95,20 @@ uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requi
 .venv/bin/python -m strl plan experiments/mbpp-qwen35-partial.yaml --against experiments/mbpp-qwen35-binary.yaml
 ```
 
-Run one experiment end to end. `stage` never submits, and `submit` reconciles by job name instead of resubmitting.
+Run one experiment end to end. `strl launch` stages and submits one job per capacity route (team x borrowing), keeps the first
+that starts, cancels and records the rest, and with `--watch` follows the winner and records it in the budget ledger.
 
 ```bash
 E=experiments/mbpp-qwen35-binary.yaml
 .venv/bin/python -m strl fetch $E                              # pinned model snapshot + data (coding: every reference validated in Modal)
 .venv/bin/python -m strl executor deploy                       # coding only: deploy/verify the Modal executor
 .venv/bin/python -m strl overlay                               # once: Modal/Harbor packages for the training image
-.venv/bin/python -m strl capacity --gpus-per-node 8,4,1
-.venv/bin/python -m strl stage $E --attempt my-dry1 --mode dry    && .venv/bin/python -m strl submit evidence/my-dry1/job.json
-.venv/bin/python -m strl stage $E --attempt my-can1 --mode canary && .venv/bin/python -m strl submit evidence/my-can1/job.json
-.venv/bin/python -m strl stage $E --attempt my-a1 --mode train    && .venv/bin/python -m strl submit evidence/my-a1/job.json
-.venv/bin/python -m strl monitor $E --attempt my-a1 --job-id <job_id>
-.venv/bin/python -m strl ledger $E --attempt my-a1 --job-id <job_id>
-.venv/bin/python -m strl verify $E --attempt my-a1
-.venv/bin/python -m strl compare $E:my-a1 experiments/mbpp-qwen35-partial.yaml:<attempt>
+AWS_PROFILE=production-developer .venv/bin/python -m strl launch $E --attempt my-dry --mode dry --watch
+AWS_PROFILE=production-developer .venv/bin/python -m strl launch $E --attempt my-can --mode canary --watch
+AWS_PROFILE=production-developer .venv/bin/python -m strl launch $E --attempt my-a1 --mode train --watch --relaunch-on-preempt 2
+.venv/bin/python -m strl monitor $E --attempt my-a1-fb --job-id <job_id>     # the winner's name and job id are printed by launch
+.venv/bin/python -m strl verify $E --attempt my-a1-fb
+.venv/bin/python -m strl compare $E:my-a1-fb experiments/mbpp-qwen35-partial.yaml:<attempt>
 ```
 
 The modes:
@@ -127,18 +126,19 @@ The modes:
 | `base/` | `infra.yaml` (image, storage, team, budget envelope), `gsm8k.yaml`, `coding_exec.yaml`, `coding_harbor.yaml`, `canary_overlay.yaml` |
 | `strl/experiment.py`, `derive.py`, `overrides.py` | schema + `extends` resolution + validation + `experiment_sha`; derived infra, estimates and warnings; SkyRL overrides |
 | `strl/models/` | model profiles: wrap class, packing, chat-template flags, vLLM kwargs, export adapter |
-| `strl/tasks/` | environments: `gsm8k/`, `coding/` (data, Modal executor + harness, rewards, group-masking generator, Harbor export, evaluator) |
+| `strl/tasks/` | environments: `gsm8k/`, `coding/` (data, Modal executor + harness, rewards, group-masking generator, Harbor export, evaluator), `mimo/` (data, export, graders, generator, judge, results) |
 | `strl/rewards.py`, `strl/envs.py` | the reward component registry and the generic environment that applies any reward design |
 | `strl/worker.py`, `stage.py`, `entrypoint.py`, `train.py`, `runtime.py` | ScaleTrain worker (budget, credentials, watchdog, selection, final eval), staging, the SkyRL entrypoint |
 | `strl/tracking.py`, `strl/monitor/` | W&B axis/tables/alerts, the LiteLLM critic thread, live monitor, cross-run compare |
 | `strl/services/` | W&B / Modal / LiteLLM credential locators and smoke checks; no secret values anywhere in the repo |
-| `tools/` | vendored ScaleTrain submit/capacity/lifecycle helpers, the overlay builder |
+| `strl/launch.py`, `multinode.py`, `probe.py` | the capacity race (`strl launch`); multi-node rendezvous, liveness and the network probe |
+| `tools/` | vendored ScaleTrain submit/capacity/lifecycle helpers, the overlay builder, MiMo image prebuild and nop gates |
 | `tests/` | unit, contract and golden-equivalence tests; `pinned/` holds the SkyRL source snapshots for static schema checks |
 | `evidence/` | budget ledgers, gate results, the verified GSM8K result; per-attempt receipts are gitignored |
 
 ## Known pitfalls baked into the code
 
-The skill's [troubleshooting reference](.claude/skills/scaletrain-rl/references/troubleshooting.md) has the full list. The ones most
+The skill's [troubleshooting reference](.claude/skills/scaletrain-rl-experiments/references/troubleshooting.md) has the full list. The ones most
 likely to bite:
 - **Silent reward bypass:** a dataset row's `env_class` overrides the configured environment in SkyRL, so a custom reward is silently
   skipped. The generic path ignores the row column.

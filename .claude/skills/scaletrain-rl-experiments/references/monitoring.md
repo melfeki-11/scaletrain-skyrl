@@ -24,7 +24,7 @@ lands side by side.
 | `trajectories/train` | the first 2 complete GRPO groups of every step: prompt, completion, parsed answer/code, reward, tokens, finish reason, failure class, tests passed/total |
 | `qualitative/fixed_validation` | the same 16 validation ids at every eval (watch individual tasks flip) |
 | `qualitative/critic` | every 5 steps, up to 8 failed rollouts classified by gpt-6-luna: `critic_mode`, rationale, fix hint, source step |
-| `qualitative/fixed_by_training` | end of run: base wrong -> trained right on the held-out test |
+| `qualitative/fixed_by_training`, `qualitative/broken_by_training` | end of run: base wrong -> trained right (and the reverse) on the held-out test |
 | artifact `<attempt>-evidence` | result.json, base/candidate jsonl, fixed/broken examples |
 
 Tables are INCREMENTAL (only new rows upload each time). The critic never blocks training: bounded queue, own thread, hard USD cap
@@ -37,7 +37,7 @@ Tables are INCREMENTAL (only new rows upload each time). The critic never blocks
 ```
 
 It joins ScaleTrain state, S3 `progress.json`/`heartbeat.json`/`completion.json` and W&B history, and flags `STALL`, `NAN`,
-`ENV_FAILURES`, `BUDGET`. The worker independently sends W&B alerts on non-finite metrics, canary failure, stalls (watchdog
+`ENV_FAILURES`, `BUDGET` (plus the per-domain and multi-node flags below). The worker independently sends W&B alerts on non-finite metrics, canary failure, stalls (watchdog
 kills the child, then still evaluates the latest export) and failures. S3 is the source of truth; W&B is the evidence surface.
 
 ## After the run
@@ -50,7 +50,7 @@ kills the child, then still evaluates the latest export) and failures. S3 is the
 ## Per-domain environments (mimo): keys, flags, in-loop result
 
 Per-domain scalars (one set per selected domain `<d>` in music, cyber, code, general, webdev): `eval/<d>/{task_metric,pass_rate,num_trials,num_masked,
-judge_variance,rep_std}`, `eval/macro_task_metric` (= `eval/task_metric`), `generate/<d>/{pass_rate,reward_mean,tokens,num_trials,num_masked,num_timeout,
+judge_variance,rep_std}`, `eval/macro_task_metric` (= `eval/task_metric`), `generate/<d>/{pass_rate,reward_mean,reward_native_mean,tokens,avg_turns,num_trials,num_masked,num_timeout,num_output_exceeded,num_context_exceeded,
 judge_cost_usd}`, `environment/<d>/{masked,timeout,dropped}_group_fraction` (infrastructure masks / groups with a timed-out trial / groups lost to any mask), `eval/<d>/no_artifact_rate`, `test/<d>/{base,trained,delta,ci_lower,ci_upper}` (final), `test/macro/*`, `test/dropped`.
 GPU memory: SkyRL's Ray monitor logs `ray/gpu.mem_used_gb.*`; when `budget.failfast.mem_gb` is on, the head also logs `gpu/mem_peak_gb` and
 `gpu/mem_used_gb_max` (nvidia-smi sampled by a daemon thread, head node only, absent when not measurable).
@@ -65,7 +65,28 @@ through `tracking.alert` (W&B alert on the attempt's run; honours `tracking.aler
 | `STEP_SLOW(Ns > 1.5 x plan Ms)` | `timing/step` above 1.5 x the plan's step estimate (`plan_step_seconds` in `evidence/<attempt>/stage.json` and the pod's `runtime.json`) | the run will not reach its planned steps; silent for runs staged before the estimate existed |
 | `MEM(<key>=x GB > 76)` | any logged GPU memory metric above 76 GB | OOM is close (an H100 has 80 GB) |
 
-`NODE_LOST` / `PEER_STALE` / `NETWORK` (multi-node) are unchanged.
+Multi-node: `strl monitor` adds a per-node line `nodes=head:<age>s,rank1:<age>s` (heartbeat age per node) and flags `NODE_LOST`
+(a peer heartbeat older than the stale window; the head aborts the run itself), `PEER_STALE` (the head's record went stale for a peer) and
+`NETWORK` (the probe found socket transport, i.e. no EFA, or cross-node all-gather below plan). These also alert once. The probe's
+`network.json` is logged once to W&B as `infra/*`: `infra/nodes`, `infra/efa_available`, `infra/nccl_socket_transport`, `infra/probe_passed`,
+`infra/{intra_node,cross_node,global}_busbw_GBps` (single node: absent). Measured on p5 pairs: socket NCCL, ~0.69 GB/s cross-node; fine for LoRA (adapter-only
+traffic), too slow for full fine-tuning of large models without HSDP + offload.
+
+Monitor alerts go to a separate `<run_id>-monitor` W&B run (same group) so the monitor never resumes or corrupts the worker's run.
+
+## Reward design, judge noise and flips (mimo and every Harbor env)
+
+| Key / table | What it tells you |
+| --- | --- |
+| `generate/<d>/reward_terms/<fn>` | mean of each shaping term per domain per step (training only; the held-out eval always uses the native verifier) |
+| `environment/reward_components/<fn>` | the same terms pooled over domains |
+| `eval/<d>/judge_variance` | mean variance of the judge's votes on the same artifact (rubric and vision items): the noise floor a domain's delta must beat |
+| `qualitative/fixed_by_training` / `qualitative/broken_by_training` tables (W&B + `artifacts/final_eval/*.jsonl`) | held-out tasks the trained policy newly solves / newly fails, joined by sample id with base and trained artifacts |
+| `retention/<task>/{base,trained,delta,ci_lower,ci_upper}` | general-capability retention (e.g. a GSM8K subset), base vs trained, run after training (`evaluation.retention: {experiment: base/gsm8k.yaml, limit: 200}`); `artifacts/final_eval/retention/result.json` |
+| `gates.ceiling` in `attempts/<dry attempt>/dry-run.json` (a dry run with `--set run.ceiling_per_domain=2`) or `strl eval-llm --env mimo` (needs a LiteLLM key locally) | a frontier LLM on the same held-out tasks and harness: the reachable score, and a harness bug check (ceiling 0 = the task or grader is broken, not the policy) |
+
+Reading a reward A/B: shaping terms that rise while `eval/<d>/task_metric` and `test/<d>/delta` stay flat are being gamed; a delta inside
+`judge_variance` or inside the paired CI is noise.
 
 ### In-loop paired result (`evaluation.final_eval: false`)
 

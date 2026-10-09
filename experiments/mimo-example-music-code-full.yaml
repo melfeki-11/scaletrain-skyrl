@@ -1,6 +1,6 @@
 # EXAMPLE (plan-validated only, never run on GPUs): a different model, a two-domain subset of the MiMo suite, FULL fine-tuning on one node
 # and a shaped reward (native verifier score + a turn-efficiency bonus from user_rewards/examples.py). It shows which keys to touch for
-# each axis; copy it, change the name, the ledger and the data_dir, and run the ladder in .claude/skills/scaletrain-rl/SKILL.md.
+# each axis; copy it, change the name, the ledger and the data_dir, and run the ladder in .claude/skills/scaletrain-rl-experiments/SKILL.md.
 name: mimo-example-music-code-full
 description: MiMo music+code, Qwen3.5-2B, full fine-tuning, 1 node x 8 H100, verifier_score + turn_efficiency_bonus
 extends: base/mimo.yaml
