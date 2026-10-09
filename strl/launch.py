@@ -352,6 +352,9 @@ def main_launch(a) -> int:
     if problems:
         print(f'\nLAUNCH NEEDS ATTENTION: {len(problems)} job(s) unsettled or not recorded in the ledger (see UNSETTLED / LEDGER lines above)', file=sys.stderr)
         return 3
+    if (last.get('outcome') or {}).get('status') == 'FAILED':   # --watch followed it to a failure: never report success
+        print(f"\n{last['winner']} FAILED: read artifacts/failure.log and training.log of that attempt", file=sys.stderr)
+        return 5
     if (last.get('outcome') or {}).get('outcome') == 'preempted':
         print(f"\n{last['winner']} was preempted and no relaunch was left (--relaunch-on-preempt N to continue)", file=sys.stderr)
         return 4
