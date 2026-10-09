@@ -85,18 +85,37 @@ LORA_ADAPTER_CLOUD_SAVE = {
     ],
 }
 
+# resume_mode from_path wraps trainer.resume_path in pathlib.Path, which collapses s3:// to s3:/ (v2res-fb: `Checkpoint path not found:
+# s3:/scale-ml/...`). Keep it a string; os.path.basename replaces Path.name. The LATEST mode already uses strings.
+RESUME_FROM_CLOUD_PATH = {
+    'skyrl/train/trainer.py': [
+        ('            checkpoint_path = Path(self.cfg.trainer.resume_path)\n',
+         '            checkpoint_path = str(self.cfg.trainer.resume_path or "")  # strl: Path() would collapse s3:// to s3:/\n'),
+        ('            if GLOBAL_STEP_PREFIX not in checkpoint_path.name:\n',
+         '            if GLOBAL_STEP_PREFIX not in os.path.basename(checkpoint_path.rstrip("/")):\n'),
+    ],
+}
+
+
+def _merge(patches: dict, more: dict) -> None:
+    for path, pairs in more.items():   # several patches may target one file: keep them all
+        patches.setdefault(path, [])
+        patches[path] = [*patches[path], *pairs]
+
 
 def scaling_patches(cfg) -> dict:
     """The exact-source SkyRL patches an experiment needs (none for single-node full fine-tuning with checkpoints)."""
     from .experiment import finetune, save_optimizer_state
-    patches = {}
+    patches: dict = {}
     if cfg['compute']['nodes'] > 1 and finetune(cfg)['mode'] == 'lora':
-        patches.update(LORA_SYNC_PER_HOST)
+        _merge(patches, LORA_SYNC_PER_HOST)
     if not save_optimizer_state(cfg):
-        patches.update(NO_OPTIMIZER_CHECKPOINT)
+        _merge(patches, NO_OPTIMIZER_CHECKPOINT)
     from .overrides import durable
     if durable(cfg) and finetune(cfg)['mode'] == 'lora':
-        patches.update(LORA_ADAPTER_CLOUD_SAVE)
+        _merge(patches, LORA_ADAPTER_CLOUD_SAVE)
+    if (cfg.get('run') or {}).get('resume_from'):
+        _merge(patches, RESUME_FROM_CLOUD_PATH)
     return patches
 
 

@@ -468,6 +468,21 @@ class SkyRLPatches(unittest.TestCase):
             self.assertEqual(path.read_text(), once)
             return once
 
+    def test_resume_from_an_s3_path_keeps_the_double_slash(self):
+        from strl.runtime import RESUME_FROM_CLOUD_PATH, scaling_patches
+        from strl.experiment import load
+        source = self.apply('pinned-trainer.py', RESUME_FROM_CLOUD_PATH)            # pinned SkyRL a9564572 source
+        fn = next(n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef) and n.name == 'load_checkpoints')
+        text = ast.unparse(fn)
+        self.assertNotIn('Path(self.cfg.trainer.resume_path)', text)
+        path = 's3://b/p/attempts/a/artifacts/checkpoints/global_step_2'
+        self.assertEqual(str(path or ''), path)                                       # what the patched line now keeps
+        self.assertIn('global_step_', os.path.basename(path.rstrip('/')))
+        cfg = load(str(ROOT / 'experiments/mimo-phi4-mini-lora-verify.yaml'), overrides=['run.resume_from=v1phi4-fb'])
+        merged = scaling_patches(cfg)
+        self.assertIn('skyrl/train/trainer.py', merged)
+        self.assertIn('skyrl/backends/skyrl_train/distributed/fsdp_strategy.py', merged)
+
     def test_lora_adapter_save_goes_through_cloud_io(self):
         from strl.runtime import LORA_ADAPTER_CLOUD_SAVE, scaling_patches
         from strl.experiment import load
