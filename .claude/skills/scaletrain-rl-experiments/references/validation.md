@@ -239,3 +239,44 @@ Fixed with tests: a route rejected by ScaleTrain (or a submit error) kept its bu
 GPUs by the retention YAML's node size (a 2-GPU experiment at TP2 got `CUDA_VISIBLE_DEVICES=2,3`); a failed re-stage dropped an earlier valid
 booking; countdown `prepare` could loop forever on narrow settings; countdown in-loop scoring ignored truncation; the default network probe is
 labelled as assumed; plan warns `EVAL` when the final eval runs base then trained. Accepted: losers being settled are not booked (~one poll).
+
+## Verification round 3: learning effects, shape racing, fresh agents (2026-10-11)
+
+Ledger `evidence/ledgers/learning-proof.json` (user-authorized 2026-10-11: 10,800 node-s); 5,828 spent, 4,972 left. Every launch won route
+`fb` within 1 s (2 x 8 included); no route or shape alternative was needed, but `--race-shape` was used on both train runs.
+
+### Training effects (held-out, paired, `strl verify` 0 disagreements)
+
+| Attempt | What | Held-out | Base -> trained | Δ [95% CI] | fixed / broken | Charged |
+| --- | --- | --- | --- | --- | --- | --- |
+| `r3b-2n-a1-fb` | SmolLM2-1.7B (Llama arch) **full FT on 2 x 8** (HSDP 8 x 2, socket NCCL 0.7 GB/s), new env `math_boxed` (MATH L1-3), exact match + 0.1 format, 30 steps x 512 rollouts, 28 s/step | 500 official-test problems | 22.4% -> 31.8% | **+9.4 [+5.6, +13.2]** | 71 / 24 | 3,148 node-s |
+| `r3a-a2-fb` | Phi-4-mini **LoRA r32 on a 1 x 4 slice**, countdown (3-4 numbers, step-by-step prompt), correct + brevity-if-correct, `grpo_norm_by_std: false`, lr 2e-5, 34 steps x 256 rollouts (16 x 16), 89 s/step | 500 problems | 36.8% -> 71.6% | **+34.8 [+29.6, +40.0]** | 205 / 31 | 2,186 node-s |
+
+What moved (failure classes, base -> trained): math_boxed `ok` 112 -> 159, `no_answer` 81 -> 58, `wrong_answer` 307 -> 283, mean length
+242 -> 322 tokens (more reasoning, not only format). countdown `ok` 184 -> 358, truncated at the 1,024 cap 220 -> 105, `illegal_numbers`
+91 -> 24, median length 596 -> 191: a large part of the gain is learning to search efficiently and finish inside the cap; the brevity term
+stayed small (0.02 -> 0.06 vs correctness 0.25 -> 0.78) and is paid only on correct answers. Stability: grad norm flat (~0.02 countdown),
+entropy 1.9 -> 0.7 (no collapse), 0 infrastructure failures. Validation curves: math 0.336 / 0.375 / 0.402 / 0.418 (steps 0/10/20/30);
+countdown 0.43 / 0.57 / 0.71 / 0.71 / 0.74 / 0.70 / 0.68 / 0.71 (every 5; step 20 selected). W&B: finished, `test/*`, `infra/*`, tables.
+
+### What the GPU rungs caught
+
+- `r3a-can1-fb` (canary) + `r3a-a1-fb` (cancelled at step 4, 304 node-s): under countdown's default prompt ("Think briefly, then give only
+  the expression") Phi-4-mini answered in 15-18 tokens and solved ~2% with learning signal 0.125, also on 3-4-number problems. The scorer
+  was right; the prompt starved the model. Fix: `environment.countdown.prompt` (validated, part of the data manifest); base became ~43%.
+- `r3b-can1-fb` (canary on the 1-node variant): base 0.56 on the 16 canary problems, signal 0.75: launched as is.
+
+### Fresh agents (no context but the repo and the skill)
+
+| Agent | Task | Outcome | What it changed |
+| --- | --- | --- | --- |
+| A | Phi-4-mini LoRA countdown + own brevity reward, ~1 node-h | built experiment, reward + tests; blocked by an expired SSO session | the AWS pre-check, `grpo_norm_by_std` warning + docs, profile rows |
+| B | new env from a downloaded HF math dataset + full FT of a non-Qwen 1.5-4B on 2 x 8, 1-node fallback | built `math_boxed` (21 tests); found the 1-GPU canary breaking on an inherited `fsdp_size` | canary overlay fix, dataset-split + prompt-length docs, BUDGET wording |
+| C | Qwen3-14B LoRA MiMo code + music, 2 x 8, reward A/B | prepared, not run (~38k node-s); CPU submit denied by its harness | BUDGET/clamp lines, eval-aware steps/attempt, fail-fast docs, permission rule |
+| D (second loop) | Granite-3.3-2B LoRA math_boxed reward A/B with its own term | both dry runs passed; harness allowed CPU submits | A/B budget check in `plan --against`, `compare` fairness flags, ledger lifecycle, A/B rules |
+
+### Independent review of this round's diff
+
+Fixed with tests: a second resumed relaunch dropped the alternative shape (2 nodes from a 1-node checkpoint); a failing alternative shape
+cancelled the healthy primary race; shapes validated up front; name check per launch family; exact BUDGET clamp; offline `verify`;
+math_boxed over-credit cases (`-12 \text{ or } -30`, `1, 125`, `10 = 3`); the norm warning for small default terms.

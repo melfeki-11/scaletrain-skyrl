@@ -1,0 +1,79 @@
+{
+  "status": "completed",
+  "mode": "train",
+  "optimizer_steps": 34,
+  "stalled": null,
+  "selected_step": 20,
+  "validation_accuracy": 0.74,
+  "validation_by_step": {
+    "0": 0.43,
+    "5": 0.57,
+    "10": 0.71,
+    "15": 0.71,
+    "20": 0.74,
+    "25": 0.7,
+    "30": 0.68,
+    "34": 0.71
+  },
+  "checkpoint": {
+    "world_size": 4,
+    "nonempty_rank_files": 12,
+    "path": "artifacts/r3a-a2-fb/checkpoints/global_step_34/policy"
+  },
+  "parameter_change": {
+    "adapter_tensors": 256,
+    "changed_lora_B": 128,
+    "max_abs_lora_B": 0.00039446359733119607,
+    "served": "vllm-lora"
+  },
+  "test": {
+    "examples": 500,
+    "baseline_accuracy": 0.368,
+    "candidate_accuracy": 0.716,
+    "accuracy_delta": 0.348,
+    "ci_level": 0.95,
+    "ci_lower": 0.296,
+    "ci_upper": 0.4,
+    "quality_passed": true
+  },
+  "flips": {
+    "fixed": 205,
+    "broken": 31,
+    "both_correct": 153,
+    "both_wrong": 111
+  },
+  "by_source": {},
+  "phases": {
+    "worker_start": 1791740221.665727,
+    "ray_ready": 1791740259.126966,
+    "training_end": 1791744394.446623,
+    "eval_start": 1791744421.2162395,
+    "eval_end": 1791744562.3098636,
+    "finished": 1791744562.3551013
+  },
+  "elapsed_seconds": 4340.582900524139,
+  "gpus": 4,
+  "experiment": "r3a-cd-phi4",
+  "experiment_sha": "9d1904e8c5e86b67",
+  "environment": "countdown",
+  "metric": "accuracy",
+  "model": "microsoft/Phi-4-mini-instruct",
+  "adapter": {
+    "passed": true,
+    "kind": "lora",
+    "base_model_id": "microsoft/Phi-4-mini-instruct",
+    "base_model_revision": "cfbefacb99257ffa30c83adab238a50856ac3083",
+    "base_path": "/workspace/strl-run/assets/models/Phi-4-mini-instruct@cfbefacb9925",
+    "r": 32,
+    "lora_alpha": 64,
+    "target_modules": [
+      "o_proj",
+      "qkv_proj",
+      "down_proj",
+      "gate_up_proj"
+    ],
+    "source": "artifacts/r3a-a2-fb/exports/global_step_20/policy",
+    "target": "artifacts/r3a-a2-fb/reload/global_step_20",
+    "weights_preserved": true
+  }
+}

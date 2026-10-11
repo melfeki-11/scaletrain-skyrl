@@ -170,6 +170,24 @@
    "final_eval_seconds": 72,
    "base_task_metric": 0.336,
    "source": "r3b-2n-a1-fb job_db5sag0c78j0089lti60 (2 x 8 H100, HSDP fsdp_size 8, socket NCCL 0.7 GB/s; 30 steps; test 22.4% -> 31.8%)"
+  },
+  {
+   "name": "countdown-phi4-mini-lora-4gpu-r3a",
+   "environment": "countdown",
+   "model": "microsoft/Phi-4-mini-instruct",
+   "params_b": 3.8,
+   "gpus": 4,
+   "finetune": "lora",
+   "rollouts_per_step": 256,
+   "max_generate_length": 1024,
+   "mean_response_tokens": 313.9,
+   "median_step_seconds": 89.0,
+   "median_generate_seconds": 68.7,
+   "median_policy_train_seconds": 7.4,
+   "startup_seconds": 600,
+   "base_task_metric": 0.43,
+   "source": "r3a-a2-fb job_db5sibrmjdjg088cer1g (1 x 4 H100, LoRA r32, step-by-step prompt, 3-4 numbers; 34 steps; test 36.8% -> 71.6%)",
+   "tokens_per_second_per_gpu": 292
   }
  ],
  "networks": [

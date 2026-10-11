@@ -1,1 +1,118 @@
-{"program": "Verification round 3 (authorized by the user on 2026-10-11: ~3 node-hours of H100): learning-effect runs prepared by fresh no-context agents - Phi-4-mini LoRA on countdown with a brevity-if-correct reward (1 x 4), and SmolLM2-1.7B full fine-tuning on the new math_boxed environment (2 x 8, raced with a 1 x 8 shape)", "total_seconds": 10800, "nodes": 1, "attempts": []}
+{
+  "program": "Verification round 3 (authorized by the user on 2026-10-11: ~3 node-hours of H100): learning-effect runs prepared by fresh no-context agents - Phi-4-mini LoRA on countdown with a brevity-if-correct reward (1 x 4), and SmolLM2-1.7B full fine-tuning on the new math_boxed environment (2 x 8, raced with a 1 x 8 shape)",
+  "total_seconds": 10800,
+  "nodes": 1,
+  "attempts": [
+    {
+      "job_id": "job_db5s2r3mjdjg07lcs14g",
+      "attempt": "r3b-2n-dry1-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-11T17:03:40Z",
+      "terminal_at": "2026-10-11T17:05:43Z",
+      "gpu_fraction": 0.0,
+      "nodes": 2,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-11T17:03:40Z) is not charged"
+    },
+    {
+      "job_id": "job_db5s2qrmjdjg088cer00",
+      "attempt": "r3a-dry1-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-11T17:03:39Z",
+      "terminal_at": "2026-10-11T17:06:42Z",
+      "gpu_fraction": 0.0,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-11T17:03:39Z) is not charged"
+    },
+    {
+      "job_id": "job_db5s2t8c78j0089lti10",
+      "attempt": "r3b-1n-dry1-rb",
+      "status": "CANCELED",
+      "allocated_at": null,
+      "terminal_at": "2026-10-11T17:06:56Z",
+      "gpu_fraction": 0.0,
+      "nodes": 1,
+      "evidence": "CANCELED without a pod: no worker-started.json / budget.json in the attempt artifacts (not charged)"
+    },
+    {
+      "job_id": "job_db5s2rrmjdjg088cer0g",
+      "attempt": "r3b-1n-dry1-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-11T17:03:43Z",
+      "terminal_at": "2026-10-11T17:06:59Z",
+      "gpu_fraction": 0.0,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-11T17:03:43Z) is not charged"
+    },
+    {
+      "job_id": "job_db5s4i8c78j007hglpmg",
+      "attempt": "r3b-can1-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-11T17:07:21Z",
+      "terminal_at": "2026-10-11T17:19:29Z",
+      "gpu_fraction": 0.125,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-11T17:07:21Z) is not charged"
+    },
+    {
+      "job_id": "job_db5s4h0c78j0089lti1g",
+      "attempt": "r3a-can1-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-11T17:07:16Z",
+      "terminal_at": "2026-10-11T17:20:25Z",
+      "gpu_fraction": 0.125,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-11T17:07:16Z) is not charged"
+    },
+    {
+      "job_id": "job_db5sb78c78j0089lti6g",
+      "attempt": "r3a-dry2-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-11T17:21:33Z",
+      "terminal_at": "2026-10-11T17:23:36Z",
+      "gpu_fraction": 0.0,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-11T17:21:33Z) is not charged"
+    },
+    {
+      "job_id": "job_db5sc9oc78j0089lti70",
+      "attempt": "r3a-a1-fb",
+      "status": "CANCELED",
+      "allocated_at": "2026-10-11T17:23:51Z",
+      "terminal_at": "2026-10-11T17:33:59Z",
+      "gpu_fraction": 0.5,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-11T17:23:51Z) is not charged"
+    },
+    {
+      "job_id": "job_db5sh9oc78j0089lti7g",
+      "attempt": "r3a-dry3-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-11T17:34:31Z",
+      "terminal_at": "2026-10-11T17:36:34Z",
+      "gpu_fraction": 0.0,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-11T17:34:31Z) is not charged"
+    },
+    {
+      "job_id": "job_db5sag0c78j0089lti60",
+      "attempt": "r3b-2n-a1-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-11T17:20:00Z",
+      "terminal_at": "2026-10-11T17:46:14Z",
+      "gpu_fraction": 1.0,
+      "nodes": 2,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-11T17:20:00Z) is not charged"
+    },
+    {
+      "job_id": "job_db5sibrmjdjg088cer1g",
+      "attempt": "r3a-a2-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-11T17:36:47Z",
+      "terminal_at": "2026-10-11T18:49:39Z",
+      "gpu_fraction": 0.5,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-11T17:36:47Z) is not charged"
+    }
+  ],
+  "reservations": {}
+}
