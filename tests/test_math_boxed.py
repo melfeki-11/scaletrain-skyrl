@@ -44,6 +44,13 @@ class Normalize(unittest.TestCase):
     def ne(self, a, b):
         self.assertNotEqual(scoring.normalize(a), scoring.normalize(b), (a, b))
 
+    def test_review_over_credit_cases_are_not_credited(self):
+        self.ne('-12', '-12 \\text{ or } -30')      # "\text{ " that is not trailing units keeps the whole answer
+        self.ne('1125', '1, 125')                   # a list is not a thousands-separated number
+        self.ne('3', '10 = 3')                      # only a variable on the left is dropped
+        self.eq('5', '5\\text{ cm}^2')
+        self.eq('1125', '1,125')
+
     def test_equivalent_spellings(self):
         self.eq(r'\dfrac{3}{4}', r'\frac{3}{4}')
         self.eq(r'\tfrac34', r'\frac{3}{4}')

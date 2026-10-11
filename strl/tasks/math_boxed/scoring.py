@@ -15,6 +15,7 @@ from ..gsm8k.answers import strip_terminal_tokens
 
 BOXED_RE = re.compile(r'\\(boxed|fbox)\b')
 MAX_ANSWER_CHARS = 300
+_UNITS_RE = re.compile(r"(.*?)\s*\\text\{\s+[A-Za-z][A-Za-z .^0-9]*\}(?:\^\{?\d+\}?)?\s*", re.S)
 _TEXT_RE = re.compile(r'\\(?:text|textbf|textrm|mathrm|mathbf|mbox)\s*\{([^{}]*)\}')
 _SPACING_RE = re.compile(r'\\(?:,|;|:|!|quad|qquad|displaystyle)')
 _NUMBER_RE = re.compile(r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)')
@@ -103,8 +104,8 @@ def _fix_slash(s: str) -> str:
     return f'\\frac{{{m.group(1)}}}{{{m.group(2)}}}' if m else s
 
 
-def _canonical_number(s: str) -> str:
-    if _THOUSANDS_RE.fullmatch(s):
+def _canonical_number(s: str, thousands: bool = True) -> str:
+    if thousands and _THOUSANDS_RE.fullmatch(s):
         s = s.replace(',', '')
     if not _NUMBER_RE.fullmatch(s):
         return s
@@ -133,8 +134,9 @@ def normalize(answer: str | None) -> str | None:
     s = s.replace('\\left', '').replace('\\right', '')
     s = s.replace('^{\\circ}', '').replace('^\\circ', '').replace('\u00b0', '')
     s = s.replace('\\$', '').replace('$', '')
-    if '\\text{ ' in s:                  # trailing units, e.g. "5 \text{ cm}" (MATH convention: a space opens the units)
-        s = s.split('\\text{ ')[0]
+    units = _UNITS_RE.fullmatch(s)       # trailing units only, e.g. "5 \text{ cm}" (MATH convention: a space opens them);
+    if units:                            # "-12 \text{ or } -30" is not units: it stays whole
+        s = units.group(1)
     prev = None
     while prev != s:                     # unwrap \text{..}, \mathrm{..}, ... (nested ones too)
         prev, s = s, _TEXT_RE.sub(r'\1', s)
@@ -143,16 +145,17 @@ def normalize(answer: str | None) -> str | None:
     if s.startswith('.'):
         s = '0' + s
     sides = s.split('=')
-    if len(sides) == 2 and len(sides[0].strip()) <= 2:   # "x = 5", "k=3": keep the value
+    if len(sides) == 2 and re.fullmatch(r'\s*[A-Za-z][A-Za-z0-9_]?\s*', sides[0]):   # "x = 5", "k=3" -> the value ("10 = 3" stays)
         s = sides[1]
     s = _fix_sqrt(s)
+    thousands = bool(_THOUSANDS_RE.fullmatch(s.strip()))   # "1,125" is a number; "1, 125" (a list) must not become 1125
     s = s.replace(' ', '')
     s = _fix_fracs(s)
     s = s.rstrip('.')
     if s == '0.5':
         s = '\\frac{1}{2}'
     s = _fix_slash(s)
-    s = _canonical_number(s)
+    s = _canonical_number(s, thousands)
     return s or None
 
 

@@ -179,7 +179,13 @@ def race(experiment: str, attempt: str, mode: str, api: Api, *, overrides: list[
     if not jobs:
         raise RuntimeError('no route was accepted by ScaleTrain')
     try:
-        later = (lambda: _submit_routes(api, experiment, attempt, mode, alternates, overrides, jobs, receipts, seen, shape_of)) if alternates else None
+        def later():   # an alternate that cannot be staged/submitted (budget, upload error) must not cancel the queued primary routes
+            try:
+                _submit_routes(api, experiment, attempt, mode, alternates, overrides, jobs, receipts, seen, shape_of)
+            except Exception as error:
+                api.log(f'could not race the alternative shape(s) ({type(error).__name__}: {str(error)[:200]}): continuing with the '
+                        f'{len(jobs)} job(s) already submitted')
+        later = later if alternates else None
         result = _poll_routes(api, experiment, poll, max_wait_seconds, chosen, jobs, receipts, seen, group=attempt,
                               later=later, later_after=shape_after_seconds)
         if result.get('winner'):
@@ -294,10 +300,12 @@ def launch(experiment: str, attempt: str, mode: str, api: Api, *, overrides: lis
            resume_on_preempt: bool = False, shapes: list[list[str]] | None = None, shape_after_seconds: float = 600.0) -> list[dict]:
     """race (+ watch, + relaunch after preemption; with resume_on_preempt, which needs evaluation.durable_checkpoints, the relaunch continues
     the preempted attempt from its latest checkpoint instead of starting over). Returns one receipt per race."""
-    history, name, extra, winners, race_shapes = [], attempt, [], [], shapes
+    history, name, extra, winners, race_shapes, carried = [], attempt, [], [], shapes, []
     for k in range(relaunch_on_preempt + 1):
         result = race(experiment, name, mode, api, overrides=[*(overrides or []), *extra], routes=routes, poll=poll, max_wait_seconds=max_wait_seconds,
                       shapes=race_shapes, shape_after_seconds=shape_after_seconds)
+        if result.get('winner'):   # the shape the winner actually ran (a resumed relaunch inherits it through `extra`, not a -s<k> suffix)
+            result['shape'] = [*carried, *result.get('shape', [])]
         history.append(result)
         if not result.get('winner') or not follow:
             break
@@ -315,8 +323,8 @@ def launch(experiment: str, attempt: str, mode: str, api: Api, *, overrides: lis
         source = next((w for w in reversed(winners) if api.has_checkpoint(experiment, w)), None) if resume_on_preempt else None
         extra = [f'run.resume_from={source}'] if source else []
         if source:   # a resume needs the same world size: relaunch only in the shape that wrote the checkpoint
-            shape = next((h.get('shape') or [] for h in history if h.get('winner') == source), [])
-            extra, race_shapes = [*shape, *extra], None
+            carried = next((h.get('shape') or [] for h in history if h.get('winner') == source), [])
+            extra, race_shapes = [*carried, *extra], None
         if resume_on_preempt and not source:
             api.log('no durable checkpoint yet in any preempted attempt: the relaunch starts fresh')
         if k < relaunch_on_preempt:
@@ -422,8 +430,11 @@ SHAPE_SUFFIX = '-s'        # -s1, -s2: the --race-shape alternatives
 def check_names(attempt: str, *, relaunch_on_preempt: int = 0, fallback: bool = False, shapes: int = 0) -> None:
     """Every attempt name a launch may create must fit MAX_BASE_NAME BEFORE anything is submitted (a relaunch hours later must not fail on
     its name, and truncation must never reproduce an earlier name)."""
-    longest = attempt + (FALLBACK_SUFFIX if fallback else '') + (f'-p{relaunch_on_preempt}' if relaunch_on_preempt else '') + \
-        (f'{SHAPE_SUFFIX}{shapes}' if shapes else '')
+    relaunch = f'-p{relaunch_on_preempt}' if relaunch_on_preempt else ''
+    names = [attempt + relaunch + (f'{SHAPE_SUFFIX}{shapes}' if shapes else '')]   # the race (a resumed relaunch drops -s<k>: keep it, harmless)
+    if fallback:
+        names.append(attempt + FALLBACK_SUFFIX + relaunch)                          # the fallback race never races shapes
+    longest = max(names, key=len)
     if len(longest) > MAX_BASE_NAME:
         raise ValueError(f'attempt name {attempt!r} is too long: with these flags the launcher may create {longest!r} ({len(longest)} > '
                          f'{MAX_BASE_NAME} characters before the route suffix); use at most {MAX_BASE_NAME - len(longest) + len(attempt)} characters')
@@ -437,6 +448,8 @@ def main_launch(a) -> int:
         print(error, file=sys.stderr)
         return 2
     from . import cli
+    for shape in shapes:   # a typo in a --race-shape must fail now, not after the primary routes have queued for minutes
+        cli._load(a.experiment, [*a.set, *shape])
     cli.require_aws(cli._load(a.experiment, a.set))
     api = real_api(a.user_id, a.set)
     from .overrides import durable

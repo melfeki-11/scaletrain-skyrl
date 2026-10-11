@@ -98,10 +98,13 @@ def readiness_warnings(cfg: dict) -> list[str]:
         elif left < need_train:
             out.append(f'BUDGET: {left} node-s available in {ledger}: a canary fits (it books {min(full_canary, left)}), a train attempt does not '
                        f'(needs > {need_train}).')
+        elif charge and left < b['attempt_max_seconds'] * charge:   # strl/stage.py: attempt seconds = min(left / charge, attempt_max)
+            out.append(f'BUDGET: {left} node-s available in {ledger}: stage would CLAMP a train attempt to {int(left / charge)} s instead of '
+                       f'budget.attempt_max_seconds={b["attempt_max_seconds"]} (fewer steps than the estimate above; lower max_steps or ask '
+                       'for more budget).')
         elif left < full_train:
-            out.append(f'BUDGET: {left} node-s available in {ledger}, a full train attempt books {full_train}: stage would CLAMP it to '
-                       f'~{int(left / charge) - 420 if charge else left} s instead of budget.attempt_max_seconds={b["attempt_max_seconds"]} '
-                       '(fewer steps than the estimate above; lower max_steps or ask for more budget).')
+            out.append(f'BUDGET: {left} node-s available in {ledger}: a full train attempt runs but books {full_train} (its 420 s pod-start '
+                       'slack included), more than is left: a concurrent launch on this ledger would be refused until it is recorded.')
         if left >= need_train and left < full_train + full_canary:
             out.append(f'BUDGET: a separate canary ({full_canary}) plus a full train attempt ({full_train}) do not both fit in {left}: run a short '
                        'train attempt (max_steps 2) as the canary, or size attempt_max_seconds so both fit (launch-and-capacity.md "Sizing").')
@@ -423,7 +426,9 @@ def cmd_launch(a):
 
 def cmd_verify(a):
     from .verify_results import verify
-    require_aws(_load(a.experiment))
+    local = Path('evidence') / a.attempt
+    if not any((local / name).is_file() for name in ('result.json', 'base.jsonl', 'completion.json')):   # already-downloaded evidence works offline
+        require_aws(_load(a.experiment))
     try:
         out = verify(_load(a.experiment), a.attempt)
     except (RuntimeError, FileNotFoundError) as error:

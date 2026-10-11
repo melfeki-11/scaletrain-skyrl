@@ -210,9 +210,11 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
                    'watch train/learning_signal_fraction. More samples per prompt raise it; so does an easier curriculum.')
     elif p0 is None:
         rollouts = int(cfg['derived']['rollouts_per_step'])
+        prompts = max(1, round(rollouts / 16))
+        same = f'the same {rollouts} rollouts/step' if prompts * 16 == rollouts else f'{prompts * 16} rollouts/step, ~{rollouts} now'
         out.append('SIGNAL: base pass rate unknown for this environment/model: the canary measures it (eval/task_metric at step 0); '
-                   f'if < 0.3, prefer n_samples 16 x prompts_per_step {max(1, rollouts // 16)} (the same {rollouts} rollouts/step; at a 0.2 pass rate '
-                   '~6x fewer all-fail groups than n_samples 8).')
+                   f'if < 0.3, prefer n_samples 16 x prompts_per_step {prompts} ({same}; at a 0.2 pass rate ~6x fewer all-fail groups than '
+                   'n_samples 8).')
     if a['n_samples'] < 4:
         out.append('SIGNAL: n_samples < 4 gives very noisy group baselines for GRPO.')
     if a['max_generate_length'] >= 1024:
@@ -235,6 +237,9 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
     if nondefault:
         out.append(f'REWARD: shaping terms {[c["fn"] for c in nondefault]} are trained on but NOT the yardstick: judge the run by eval/task_metric '
                    'and the held-out test, and watch environment/reward_components/* for terms that rise while the task metric does not (reward hacking).')
+    weights = [float(c.get('weight', 1.0)) for c in cfg['reward']['components'] if c.get('weight', 1.0)]
+    small = [c['fn'] for c in cfg['reward']['components'] if c.get('weight', 1.0) and float(c.get('weight', 1.0)) < max(weights or [0])]
+    if nondefault or small:   # a shaping term, or a small default term (math_boxed's 0.1 x math_format, paid on misses too)
         if a.get('grpo_norm_by_std', True) and env.generator_kind != 'harbor':   # mimo warns in its own spec
             out.append('REWARD: grpo_norm_by_std is on (SkyRL default): in a group where every answer is equally correct, a small shaping term '
                        '(e.g. a 0.1 brevity bonus) is divided by its own tiny std and becomes a FULL-size advantage. Set algorithm.grpo_norm_by_std: '

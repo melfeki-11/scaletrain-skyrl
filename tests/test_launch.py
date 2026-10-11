@@ -382,10 +382,39 @@ class ShapeRace(unittest.TestCase):
         self.assertIn('run.resume_from=run1-s1-fb', p1['overrides'])
         self.assertFalse(any(x['attempt'].startswith('run1-p1-s') for x in fake.staged))
 
+    def test_a_second_resume_still_runs_in_the_checkpoint_shape(self):
+        script = {'run1-s1-fb': [('IN_PROGRESS', 'absent'), ('QUEUED', 'preemption_reported')],
+                  'run1-p1-fb': [('IN_PROGRESS', 'absent'), ('QUEUED', 'preemption_reported')],
+                  'run1-p2-fb': [('IN_PROGRESS', 'absent'), ('COMPLETED', '')]}
+        fake = FakeScaleTrain(script, started={'run1-s1-fb', 'run1-p1-fb', 'run1-p2-fb'})
+        api = fake.api()
+        history = L.launch('exp.yaml', 'run1', 'train', api, poll=60, follow=True, relaunch_on_preempt=2, resume_on_preempt=True,
+                           shapes=[['compute.nodes=1']], shape_after_seconds=0)
+        self.assertEqual([h['shape'] for h in history], [['compute.nodes=1']] * 3)
+        p2 = [x for x in fake.staged if x['attempt'] == 'run1-p2-fb'][0]
+        self.assertEqual([o for o in p2['overrides'] if o.startswith(('compute.', 'run.'))], ['compute.nodes=1', 'run.resume_from=run1-p1-fb'])
+
+    def test_an_alternate_that_cannot_be_staged_keeps_the_primary_race(self):
+        fake = FakeScaleTrain({'run1-fb': [('QUEUED', 'w')] * 8 + [('IN_PROGRESS', 'absent')]})
+        api = fake.api()
+        stage = api.stage
+
+        def flaky(experiment, **kw):
+            if '-s1-' in kw['attempt']:
+                raise RuntimeError('Insufficient remaining budget')
+            return stage(experiment, **kw)
+        api.stage = flaky
+        out = L.race('exp.yaml', 'run1', 'train', api, poll=60, shapes=[['compute.nodes=1']], shape_after_seconds=120)
+        self.assertEqual(out['winner'], 'run1-fb')
+        self.assertNotIn('job-run1-fb', fake.cancelled)
+
     def test_shape_suffixes_count_toward_the_name_limit(self):
         with self.assertRaises(ValueError):
             L.check_names('a' * 24, shapes=1)
         L.check_names('a' * 23, shapes=1)
+        L.check_names('a' * 19, shapes=1, fallback=True, relaunch_on_preempt=2)   # -alt-p2 (7) or -p2-s1 (6), never -alt-p2-s1 (10)
+        with self.assertRaises(ValueError):
+            L.check_names('a' * 20, shapes=1, fallback=True, relaunch_on_preempt=2)
 
 
 if __name__ == '__main__':

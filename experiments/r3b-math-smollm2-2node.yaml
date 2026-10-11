@@ -37,6 +37,8 @@ algorithm:
   micro_train_per_gpu: 8
   micro_forward_per_gpu: 8
   lr: 2.0e-06                     # full fine-tuning <= 2B (the skill's verified value)
+  # grpo_norm_by_std stays ON (plan warns REWARD): the 0.1 format term saturates within a few steps (then it is constant and adds no
+  # advantage), and the verified 2e-6 lr was tuned with normalised advantages; a brevity-style term that never saturates would need it off.
   max_steps: 30                   # plan: ~30 steps fit a 3600 s attempt on 2 x 8 (~18 on 1 x 8: the deadline stops it first)
 
 evaluation:
