@@ -149,6 +149,27 @@
    "memory_peak_gb": 62.1,
    "source": "job_db3e2pcf8c4g08flber0 can-27b-a (canary, 300 s caps)",
    "mean_prompt_tokens": 2048
+  },
+  {
+   "name": "math_boxed-smollm2-1.7b-16gpu-r3b",
+   "environment": "math_boxed",
+   "model": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+   "params_b": 1.7,
+   "gpus": 16,
+   "nodes": 2,
+   "finetune": "full",
+   "rollouts_per_step": 512,
+   "max_generate_length": 1024,
+   "mean_response_tokens": 241,
+   "median_step_seconds": 28.3,
+   "median_generate_seconds": 16.1,
+   "median_policy_train_seconds": 7.2,
+   "tokens_per_second_per_gpu": 479,
+   "startup_seconds": 600,
+   "eval_seconds_per_256": 17,
+   "final_eval_seconds": 72,
+   "base_task_metric": 0.336,
+   "source": "r3b-2n-a1-fb job_db5sag0c78j0089lti60 (2 x 8 H100, HSDP fsdp_size 8, socket NCCL 0.7 GB/s; 30 steps; test 22.4% -> 31.8%)"
   }
  ],
  "networks": [

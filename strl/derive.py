@@ -54,10 +54,13 @@ def estimate_step_seconds(cfg: dict, params_b: float) -> dict[str, float]:
         # 0.37 for 0.8B on 2 x 8, v3smk2-fb; 0.46 for 27B, run1-n1-a). Scaling a 27B profile down by params gave 39 s for a 250-350 s step.
         deadline = float((cfg['environment'].get('mimo') or {}).get('step_deadline_sec') or 1200)
         gen = max(gen, (0.35 if p['environment'] == 'mimo' else 0.6) * deadline)
-    calibrated = p['environment'] == cfg['environment']['name'] and p['model'] == cfg['model']['id'] and cfg['compute']['nodes'] == 1
+    same = p['environment'] == cfg['environment']['name'] and p['model'] == cfg['model']['id']
+    calibrated = same and cfg['compute']['nodes'] == 1
+    why = None if calibrated else ('multi-node: the fail-fast treats every multi-node estimate as advisory' if same else
+                                   'different environment/model; the canary measures the real step time')
     return {'generate_s': round(gen, 1), 'train_s': round(train, 1), 'other_s': round(other, 1),
             'step_s': round(gen + train + other, 1), 'profile': p['name'],
-            'calibrated': calibrated}   # False: extrapolated across environment/model; trust the canary's measured numbers instead
+            'calibrated': calibrated, 'uncalibrated_because': why}   # False: extrapolated across environment/model; trust the canary's measured numbers instead
 
 
 def params_from_id(model_id: str) -> float | None:

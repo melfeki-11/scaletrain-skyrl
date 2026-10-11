@@ -13,8 +13,9 @@ What has actually been run, with job IDs, so you know which paths are proven and
 | coding_exec · Qwen3.5-0.8B · 4-GPU slices, train + final eval | **GPU-verified**, reward A/B (see below) |
 | coding_exec · Qwen3-1.7B (model switch) | canary |
 | coding_harbor · Qwen3.5-0.8B (Terminus-2 in Modal sandboxes) | canary (`can-hb-f`, after 5 failed attempts whose fixes are listed below); no full training run yet |
-| llama / generic model profiles | CPU preflight only (`verified: unverified`; `strl plan` warns) |
-| multi-node (2 x 8) | **GPU-verified at 0.8B** (LoRA, 2 updates, 16-rank NCCL, LoRA sync across hosts); 27B on 2 x 8 up to the step-0 eval only. See the 2026-10-07 and 2026-10-08 sections |
+| llama / generic model profiles | **GPU-verified with a training effect** (SmolLM2-1.7B, Llama architecture, full FT: `r3b-2n-a1-fb`, 2026-10-11) |
+| multi-node (2 x 8) | **GPU-verified with a training effect**: full fine-tuning of a 1.7B on 2 x 8 (HSDP, socket NCCL), MATH 22.4% -> 31.8% (+9.4 [+5.6, +13.2]) on 500 held-out problems (2026-10-11); LoRA at 0.8B and 8B (infrastructure proofs); 27B on 2 x 8 up to the step-0 eval only |
+| math_boxed (new env, round 3) | **GPU-verified with a training effect** (above), `strl verify` 0 disagreements on 1,000 completions |
 | non-Qwen models | Phi-4-mini (`dense` profile, bundled remote code) through dry run and a GPU run, 2026-10-08 section |
 | fully-async Harbor, Megatron, > 2 nodes, MoE on GPU | designed and documented in [scaling.md](scaling.md); **not GPU-verified in this repo** |
 

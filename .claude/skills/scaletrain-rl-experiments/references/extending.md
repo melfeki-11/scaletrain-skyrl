@@ -108,6 +108,8 @@ Copy countdown, not gsm8k (gsm8k carries a "verified" SkyRL built-in path you do
   the dry run), `eval_record`, and `validate_experiment` (`environment.<name>.*` is NOT schema-checked: reject unknown keys yourself).
   Optional: `result_metrics`, `train_diagnostics`, `extra_columns` + `extra_values` (one value per column).
 - `strl/tasks/<name>/evaluate.py`: the offline final eval (copy countdown's; it uses `strl.offline_engine`, so LoRA and TP work).
+- Make the prompt a config key (countdown: `environment.countdown.prompt`, math_boxed: `prompt_suffix`), recorded in the manifest's
+  settings so data prepared with another prompt is refused: the prompt is a design axis (it moved Phi-4-mini's countdown base from ~2% to ~43%).
 - Register in `strl/tasks/__init__.py` (`_REGISTRY`), add `base/<name>.yaml` (extends `base/infra.yaml`; set its OWN `run.data_dir`, the
   default is gsm8k's `assets/data`; put every generation setting in YAML so it is part of the experiment sha), an experiment, unit tests.
 - Ladder: `strl prepare <exp>` (locally: `stage` uploads `run.data_dir` from the laptop) -> tests -> plan (no DATA warning) -> dry run

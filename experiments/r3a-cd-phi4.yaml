@@ -24,6 +24,11 @@ environment:
     train_size: 2048
     validation_size: 100
     test_size: 500
+    # canary + r3a-a1-fb step 0-3: under the base prompt ("Think briefly, then give only the expression") Phi-4-mini answers in
+    # 15-18 tokens with no search and solves ~2%: ask for the work instead (the brevity bonus still prefers short CORRECT answers)
+    prompt: 'Using the numbers {numbers}, write an arithmetic expression that equals {target}. You may use +, -, *, / and parentheses; each number may be used at most once (you do not have to use all of them). Work it out step by step: try combinations and check each one''s value. When you have one that equals {target} exactly, give only that expression inside <answer></answer>, for example <answer>(1 + 2) * 3</answer>.'
+    max_numbers: 4                # canary r3a-can1-fb: Phi-4-mini solved ~6% of 3-5-number problems (56% of answers used illegal numbers)
+                                  # and only 25% of groups had signal; 3-4 numbers is the SIGNAL warning's "easier curriculum" lever
 
 reward:
   components:
@@ -39,9 +44,9 @@ inference:
   gpu_memory_utilization: 0.5
 
 algorithm:
-  prompts_per_step: 32
-  minibatch_prompts: 32
-  n_samples: 8
+  prompts_per_step: 16            # 16 x 16 = the same 256 rollouts; at a low base pass rate 16 samples/prompt leave far fewer
+  minibatch_prompts: 16           # all-fail (zero-advantage) groups than 8 (plan SIGNAL)
+  n_samples: 16
   micro_train_per_gpu: 4
   micro_forward_per_gpu: 8
   lr: 2.0e-05
@@ -70,4 +75,4 @@ tracking:
   tags: ['env:countdown', 'finetune:lora', 'nodes:1', 'model:phi4-mini', 'reward:correct+brevity']
 
 run:
-  data_dir: assets/countdown/data-r3a
+  data_dir: assets/countdown/data-r3a-cot

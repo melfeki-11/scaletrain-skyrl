@@ -49,6 +49,8 @@ login --profile production-developer` before anything is staged. That login is t
 | --- | --- |
 | `experiments/gsm8k-qwen35.yaml` | single-turn math, no external services (fastest loop) |
 | `experiments/countdown-qwen35.yaml` | the newest environment (`strl/tasks/countdown/`, added from extending.md): the template for adding your own |
+| `experiments/r3b-math-smollm2-2node.yaml` | a DOWNLOADED single-turn dataset env (`math_boxed`, MATH with `\boxed{}`), a non-Qwen model, full fine-tuning on 2 x 8 (HSDP), raced with 1 x 8: **GPU-verified training effect** (+9.4 points, 2026-10-11) |
+| `experiments/r3a-cd-phi4.yaml` | a non-Qwen model with LoRA on a 1 x 4 slice, a custom reward (brevity bonus paid only when correct, `grpo_norm_by_std: false`), a custom prompt |
 | `experiments/mbpp-qwen35-binary.yaml` | single-turn coding, tests executed in Modal |
 | `experiments/harbor-qwen35.yaml` | multi-turn agent (Terminus-2) in Modal sandboxes |
 | `experiments/mimo-qwen35-0p8b-smoke.yaml` | MiMo agentic suite, 0.8B, 1 GPU (cheap end-to-end) |
@@ -244,6 +246,10 @@ checkpoint I/O, ceiling, shaping). An environment with no external services show
 ## Gotchas that cost real cycles
 
 - A canary that "completes" can be hollow: read `environment/*masked*`, `generate/num_error_trajectories`, `harbor-trials/*/exception.txt`.
+- **Read the canary's completions before the run** (W&B `trajectories/train`, or `failure_class` counts in its `metrics.jsonl`). Measured
+  2026-10-11: under countdown's default prompt ("Think briefly, then give only the expression") Phi-4-mini answered in 15-18 tokens with no
+  search and solved ~2% (learning signal 0.125); with a "work it out step by step" prompt (`environment.countdown.prompt`) its base rose to
+  ~43% with signal 0.88. A base pass rate near 0 is usually the prompt or the format, not the model: fix it before buying steps.
 - Agentic trials: turns x seconds-per-turn must fit `max_agent_sec`; timeouts score 0 in eval. Size `environment.harbor.max_seq_len` above
   the first turn (Terminus-2: 0.8-2.5k tokens).
 - Templates that drop `<think>` history (Qwen3.5) do not merge turns: several times more training tokens (`check-template`).

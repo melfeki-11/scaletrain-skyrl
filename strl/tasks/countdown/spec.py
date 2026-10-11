@@ -38,6 +38,10 @@ class CountdownSpec(EnvironmentSpec):
         if unknown:
             problems.append(f'unknown key(s) environment.countdown.{sorted(unknown)} (allowed: {sorted(cd_data.DEFAULTS)})')
         s = cd_data.settings(cfg)
+        if s['prompt'] is not None:   # the prompt is a design axis (a non-reasoning model told to "think briefly" answers in ~15 tokens)
+            missing = [k for k in ('{numbers}', '{target}', '<answer>') if k not in str(s['prompt'])]
+            if missing:
+                problems.append(f'environment.countdown.prompt must contain {missing} (the scorer reads the LAST <answer></answer>)')
         if not 2 <= s['min_numbers'] <= s['max_numbers']:
             problems.append('environment.countdown needs 2 <= min_numbers <= max_numbers')
         for split in cd_data.SPLITS:

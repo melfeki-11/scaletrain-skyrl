@@ -151,7 +151,7 @@ def cmd_plan(a):
           f"{e['node_hours']:.2f} node-h; memory train {e['memory']['training_phase_gb']} GB / rollout {e['memory']['rollout_phase_gb']} GB "
           + (f"[measured peak {e['memory']['measured_peak_gb']} GB in {e['memory']['measured_in']}] " if e['memory'].get('measured_peak_gb') else '')
           + f"(fits={e['memory']['fits']}); from profile {e['profile']}"
-          + ("" if e.get('calibrated') else " (UNCALIBRATED: different environment/model; the canary measures the real step time)"))
+          + ("" if e.get('calibrated') else f" (UNCALIBRATED: {e.get('uncalibrated_because') or 'different environment/model'})"))
     lay, mem = report['layout'], e['memory']
     print(f"  layout       {lay['mode']} | FSDP group {lay['fsdp_group']} x {lay['replicas']} replica(s), cpu_offload={lay['cpu_offload']}"
           + (f" (host RAM {mem['host_offload_gb_per_gpu']} GB/GPU)" if mem.get('host_offload_gb_per_gpu') else '') + " | "
