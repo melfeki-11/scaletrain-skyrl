@@ -339,5 +339,83 @@ class ThirdReview(unittest.TestCase):
         self.assertEqual(released, [])   # the job may exist: never free a live job's booking on an ambiguous failure
 
 
+class ShapeRace(unittest.TestCase):
+    """--race-shape: alternative shapes join the race once the experiment's own shape has waited; the first job to start wins."""
+    def setUp(self):
+        self.cwd = os.getcwd()
+        self.tmp = tempfile.TemporaryDirectory()
+        os.chdir(self.tmp.name)
+
+    def tearDown(self):
+        os.chdir(self.cwd)
+        self.tmp.cleanup()
+
+    def test_an_alternative_shape_is_raced_only_after_the_wait_and_can_win(self):
+        fake = FakeScaleTrain({'run1-s1-fb': [('IN_PROGRESS', 'absent')]})
+        out = L.race('exp.yaml', 'run1', 'train', fake.api(), poll=60, shapes=[['compute.nodes=1']], shape_after_seconds=300)
+        self.assertEqual(out['winner'], 'run1-s1-fb')
+        self.assertEqual(out['shape'], ['compute.nodes=1'])
+        staged = [x['attempt'] for x in fake.staged]
+        self.assertEqual(staged[:4], ['run1-fb', 'run1-rb', 'run1-ro', 'run1-fo'])      # own shape first, on every route
+        self.assertEqual(staged[4:], ['run1-s1-fb'])                                   # then the alternative (it started: no more routes)
+        self.assertIn('compute.nodes=1', fake.staged[4]['overrides'])
+        self.assertGreaterEqual(fake.polls['job-run1-s1-fb'], 5)                       # submitted after >= 300 s of polling at 60 s
+        self.assertEqual(fake.cancelled, {'job-run1-fb', 'job-run1-rb', 'job-run1-ro', 'job-run1-fo'})
+
+    def test_the_own_shape_starting_first_never_submits_the_alternative(self):
+        fake = FakeScaleTrain({'run1-fb': [('QUEUED', 'w'), ('IN_PROGRESS', 'absent')]})
+        out = L.race('exp.yaml', 'run1', 'train', fake.api(), poll=60, shapes=[['compute.nodes=1']], shape_after_seconds=600)
+        self.assertEqual((out['winner'], out['shape']), ('run1-fb', []))
+        self.assertFalse(any('-s1-' in x['attempt'] for x in fake.staged))
+
+    def test_a_resumed_relaunch_keeps_the_shape_that_wrote_the_checkpoint(self):
+        script = {'run1-s1-fb': [('IN_PROGRESS', 'absent'), ('QUEUED', 'preemption_reported')],
+                  'run1-p1-fb': [('IN_PROGRESS', 'absent'), ('COMPLETED', '')]}
+        fake = FakeScaleTrain(script, started={'run1-s1-fb', 'run1-p1-fb'})
+        api = fake.api()
+        api.has_checkpoint = lambda experiment, attempt: attempt == 'run1-s1-fb'
+        history = L.launch('exp.yaml', 'run1', 'train', api, poll=60, follow=True, relaunch_on_preempt=1, resume_on_preempt=True,
+                           shapes=[['compute.nodes=1']], shape_after_seconds=0)
+        self.assertEqual([h['winner'] for h in history], ['run1-s1-fb', 'run1-p1-fb'])
+        p1 = [x for x in fake.staged if x['attempt'] == 'run1-p1-fb'][0]
+        self.assertIn('compute.nodes=1', p1['overrides'])                              # same world size as the checkpoint
+        self.assertIn('run.resume_from=run1-s1-fb', p1['overrides'])
+        self.assertFalse(any(x['attempt'].startswith('run1-p1-s') for x in fake.staged))
+
+    def test_a_second_resume_still_runs_in_the_checkpoint_shape(self):
+        script = {'run1-s1-fb': [('IN_PROGRESS', 'absent'), ('QUEUED', 'preemption_reported')],
+                  'run1-p1-fb': [('IN_PROGRESS', 'absent'), ('QUEUED', 'preemption_reported')],
+                  'run1-p2-fb': [('IN_PROGRESS', 'absent'), ('COMPLETED', '')]}
+        fake = FakeScaleTrain(script, started={'run1-s1-fb', 'run1-p1-fb', 'run1-p2-fb'})
+        api = fake.api()
+        history = L.launch('exp.yaml', 'run1', 'train', api, poll=60, follow=True, relaunch_on_preempt=2, resume_on_preempt=True,
+                           shapes=[['compute.nodes=1']], shape_after_seconds=0)
+        self.assertEqual([h['shape'] for h in history], [['compute.nodes=1']] * 3)
+        p2 = [x for x in fake.staged if x['attempt'] == 'run1-p2-fb'][0]
+        self.assertEqual([o for o in p2['overrides'] if o.startswith(('compute.', 'run.'))], ['compute.nodes=1', 'run.resume_from=run1-p1-fb'])
+
+    def test_an_alternate_that_cannot_be_staged_keeps_the_primary_race(self):
+        fake = FakeScaleTrain({'run1-fb': [('QUEUED', 'w')] * 8 + [('IN_PROGRESS', 'absent')]})
+        api = fake.api()
+        stage = api.stage
+
+        def flaky(experiment, **kw):
+            if '-s1-' in kw['attempt']:
+                raise RuntimeError('Insufficient remaining budget')
+            return stage(experiment, **kw)
+        api.stage = flaky
+        out = L.race('exp.yaml', 'run1', 'train', api, poll=60, shapes=[['compute.nodes=1']], shape_after_seconds=120)
+        self.assertEqual(out['winner'], 'run1-fb')
+        self.assertNotIn('job-run1-fb', fake.cancelled)
+
+    def test_shape_suffixes_count_toward_the_name_limit(self):
+        with self.assertRaises(ValueError):
+            L.check_names('a' * 24, shapes=1)
+        L.check_names('a' * 23, shapes=1)
+        L.check_names('a' * 19, shapes=1, fallback=True, relaunch_on_preempt=2)   # -alt-p2 (7) or -p2-s1 (6), never -alt-p2-s1 (10)
+        with self.assertRaises(ValueError):
+            L.check_names('a' * 20, shapes=1, fallback=True, relaunch_on_preempt=2)
+
+
 if __name__ == '__main__':
     unittest.main()

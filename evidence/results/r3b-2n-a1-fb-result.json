@@ -1,0 +1,94 @@
+{
+  "status": "completed",
+  "mode": "train",
+  "optimizer_steps": 30,
+  "stalled": null,
+  "selected_step": 30,
+  "validation_accuracy": 0.41796875,
+  "validation_by_step": {
+    "0": 0.3359375,
+    "10": 0.375,
+    "20": 0.40234375,
+    "30": 0.41796875
+  },
+  "checkpoint": {
+    "world_size": 16,
+    "nonempty_rank_files": 48,
+    "nodes": 2,
+    "by_host": {
+      "r3b-2n-a1-fb-20261011-172000-4dqrr-workers-0-0": 24,
+      "r3b-2n-a1-fb-20261011-172000-4dqrr-workers-0-1": 24
+    }
+  },
+  "parameter_change": {
+    "compared_tensors": 168,
+    "changed_tensors": 168,
+    "max_absolute_change": 4.979968070983887e-05
+  },
+  "test": {
+    "examples": 500,
+    "baseline_accuracy": 0.224,
+    "candidate_accuracy": 0.318,
+    "accuracy_delta": 0.094,
+    "ci_level": 0.95,
+    "ci_lower": 0.056,
+    "ci_upper": 0.132,
+    "quality_passed": true
+  },
+  "flips": {
+    "fixed": 71,
+    "broken": 24,
+    "both_correct": 88,
+    "both_wrong": 317
+  },
+  "by_source": {},
+  "phases": {
+    "worker_start": 1791739212.3361182,
+    "ray_ready": 1791739252.071138,
+    "probe_done": 1791739277.074937,
+    "training_end": 1791740597.2153425,
+    "eval_start": 1791740644.3368607,
+    "eval_end": 1791740716.3755798,
+    "finished": 1791740716.4148448
+  },
+  "elapsed_seconds": 1504.4234073162079,
+  "gpus": 8,
+  "experiment": "r3b-math-smollm2-2node",
+  "experiment_sha": "57583eb86c533d3a",
+  "environment": "math_boxed",
+  "metric": "accuracy",
+  "model": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+  "nodes": 2,
+  "network": {
+    "passed": true,
+    "mode": "gpu",
+    "nodes": 2,
+    "hostnames": [
+      "r3b-2n-a1-fb-20261011-172000-4dqrr-workers-0-0",
+      "r3b-2n-a1-fb-20261011-172000-4dqrr-workers-0-1"
+    ],
+    "transport": "socket",
+    "efa_available": false,
+    "bandwidth_gbps": {
+      "intra_node": 343.8,
+      "cross_node": 0.7,
+      "global": 2.39
+    },
+    "warnings": [
+      "EFA not available in this image/pod: cross-node NCCL falls back to TCP sockets",
+      "NCCL uses NET/Socket across nodes: prefer LoRA or HSDP (fsdp_size = gpus_per_node) for full fine-tuning"
+    ]
+  },
+  "exports_gathered": {
+    "nodes": [
+      {
+        "node_id": "54ef2d423e4e78f0155f0ac7785fa140bb42d350343fb0152ae41937",
+        "synced": true
+      },
+      {
+        "node_id": "343543fc3586de197d97e64d6a84fbd8a9600692aa876a3aa7239013",
+        "synced": true
+      }
+    ]
+  }
+}

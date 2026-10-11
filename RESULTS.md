@@ -7,13 +7,38 @@ Every number below comes from an independently verified attempt. The raw evidenc
 | `q35v2-a1` | gsm8k · strict answer | 8 · 36 | GSM8K test (1,319) | 50.80% | **68.84%** | +18.04 [+15.31, +20.77] |
 | `ab-binary-a1` | coding_exec · `pass_all_tests` | 4 · 66 | MBPP-test + HumanEval (663) | 23.38% | **36.05%** | +12.67 [+9.20, +16.29] |
 | `ab-partial-a1` | coding_exec · `pass_all_tests + 0.5·partial_tests` | 4 · 69 | MBPP-test + HumanEval (663) | 23.38% | **33.33%** | +9.95 [+6.33, +13.57] |
+| `r3b-2n-a1-fb` | math_boxed (MATH L1-3) · exact + 0.1·format | **2 × 8** · 30 | MATH official test (500) | 22.40% | **31.80%** | +9.40 [+5.60, +13.20] |
+| `r3a-a2-fb` | countdown (3-4 numbers) · correct + brevity-if-correct | 4 · 34 | countdown (500) | 36.80% | **71.60%** | +34.80 [+29.60, +40.00] |
 
-All three runs use Qwen/Qwen3.5-0.8B at revision `2fc0636`, full-parameter SkyRL GRPO, on ScaleTrain `p5.48xlarge` (H100).
+The first three runs use Qwen/Qwen3.5-0.8B at revision `2fc0636`, full-parameter SkyRL GRPO, on ScaleTrain `p5.48xlarge` (H100).
+`r3b-2n-a1-fb` is SmolLM2-1.7B-Instruct (Llama architecture), full fine-tuning across 2 nodes; `r3a-a2-fb` is Phi-4-mini-instruct with
+LoRA r32 on a 4-GPU slice (2026-10-11, round 3 below).
 Common protocol for every run:
 - Checkpoint selection used only the train-derived validation split.
 - Held-out evaluation is greedy and paired by task ID.
 - Δ is a paired bootstrap CI.
 - `strl verify` re-scored every completion independently (in Modal for coding) and found 0 disagreements with the worker.
+
+## Verification round 3: training effects on new models, a new environment and 2 × 8 full fine-tuning (2026-10-11)
+
+Fresh no-context agents prepared every experiment; the coordinator launched them within a user-authorized 10,800 node-s ledger
+(`evidence/ledgers/learning-proof.json`; 5,828 spent). Both runs used `strl launch --race-shape` and won route `fb` within a second.
+
+- **2 × 8 full fine-tuning above 0.8B works and learns.** SmolLM2-1.7B on the agent-built `math_boxed` environment (pinned
+  MATH-lighteval, exact match on the last `\boxed{}`): 22.4% → 31.8% on 500 official-test problems, +9.4 [+5.6, +13.2], 71 fixed / 24 broken.
+  HSDP within each node over socket NCCL (0.7 GB/s), 28 s per step, exports gathered from both nodes, `strl verify` 0 disagreements.
+  More answers reach a box (no_answer 81 → 58) and more boxes are right (ok 112 → 159).
+- **LoRA on a non-Qwen model with a custom reward learns.** Phi-4-mini on countdown with "correct + a brevity bonus paid only when correct"
+  (`grpo_norm_by_std: false`): 36.8% → 71.6%, +34.8 [+29.6, +40.0]. Much of it is learning to finish inside the 1,024-token cap
+  (truncated 220 → 105) and to use only the given numbers (illegal 91 → 24); the brevity term stayed small and was never paid on a miss.
+- **The canary caught a prompt that starved the model.** Under countdown's default "think briefly" prompt Phi-4-mini answered in ~15 tokens
+  and solved ~2% (learning signal 0.125); the prompt is now a config key, and the base rose to ~43%. One attempt was cancelled at step 4 (304
+  node-s) for this.
+
+Platform changes from this round: `--race-shape` (race alternative shapes as well as routes), an up-front AWS credential check, plan BUDGET
+lines that match what stage books/clamps, eval-aware steps per attempt, the `grpo_norm_by_std` reward warning, A/B fairness flags in
+`strl compare` (which now also flags the 2026-10-06 MBPP A/B: 66 vs 69 steps), and the `math_boxed` environment. Details:
+`references/validation.md`.
 
 ## Verification round 2: fresh agents with only the repo and the skill (2026-10-09)
 
@@ -161,7 +186,8 @@ Shared setup:
 | selected step (validation only) | 55 of 66 | 50 of 69 |
 
 The paired comparison, B − A on the same 663 tasks, is **−2.71 points [−6.18, +0.75]**. The data do not separate the arms; they
-point toward the binary reward. Both arms beat the base model by a wide margin. Neither transfers to HumanEval: the gains are
+point toward the binary reward. Caveat (flagged by `strl compare` since 2026-10-11): the arms were deadline-bound and ran 66 vs 69 steps,
+so the comparison is not perfectly matched; it does not change the conclusion (no separation). Both arms beat the base model by a wide margin. Neither transfers to HumanEval: the gains are
 MBPP-style.
 
 ### Training dynamics: the effect of the reward term (from `strl compare`)

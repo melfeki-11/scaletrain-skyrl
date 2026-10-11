@@ -1,0 +1,64 @@
+# MATH (boxed answers, levels 1-3) GRPO, SmolLM2-1.7B-Instruct (Llama architecture, ChatML template; ungated), FULL fine-tuning,
+# 2 nodes x 8 H100. Environment: strl/tasks/math_boxed (pinned DigitalLearningGmbH/MATH-lighteval revision, base/math_boxed.yaml).
+# Reward: exact match on the last \boxed{} (the yardstick) + 0.1 x format (a single, non-empty boxed answer). The task metric and the
+# offline final eval (500 held-out official-test problems, base vs trained, on the head node's 8 GPUs) use exact match only.
+# Fallback: experiments/r3b-math-smollm2-1node.yaml is this experiment on 1 x 8 (same batch, same everything else).
+# Data: `strl prepare experiments/r3b-math-smollm2-2node.yaml` writes assets/math_boxed/data-l123.
+# Budget: evidence/ledgers/learning-proof.json (authorized 2026-10-11); a 2 x 8 attempt of 2,700 s books (2700 + 420) x 2 = 6,240 node-s.
+# Launch raced with the 1-node shape: --race-shape "compute.nodes=1 compute.training.fsdp_size=null" (== r3b-math-smollm2-1node.yaml).
+name: r3b-math-smollm2-2node
+description: MATH L1-3 boxed exact-match + format, SmolLM2-1.7B-Instruct, full FT, 2 x 8 H100
+extends: base/math_boxed.yaml
+
+model:
+  id: HuggingFaceTB/SmolLM2-1.7B-Instruct
+  revision: 31b70e2e869a7173562077fd711b654946d38674
+
+finetune:
+  mode: full
+
+environment:
+  math_boxed:
+    levels: [1, 2, 3]             # a 1.7B model scores near 0 on levels 4-5: keep groups with reward variance
+    train_size: 3000
+
+compute:
+  nodes: 2
+  gpus_per_node: 8
+  training: {fsdp_size: 8}        # HSDP: shard within a node over NVLink, replicate across nodes (plan: only ~0.7 GB/s cross-node)
+
+inference:
+  tensor_parallel_size: 1         # 3.4 GB of bf16 weights: one engine per GPU
+
+algorithm:
+  prompts_per_step: 64            # x 8 samples = 512 rollouts per step (32 per GPU on 16 GPUs, 64 on 8)
+  minibatch_prompts: 64
+  n_samples: 8
+  micro_train_per_gpu: 8
+  micro_forward_per_gpu: 8
+  lr: 2.0e-06                     # full fine-tuning <= 2B (the skill's verified value)
+  # grpo_norm_by_std stays ON (plan warns REWARD): the 0.1 format term saturates within a few steps (then it is constant and adds no
+  # advantage), and the verified 2e-6 lr was tuned with normalised advantages; a brevity-style term that never saturates would need it off.
+  max_steps: 30                   # plan: ~30 steps fit a 3600 s attempt on 2 x 8 (~18 on 1 x 8: the deadline stops it first)
+
+evaluation:
+  interval_steps: 10
+  checkpoint_interval_steps: 10   # == interval_steps: every validated step can be selected for the final eval
+  final_eval: true
+  eval_shards_per_model: 4        # base on GPUs 0-3, trained on GPUs 4-7 of the head node
+
+budget:
+  attempt_max_seconds: 2700
+  final_eval_reserve_seconds: 900
+  ledger: evidence/ledgers/learning-proof.json
+
+limits:
+  max_nodes: 2
+  max_attempt_seconds: 2700
+
+run:
+  data_dir: assets/math_boxed/data-l123
+
+tracking:
+  group: r3b-math-smollm2
+  tags: ['env:math_boxed', 'model:smollm2-1.7b', 'finetune:full']

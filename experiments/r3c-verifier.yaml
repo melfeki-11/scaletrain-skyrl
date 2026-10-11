@@ -1,0 +1,46 @@
+# Round 3 agent C, arm A (control): MiMo music + code (SWE), Qwen3-14B LoRA r64 on 2 x 8 H100, native verifier reward only.
+# Arm B (experiments/r3c-shaped.yaml) extends this file and changes ONLY reward.components (+ its arm tag): `strl plan B --against A`.
+# Status: plan + CPU dry runs only. NOT authorized for GPUs (placeholder ledger evidence/ledgers/mimo-qwen3-14b.json does not exist: a canary + both arms need ~38,000 node-s of user-authorized budget).
+name: r3c-verifier
+description: MiMo music+code agentic GRPO, Qwen3-14B, LoRA r64/a64 all-linear, 2 nodes x 8 H100, native verifier reward
+extends: experiments/mimo-qwen38-27b-lora.yaml     # LoRA r64/a64 all-linear, HSDP fsdp_size 8, lr 1e-5, 2 x 8
+
+model:
+  id: Qwen/Qwen3-14B
+  revision: 40c069824f4251a91eefaf281ebe4c544efd3e18   # https://huggingface.co/api/models/Qwen/Qwen3-14B sha (2026-10-11)
+
+environment:
+  mimo:
+    domains:                        # a domain is off only with train: 0 AND test: 0; assets/mimo/data covers 24/24 for both
+      music:   {train: 24, test: 24}
+      code:    {train: 24, test: 24, max_turns: 20}   # SWE (Terminus-2): the task's own cap (a run cap can only lower it); 20 x ~30 s < max_agent_sec 900 (base)
+      cyber:   {train: 0, test: 0}
+      general: {train: 0, test: 0}
+      webdev:  {train: 0, test: 0}
+
+reward:
+  components:
+    - {fn: verifier_score, weight: 1.0}   # native grader only
+
+algorithm:
+  prompts_per_step: 16              # 8 per domain at equal weights x 8 samples = 128 trajectories (8 per GPU on 16 GPUs)
+  minibatch_prompts: 16             # one on-policy update per step
+  n_samples: 8
+  max_generate_length: 3072         # per turn; = the music task's own max_tokens (single-shot ABC overflowed 2048 on small models)
+  max_steps: 6                      # one 7200 s attempt: 7200-180-600-550 = 5870 s - step-0 + final eval (~2-3 x 800 s) = ~4270 s / ~709 s plan step
+                                    # (plan's '~8 steps/attempt' ignores in-loop eval time); continue with --set run.resume_from=<winner>
+
+evaluation:
+  durable_checkpoints: true         # borrowed capacity can be reclaimed: --relaunch-on-preempt resumes from S3
+  interval_steps: 3                 # held-out eval at steps 0 (base), 3, 6 (trained = last); each eval ~ the slowest trial (~800 s at 27B)
+  checkpoint_interval_steps: 3      # durable S3 checkpoint mid-attempt so a preempted attempt resumes at step 3 (must be a multiple of interval_steps)
+
+budget:
+  save_optimizer_state: true
+  canary_max_seconds: 3000          # + 600 = the 3600 s canary job cap (base 4800 triggered plan's CANARY warning); canary also gets tighter
+                                    # code caps via --set (see the prepared canary command)
+  ledger: evidence/ledgers/mimo-qwen3-14b.json
+
+tracking:
+  group: r3c-mimo-music-code-14b
+  tags: ['nodes:2', 'finetune:lora', 'model:qwen3-14b', 'domains:music+code', 'arm:verifier']

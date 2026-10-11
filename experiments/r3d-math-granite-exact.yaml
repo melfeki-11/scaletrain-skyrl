@@ -1,0 +1,73 @@
+# Round 3 agent D, arm A (control) of a reward-design A/B on math_boxed: exact match ONLY.
+# Arm B (experiments/r3d-math-granite-equiv.yaml) extends this file and changes ONLY reward.components (+ its arm tag): `strl plan B --against A`.
+# Model: IBM Granite-3.3-2B-Instruct (GraniteForCausalLM -> `dense` profile; a family not used before in this repo; ungated, Apache-2.0).
+#   Its chat template injects a default system prompt with TODAY's date (strftime_now): launch both arms on the same day.
+# LoRA r32 on a 1 x 4 H100 slice (slices admit faster than 8; 0.5 node-s per second).
+# Data: levels 1-4 (a 2B scores near 0 on level 5 and its long solutions truncate at 1,024 tokens) and a 1,000-problem held-out test
+#   (official MATH test split, seeded): the paired B-vs-A difference needs the tighter CI. `strl prepare` writes assets/math_boxed/data-r3d.
+# grpo_norm_by_std: false in BOTH arms: arm B's partial-credit term would otherwise be rescaled by tiny group stds (plan REWARD), and a
+#   clean A/B must not differ in the advantage estimator; lr 2e-5 (r3a precedent for LoRA + un-normalised advantages).
+# Ledger evidence/ledgers/r3d.json: dry runs only. GPU runs need a user-authorized ledger (see the launch commands in the agent report).
+name: r3d-math-granite-exact
+description: MATH L1-4 boxed, Granite-3.3-2B-Instruct LoRA r32, 1x4 H100, reward = exact match only (arm A)
+extends: base/math_boxed.yaml
+
+model:
+  id: ibm-granite/granite-3.3-2b-instruct
+  revision: 707f574c62054322f6b5b04b6d075f0a8f05e0f0   # https://huggingface.co/api/models/ibm-granite/granite-3.3-2b-instruct sha (2026-10-11)
+
+finetune:
+  mode: lora
+  lora: {rank: 32, alpha: 64, dropout: 0.0, target_modules: all-linear}
+
+environment:
+  math_boxed:
+    levels: [1, 2, 3, 4]
+    train_size: 3000
+    validation_size: 256
+    test_size: 1000
+
+reward:
+  components:
+    - {fn: math_correct, weight: 1.0}     # exact match on the last \boxed{} (= the task metric); no format term
+
+compute:
+  nodes: 1
+  gpus_per_node: 4
+
+inference:
+  tensor_parallel_size: 1         # ~5 GB of bf16 weights: one engine per GPU
+  gpu_memory_utilization: 0.5
+
+algorithm:
+  prompts_per_step: 32            # x 8 samples = 256 rollouts per step (64 per GPU)
+  minibatch_prompts: 32           # one on-policy update per step
+  n_samples: 8
+  micro_train_per_gpu: 4
+  micro_forward_per_gpu: 8
+  lr: 2.0e-05
+  grpo_norm_by_std: false
+  max_generate_length: 1024
+  max_steps: 40
+
+evaluation:
+  interval_steps: 5
+  checkpoint_interval_steps: 5    # == interval_steps: every validated step is selectable for the final eval
+  final_eval: true
+  eval_shards_per_model: 2        # 4 GPUs: base on 2, trained on 2, concurrently
+
+budget:
+  total_seconds: 5400             # only bounds attempt_max_seconds; the real budget is the ledger
+  attempt_max_seconds: 5400
+  ledger: evidence/ledgers/r3d.json
+
+limits:
+  max_nodes: 1
+  max_attempt_seconds: 5400
+
+run:
+  data_dir: assets/math_boxed/data-r3d
+
+tracking:
+  group: r3d-math-granite
+  tags: ['env:math_boxed', 'model:granite-3.3-2b', 'finetune:lora', 'study:reward-ab', 'arm:A-exact']

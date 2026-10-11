@@ -128,6 +128,23 @@ class Data(unittest.TestCase):
         self.assertEqual(small['test'], big['test']); self.assertEqual(small['validation'], big['validation'])
         self.assertNotEqual(cd_data.records(self.cfg(seed=1))['test'], big['test'])
 
+    def test_custom_prompt_is_used_validated_and_part_of_the_data_contract(self):
+        template = 'Reach {target} with {numbers}; show your work, then <answer>EXPR</answer>.'
+        rows = cd_data.records(self.cfg(prompt=template))
+        info = rows['test'][0]['extra_info']
+        self.assertEqual(rows['test'][0]['prompt'][0]['content'], template.format(numbers=info['numbers'], target=info['target']))
+        self.assertEqual([r['extra_info'] for r in rows['test']], [r['extra_info'] for r in cd_data.records(self.cfg())['test']])  # same problems
+        env = get_environment('countdown')
+        self.assertTrue(any('prompt must contain' in m for m in env.validate_experiment(self.cfg(prompt='Reach {target}.'))))
+        self.assertEqual(env.validate_experiment(self.cfg(prompt=template)), [])
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = self.cfg(train_size=32, validation_size=16, test_size=8)
+            cfg['evaluation']['fixed_qualitative_samples'] = 4
+            cfg['run']['data_dir'] = temp
+            cd_data.prepare(cfg)
+            with self.assertRaises(RuntimeError):       # data prepared with the default prompt does not satisfy a new prompt
+                cd_data.assert_manifest(dict(cfg, environment={**cfg['environment'], 'countdown': {**cfg['environment']['countdown'], 'prompt': template}}))
+
     def test_prepare_and_manifest_contract(self):
         with tempfile.TemporaryDirectory() as temp:
             cfg = self.cfg(train_size=32, validation_size=16, test_size=8)

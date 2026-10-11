@@ -1,0 +1,14 @@
+# Round 3 agent C, arm B: identical to experiments/r3c-verifier.yaml except the reward = native verifier score + a turn-efficiency
+# shaping term (user_rewards/examples.py: +bonus x (1 - turns / max_turns) on a fully passed trial; training reward only, eval stays native).
+# max_turns of the term == the code domain's max_turns (20). Music is single-shot (turns = 1), so there the term is a flat pass bonus.
+name: r3c-shaped
+description: MiMo music+code agentic GRPO, Qwen3-14B, LoRA r64/a64 all-linear, 2 nodes x 8 H100, verifier + turn-efficiency bonus
+extends: experiments/r3c-verifier.yaml
+
+reward:
+  components:
+    - {fn: verifier_score, weight: 1.0}
+    - {fn: 'user_rewards.examples:turn_efficiency_bonus', weight: 1.0, bonus: 0.05, max_turns: 20}
+
+tracking:
+  tags: ['nodes:2', 'finetune:lora', 'model:qwen3-14b', 'domains:music+code', 'arm:shaped']

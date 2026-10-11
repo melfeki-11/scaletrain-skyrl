@@ -1,0 +1,27 @@
+{
+ "program": "Round 3 agent D (Granite-3.3-2B LoRA math_boxed reward A/B): NOT authorized for GPU; dry runs only. A GPU run needs the user's authorization recorded here (total_seconds ~6,600 for a canary + both arms).",
+ "total_seconds": 0,
+ "nodes": 1,
+ "attempts": [
+  {
+   "job_id": "job_db5t1o8c78j007hglpq0",
+   "attempt": "r3d-a-dry1-fb",
+   "status": "COMPLETED",
+   "allocated_at": "2026-10-11T18:09:37Z",
+   "terminal_at": "2026-10-11T18:11:40Z",
+   "gpu_fraction": 0.0,
+   "nodes": 1,
+   "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-11T18:09:37Z) is not charged"
+  },
+  {
+   "job_id": "job_db5t1s8c78j0089ltieg",
+   "attempt": "r3d-b-dry1-fb",
+   "status": "COMPLETED",
+   "allocated_at": "2026-10-11T18:09:53Z",
+   "terminal_at": "2026-10-11T18:11:56Z",
+   "gpu_fraction": 0.0,
+   "nodes": 1,
+   "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-11T18:09:53Z) is not charged"
+  }
+ ]
+}

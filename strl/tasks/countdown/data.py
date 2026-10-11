@@ -16,7 +16,8 @@ from typing import Any
 from .scoring import evaluate
 
 DEFAULTS = {'seed': 20261009, 'train_size': 512, 'validation_size': 100, 'test_size': 200, 'min_numbers': 3, 'max_numbers': 5,
-            'max_number': 25, 'big_numbers': [25, 50, 75, 100], 'big_number_prob': 0.15, 'min_target': 10, 'max_target': 999}
+            'max_number': 25, 'big_numbers': [25, 50, 75, 100], 'big_number_prob': 0.15, 'min_target': 10, 'max_target': 999,
+            'prompt': None}   # None: PROMPT below; else a template with {numbers}, {target} and the <answer></answer> instruction
 PROMPT = ('Using the numbers {numbers}, write an arithmetic expression that equals {target}. You may use +, -, *, / and parentheses; '
           'each number may be used at most once (you do not have to use all of them). Think briefly, then give only the expression '
           'inside <answer></answer>, for example <answer>(1 + 2) * 3</answer>.')
@@ -93,11 +94,11 @@ def generate(cfg: dict) -> dict[str, list[dict]]:
     return out
 
 
-def make_record(problem: dict, *, split: str, index: int) -> dict[str, Any]:
+def make_record(problem: dict, *, split: str, index: int, template: str | None = None) -> dict[str, Any]:
     truth = json.dumps({'numbers': problem['numbers'], 'target': problem['target']}, sort_keys=True)
     return {
         'data_source': 'strl/countdown',
-        'prompt': [{'role': 'user', 'content': PROMPT.format(numbers=problem['numbers'], target=problem['target'])}],
+        'prompt': [{'role': 'user', 'content': (template or PROMPT).format(numbers=problem['numbers'], target=problem['target'])}],
         'env_class': 'strl_env',
         'reward_spec': {'method': 'rule', 'ground_truth': truth},
         'extra_info': {'sample_id': f'countdown-{split}-{index:05d}', 'split': split, 'numbers': problem['numbers'],
@@ -106,7 +107,9 @@ def make_record(problem: dict, *, split: str, index: int) -> dict[str, Any]:
 
 
 def records(cfg: dict) -> dict[str, list[dict]]:
-    return {split: [make_record(p, split=split, index=i) for i, p in enumerate(problems)] for split, problems in generate(cfg).items()}
+    template = settings(cfg)['prompt']
+    return {split: [make_record(p, split=split, index=i, template=template) for i, p in enumerate(problems)]
+            for split, problems in generate(cfg).items()}
 
 
 def _contract(cfg: dict) -> dict:

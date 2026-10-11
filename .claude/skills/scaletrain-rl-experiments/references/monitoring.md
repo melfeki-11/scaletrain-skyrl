@@ -70,7 +70,7 @@ Multi-node: `strl monitor` adds a per-node line `nodes=head:<age>s,rank1:<age>s`
 `NETWORK` (the probe found socket transport, i.e. no EFA, or cross-node all-gather below plan). These also alert once. The probe's
 `network.json` is logged once to W&B as `infra/*`: `infra/nodes`, `infra/efa_available`, `infra/nccl_socket_transport`, `infra/probe_passed`,
 `infra/{intra_node,cross_node,global}_busbw_GBps` (single node: absent). Measured on p5 pairs: socket NCCL, ~0.69 GB/s cross-node; fine for LoRA (adapter-only
-traffic), too slow for full fine-tuning of large models without HSDP + offload.
+traffic), too slow for full fine-tuning of large models without HSDP (+ offload when memory requires it).
 
 Monitor alerts go to a separate `<run_id>-monitor` W&B run (same group) so the monitor never resumes or corrupts the worker's run.
 
@@ -124,7 +124,8 @@ request is persisted in the eval records (`extra.judge_request`, eval phase, rub
 `budget.failfast: {mem_gb: 76, domain_masked: 0.15, step_slow_factor: 1.5, min_steps: 1}` raises a `RuntimeError` (after a W&B alert, details in
 `failfast.json`) at a step end when: (a) peak GPU memory at the first measured step exceeds `mem_gb` (nvidia-smi on the head; unmeasurable =
 never fires), (b) a domain's masked-group fraction exceeds `domain_masked` for 2 consecutive steps, (c) the step time (generation + training)
-exceeds `step_slow_factor` x the plan estimate for 2 consecutive steps. Canary runs skip (b) and (c) (a different, smaller infrastructure).
+exceeds `step_slow_factor` x the plan estimate for 2 consecutive steps; (c) only alerts (no stop) when the plan estimate was UNCALIBRATED
+(another model/environment, or any multi-node shape) and never fires after the last step. Canary runs skip (b) and (c) (a different, smaller infrastructure).
 Nothing is rendered unless the environment opts in (`EnvironmentSpec.failfast_defaults`; mimo does) or the experiment sets the block; `null`
 disables one rule. The deadline is predictive: after each step (from the second on) the run stops, forcing ONE final eval + checkpoint, when
 `now + 1.15 x mean(last 2 step times) + eval_estimate + 120 s >= GRPO_TRAIN_DEADLINE`; `eval_estimate` is the last measured eval wall time

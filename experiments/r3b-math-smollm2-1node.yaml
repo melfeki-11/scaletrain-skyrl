@@ -1,0 +1,10 @@
+# The 1-node fallback of r3b-math-smollm2-2node.yaml: identical (model, data, reward, batch, lr, steps, eval) except 1 x 8 H100.
+# For a 1.7B model full fine-tuning fits one node comfortably; the second node only adds rollout throughput (and a socket-NCCL
+# gradient all-reduce per step), so this variant is also the faster one to get capacity for.
+name: r3b-math-smollm2-1node
+description: MATH L1-3 boxed exact-match + format, SmolLM2-1.7B-Instruct, full FT, 1 x 8 H100
+extends: experiments/r3b-math-smollm2-2node.yaml
+
+compute:
+  nodes: 1
+  training: {fsdp_size: null}     # one node: full shard (same layout as 8 on 8 GPUs); null also keeps the 1-GPU canary overlay valid

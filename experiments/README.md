@@ -21,6 +21,9 @@ before anything else: it validates, derives the infrastructure, estimates time/c
 | `countdown-qwen35.yaml` | environment (`countdown`, new) | single-turn verifiable arithmetic; the template for adding your own environment; 1-GPU offline final eval |
 | `mimo-phi4-mini-lora-verify.yaml` | model (non-Qwen), LoRA, reward, eval | Phi-4-mini on music+cyber: shaped reward, durable checkpoints (resume), GSM8K retention |
 | `gsm8k-qwen35-2node-smoke.yaml` / `-full.yaml` | compute: 2 nodes | multi-node smoke on GSM8K, LoRA / full |
+| `r3b-math-smollm2-2node.yaml` / `-1node.yaml` | environment (`math_boxed`, new, downloaded MATH), model (SmolLM2-1.7B, Llama arch), full FT, 2 x 8 | **ran and verified** (`r3b-2n-a1-fb`): 22.4% -> 31.8% on 500 held-out problems, +9.4 [+5.6, +13.2]; launched with `--race-shape` for the 1-node variant |
+| `r3a-cd-phi4.yaml` | model (Phi-4-mini), LoRA, 1 x 4, reward (brevity bonus only when correct), prompt (step by step) | a fresh agent's countdown learning run; the canary showed the default prompt starved a non-reasoning model of signal |
+| `r3c-verifier.yaml` / `r3c-shaped.yaml` | model (Qwen3-14B), MiMo music + code, LoRA, 2 x 8, reward A/B | prepared + planned by a fresh agent; NOT run (needs ~38,000 node-s of authorized budget) |
 
 Merge rules for `extends:`:
 - Mappings merge key by key.

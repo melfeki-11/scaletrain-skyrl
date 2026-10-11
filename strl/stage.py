@@ -58,6 +58,10 @@ def apply_canary_overlay(cfg: dict, overlay_path: Path | None = None) -> dict:
     overlay = yaml.safe_load(overlay_path.read_text())
     out = deep_merge({k: v for k, v in cfg.items() if k not in {'derived', '_meta'}}, overlay)
     out['algorithm']['n_samples'] = min(cfg['algorithm']['n_samples'], overlay['algorithm'].get('n_samples', 4))
+    world = int(out['compute']['nodes']) * int(out['compute']['gpus_per_node'])
+    training = (out['compute'].get('training') or {})
+    if training.get('fsdp_size') and world % int(training['fsdp_size']):   # the 1-GPU overlay cannot keep an 8-GPU HSDP group
+        out['compute']['training'] = dict(training, fsdp_size=None)
     out['name'] = cfg['name'] + '-canary'
     validate(out)
     out['derived'] = derive_placement(out)

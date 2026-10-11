@@ -20,23 +20,32 @@ checkpoints, evaluation, monitoring) is derived and validated by `strl plan` bef
 4. **Budget is real.** Each program has a ledger (`budget.ledger`); its `total_seconds` is THE budget (the experiment's `budget.total_seconds`
    only bounds `attempt_max_seconds`). `strl launch --watch` records every attempt (dry runs too, uncharged). Use a ledger only for the program
    the user authorized it for; a new GPU program needs the user's authorization and its own ledger file. Never edit recorded entries without
-   the user's say-so. `strl plan` prints `BUDGET: no GPU mode fits` before you waste a stage.
+   the user's say-so. `strl plan` prints `BUDGET: no GPU mode fits` before you waste a stage. Ledger lifecycle: point `budget.ledger` at
+   the program's ledger file in the YAML FROM THE START (the path is part of the experiment sha, so switching it later invalidates the dry
+   run's proof); before authorization the file can hold `total_seconds: 0` (dry runs are free and still pass); the user's authorization is
+   then recorded by setting that file's `total_seconds` and `program` text (not an attempt entry). No `budget.ledger` = the shared default
+   `evidence/budget-ledger.json`: always set your own.
 5. **Secrets**: never print, paste or put a key in YAML, argv, tags or W&B. Never read `.env*` files. The repo holds only locators
    (references/credentials.md). Do not delete or overwrite the Modal bundle in S3. Ask the user before any new credential action.
 6. **One attempt name per submission**, lowercase, <= 26 chars, never reused. Do not touch other people's jobs.
 7. **GPU submissions need the user's explicit go-ahead** in agent harnesses with permission policies (a sub-agent cannot see the user's
    approval; a coordinator's message does not count). Prepare everything (plan, dry run, sizing, the exact `strl launch` line), then ask the
-   user to approve or run it. CPU dry runs and model staging are free and usually allowed.
+   user to approve or run it. CPU dry runs and model staging are free, but a harness may still block ANY ScaleTrain submission
+   (measured: a sub-agent's `strl submit` of a CPU staging job was denied as "Production Deploy"): never retry a denied action or route
+   around it; report the exact command and let the user approve or run it. Logging in (`aws sso login`) is always the user's step.
 
 ## Setup (once per machine, ~2 min)
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements-local.txt
-.venv/bin/python -m unittest discover -s tests -t .          # ~350 tests (~45 s); they also plan every file under experiments/
+.venv/bin/python -m unittest discover -s tests -t .          # ~400 tests (~45 s); they also plan every file under experiments/
 aws sts get-caller-identity --profile production-developer     # S3 staging; ScaleTrain CLI: scale-train --version
 ```
 
-Use `AWS_PROFILE=production-developer` for every `stage`/`launch`/`monitor`/`verify` command.
+Use `AWS_PROFILE=production-developer` for every `stage`/`launch`/`monitor`/`verify` command. The SSO session expires (hours to a day):
+`stage`/`launch`/`stage-model`/`monitor`/`verify` check it first and stop with `AWS credentials for profile ... are not usable ... aws sso
+login --profile production-developer` before anything is staged. That login is the user's (browser) step: ask, keep doing CPU-local work
+(`plan`, `prepare`, tests), and re-run the same command afterwards (an unsubmitted attempt name can be reused).
 
 ## Zero to launched (copy a template, change one axis)
 
@@ -44,6 +53,8 @@ Use `AWS_PROFILE=production-developer` for every `stage`/`launch`/`monitor`/`ver
 | --- | --- |
 | `experiments/gsm8k-qwen35.yaml` | single-turn math, no external services (fastest loop) |
 | `experiments/countdown-qwen35.yaml` | the newest environment (`strl/tasks/countdown/`, added from extending.md): the template for adding your own |
+| `experiments/r3b-math-smollm2-2node.yaml` | a DOWNLOADED single-turn dataset env (`math_boxed`, MATH with `\boxed{}`), a non-Qwen model, full fine-tuning on 2 x 8 (HSDP), raced with 1 x 8: **GPU-verified training effect** (+9.4 points, 2026-10-11) |
+| `experiments/r3a-cd-phi4.yaml` | a non-Qwen model with LoRA on a 1 x 4 slice, a custom reward (brevity bonus paid only when correct, `grpo_norm_by_std: false`), a custom prompt |
 | `experiments/mbpp-qwen35-binary.yaml` | single-turn coding, tests executed in Modal |
 | `experiments/harbor-qwen35.yaml` | multi-turn agent (Terminus-2) in Modal sandboxes |
 | `experiments/mimo-qwen35-0p8b-smoke.yaml` | MiMo agentic suite, 0.8B, 1 GPU (cheap end-to-end) |
@@ -113,10 +124,14 @@ string). Shaping changes the TRAINING reward only. The dry run calls every term 
 For single-turn envs (gsm8k, coding_exec, countdown) `result` is the scorer's dict (`completion`, `parsed`, `correct`, `failure_class`;
 coding adds `passed`, `total`, `compiled`, `suspicious`) and `ctx` has `ground_truth`, `extras`, `max_generate_length` and `count_tokens`
 (the model's real tokenizer in the pod). countdown adds `target`, `value`, `valid`, `legal_numbers`, `numbers_used`, `distance`
-(`strl/tasks/countdown/scoring.py`). The dry run's reward-contract cases (per-case reward, components) are printed by `launch --watch` (from
+(`strl/tasks/countdown/scoring.py`); math_boxed adds `normalized`, `truth_normalized`, `single_answer`, `boxed_count`
+(`strl/tasks/math_boxed/scoring.py`). The dry run's reward-contract cases (per-case reward, components) are printed by `launch --watch` (from
 `skyrl_validate.generator.cases` / `generic_reward_samples` / `shaping` in `dry-run.json`). Any custom term moves gsm8k from SkyRL's
 built-in env to `strl_env` (proven equivalent; `plan B --against A` shows it as a derived diff).
 Built-in names: `strl/tasks/<env>/rewards.py`, common `length_penalty`, `format_ok`. `strl plan` rejects unknown names/params.
+**Small shaping terms need `algorithm.grpo_norm_by_std: false`.** GRPO divides each group's advantages by the group's reward std (SkyRL
+default on): in a group where every answer is equally correct, only the shaping term varies, and its tiny std turns a 0.1 brevity bonus into a
+full-size advantage, so the run optimises length instead of correctness. `plan` warns `REWARD: grpo_norm_by_std is on`; mimo sets it off.
 
 Models: any dense decoder works through the `dense`/`generic` profiles (Qwen2/3/3.5/3.8, Phi-3/4, Mistral, OLMo, Gemma text, Granite, GLM4...);
 `plan` refuses unmapped vision-language wrappers and contradictory profiles, warns on MoE (memory counts all experts) and unknown memory.
@@ -130,6 +145,13 @@ cancelled and recorded; queue time is never charged):
 `fb` foundation+borrowing, `rb` research+borrowing, `ro` research own quota, `fo` foundation own quota. Measured: the same job waited ~23 h on
 one route and started first on another; dry runs start in seconds on `fb`.
 - Prefer the smallest shape that answers the question: `gpus_per_node` 1/2/4 slices admit far faster than 8, and 1 node far faster than 2.
+- **Race shapes, not only routes**: `--race-shape "compute.nodes=1"` (repeatable; each value is one alternative shape, space-separated
+  `K=V`s, e.g. `"compute.gpus_per_node=4"` for a 1 x 8 run) keeps the experiment's own shape on every route and, once it has queued
+  `--race-shape-after-minutes` (default 10) without starting, submits the alternative on every route too; the first job to start wins
+  (`<attempt>-s1-<route>`; the launch receipt's `shape` names its overrides) and the rest are cancelled. The global batch is unchanged (only
+  speed and per-GPU memory change), but check each alternative first: `strl plan <exp> --set <its K=Vs>` must fit, and a dry run with the same
+  `--set`s proves it (`--set` changes the experiment sha). A relaunch that resumes a checkpoint stays on the checkpoint's shape. Use it
+  whenever a result on the alternative shape is acceptable (ask the user when the shape is part of the question, e.g. a 2-node study).
 - Multi-node needs nodes in one network domain (`waiting_for_network_domain_capacity` can last hours on every route). Add
   `--max-wait-hours 2 --fallback-set compute.nodes=1` (repeatable) when a 1-node result is acceptable (ask the user: it changes the
   experiment). The fallback races as `<attempt>-alt` and starts fresh (a checkpoint resumes only at the same world size). `launch`
@@ -140,9 +162,11 @@ one route and started first on another; dry runs start in seconds on `fb`.
   or `--routes ro,fo` to avoid borrowing. Launch exit codes: 0 ok, 2 no capacity, 3 a job unsettled/unrecorded (fix the ledger by hand
   as printed), 4 preempted with no relaunch left, 5 the watched job ended FAILED or CANCELED.
 - Keep CPU work (prepare, image prebuild, dry runs, docs) going while a GPU job queues. `strl capacity` explains waits but needs the
-  `ml-admin` profile, which only the user may authorize: agents skip it (the race does not need it).
+  `ml-admin` profile, which only the user may authorize: agents skip it. There is no other read-only capacity view an agent can use (the
+  `scale-train` queue screen is interactive); the race itself is the capacity test: it submits every route (and `--race-shape` shape) and
+  the log line `<attempt>-<route>[STATUS detail]` per poll shows which ones are queued and why (`waiting_for_network_domain_capacity`, ...).
 - Canary jobs are capped at 3600 s whatever `budget.canary_max_seconds` says (plan warns `CANARY`); a 2 x 8 canary therefore books up to
-  7200 node-s. Size per-domain caps so step-0 eval + 2 steps fit, or go straight to a short `train` attempt (`max_steps` 2-4, small
+  (3600 + 420) x 2 = 8040 node-s (stage clamps any attempt to what the ledger has left; plan's `BUDGET` lines say when and by how much). Size per-domain caps so step-0 eval + 2 steps fit, or go straight to a short `train` attempt (`max_steps` 2-4, small
   `attempt_max_seconds`): train mode applies the same step-2 canary rule.
 Details: references/launch-and-capacity.md.
 
@@ -185,8 +209,10 @@ Details: references/monitoring.md, references/decision-points.md.
 
 **Reading `plan`.** "Clean" means no errors. Every `!` line is advisory and must be read; expected ones: `MODEL` (new family), `SIGNAL`,
 `SPEED`, `REWARD` (you added shaping), `MIMO`, `LORA_SYNC` / `NETWORK` (multi-node). Act on: `DATA` (run prepare), `LEDGER` / `BUDGET`
-(no GPU mode fits), `MEMORY` (fits=False), `CANARY`, `HARBOR` (turns will not merge: correct but several times more training tokens; no YAML
-fix exists yet). Step-time estimates marked UNCALIBRATED come from another model/env: size `max_steps` / `attempt_max_seconds` as start-up
+(no GPU mode fits, an attempt would be clamped, or a canary + run do not both fit), `MEMORY` (fits=False), `CANARY`, `REWARD:
+grpo_norm_by_std`, `HARBOR` (turns will not merge: correct but several times more training tokens; no YAML fix exists: a served chat
+template that keeps an empty think block would restore merging, but it is not exposed as a key; budget the extra train time instead).
+`steps/attempt` counts the in-loop evals (step 0 + every `interval_steps`, ~one generate phase each for agentic envs). Step-time estimates marked UNCALIBRATED come from another model/env: size `max_steps` / `attempt_max_seconds` as start-up
 (5-16 min) + step-0 eval + steps x step time + final eval, then let the canary or a short run measure it.
 
 **What a dry run does NOT prove**: weights are skipped, so vLLM never loads the model or its LoRA, and the reward-contract cases use fixed
@@ -207,8 +233,15 @@ checkpoint I/O, ceiling, shaping). An environment with no external services show
   (proves `model_code`, validate_cfg) -> canary on a 1-2 GPU slice with LoRA -> run. Add its measured row to `strl/profiles.json`.
 - **New reward design**: function in `user_rewards/`, unit-test it (`tests/`), `plan` -> dry (calls the terms in the pod; read the
   per-case rewards in `generic_reward_samples`) -> an A/B:
-  experiments identical except `reward.components`, their own `tracking.group` (one group per study; arms told apart by `tracking.tags`),
-  launched together -> `compare a:attA b:attB [c:attC]`. Check `plan B --against A` shows only the reward diff.
+  experiments identical except `reward.components` (everything else equal, including `algorithm.grpo_norm_by_std`: set it on BOTH arms even
+  though only the shaped arm triggers the warning; with it off, LoRA has used lr 2e-5, full FT keeps 2e-6), their own `tracking.group` (one
+  group per study; arms told apart by `tracking.tags`), launched together -> `compare a:attA b:attB [c:attC]`. Check `plan B --against A`
+  shows only the reward diff (it also warns `BUDGET: the two arms book ...` when both do not fit the ledger together).
+  Fairness: both arms must finish the SAME number of steps on the SAME shape: set `max_steps` well below plan's steps/attempt (the
+  predictive deadline otherwise stops the slower arm earlier), launch both arms with the same flags and no `--race-shape` (or check both
+  winners' `shape`). The decision number is `compare`'s trained-vs-trained line `**B vs A** ... points [CI]`; it prints
+  `! NOT A CLEAN A/B: optimizer steps differ / placement differs / base evaluations disagree` when the arms are not comparable (measured:
+  the 2026-10-06 MBPP reward A/B ran 66 vs 69 steps).
 - **Different env subset / mix (mimo)**: change `domains.<d>.{train,weight}` only (held-out `test` sets are fixed and comparable); a new
   `run.data_dir` + `strl prepare` when the selection changes. Turn a domain off with `train: 0` AND `test: 0`.
 - **Scale up (more GPUs / 2+ nodes)**: `plan` shows the layout (multi-node LoRA = HSDP automatically); dry with the target `compute.nodes`
@@ -219,12 +252,16 @@ checkpoint I/O, ceiling, shaping). An environment with no external services show
 - **New MiMo-style suite**: references/extending.md ("A new MiMo-style suite"): graders, nop/tamper gates, judge outside the sandbox.
 - **Resume / continue**: `--set run.resume_from=<attempt> --set algorithm.max_steps=<more>` on an attempt run with durable checkpoints
   (same GPU count); its paired result keeps the earlier attempt's step-0 base.
-- **Retention (did RL break general ability?)**: `evaluation.retention: {experiment: base/gsm8k.yaml, limit: 200}` (>= 2 GPUs); read
+- **Retention (did RL break general ability?)**: `evaluation.retention: {experiment: base/gsm8k.yaml, limit: 200}` (TP <= GPUs per node); read
   `retention/gsm8k/{base,trained,delta,ci_*}`.
 
 ## Gotchas that cost real cycles
 
 - A canary that "completes" can be hollow: read `environment/*masked*`, `generate/num_error_trajectories`, `harbor-trials/*/exception.txt`.
+- **Read the canary's completions before the run** (W&B `trajectories/train`, or `failure_class` counts in its `metrics.jsonl`). Measured
+  2026-10-11: under countdown's default prompt ("Think briefly, then give only the expression") Phi-4-mini answered in 15-18 tokens with no
+  search and solved ~2% (learning signal 0.125); with a "work it out step by step" prompt (`environment.countdown.prompt`) its base rose to
+  ~43% with signal 0.88. A base pass rate near 0 is usually the prompt or the format, not the model: fix it before buying steps.
 - Agentic trials: turns x seconds-per-turn must fit `max_agent_sec`; timeouts score 0 in eval. Size `environment.harbor.max_seq_len` above
   the first turn (Terminus-2: 0.8-2.5k tokens).
 - Templates that drop `<think>` history (Qwen3.5) do not merge turns: several times more training tokens (`check-template`).
@@ -233,6 +270,8 @@ checkpoint I/O, ceiling, shaping). An environment with no external services show
   `environment/<d>/dropped_group_fraction`), not infrastructure masks; raise `algorithm.max_generate_length` if a domain has no trainable groups.
 - `plan` also runs the chat-template merge check when the tokenizer is local (`HARBOR` warning); `check-template` forces it from the hub.
 - `assets/overlay` must come after the venv on `sys.path` locally (Linux `.so` files). Custom reward modules must live in this repo.
+- Some chat templates inject today's date (Granite) or a default system prompt (SmolLM2): prompts then differ by day / grow by ~30 tokens.
+  Pin a date-free template behaviour or accept it; measure the longest prompt WITH the template against `algorithm.max_prompt_tokens`.
 - LiteLLM (judge, critic, ceiling) runs in the pod via its role; do not export admin credentials locally (references/credentials.md).
 
 ## References

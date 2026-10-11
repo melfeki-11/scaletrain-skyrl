@@ -10,8 +10,8 @@ You change three axes in one YAML file; everything else is derived, validated an
 
 | Axis | Where | Shipped |
 | --- | --- | --- |
-| **model** | `model.id` + `model.revision` (profile auto-detected from `config.json`) | `qwen3_5` (Qwen3.5/3.6/3.8, GPU-verified), `qwen3`, `qwen3_moe`, `qwen3_5_moe`, `llama`, `dense` (Phi, Mistral, OLMo, Qwen2, Gemma text, ...), `generic` |
-| **RL environment** | `environment.name` | `gsm8k`, `coding_exec` (MBPP/HumanEval, tests run in Modal), `coding_harbor` (Terminus-2 agent in Modal sandboxes), `mimo` (5 agentic domains, any subset) |
+| **model** | `model.id` + `model.revision` (profile auto-detected from `config.json`) | `qwen3_5` (Qwen3.5/3.6/3.8, GPU-verified), `qwen3`, `qwen3_moe`, `qwen3_5_moe`, `llama` (SmolLM2: GPU-verified training effect), `dense` (Phi-4-mini: GPU-verified training effect; Mistral, OLMo, Granite, Qwen2, Gemma text, ...), `generic` |
+| **RL environment** | `environment.name` | `gsm8k`, `math_boxed` (MATH, `\boxed{}` exact match), `countdown` (arithmetic search), `coding_exec` (MBPP/HumanEval, tests run in Modal), `coding_harbor` (Terminus-2 agent in Modal sandboxes), `mimo` (5 agentic domains, any subset) |
 | **reward design** | `reward.components`: a weighted sum of named terms, or your own `module:function` | `pass_all_tests`, `partial_tests`, `compiles`, `no_suspicious_code`, `strict_answer`, `length_penalty`, `format_ok`, ... |
 
 Held-out evaluation always reports the environment's **task metric** (accuracy or pass@1), never the training reward. That
