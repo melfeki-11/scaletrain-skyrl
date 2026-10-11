@@ -20,7 +20,11 @@ checkpoints, evaluation, monitoring) is derived and validated by `strl plan` bef
 4. **Budget is real.** Each program has a ledger (`budget.ledger`); its `total_seconds` is THE budget (the experiment's `budget.total_seconds`
    only bounds `attempt_max_seconds`). `strl launch --watch` records every attempt (dry runs too, uncharged). Use a ledger only for the program
    the user authorized it for; a new GPU program needs the user's authorization and its own ledger file. Never edit recorded entries without
-   the user's say-so. `strl plan` prints `BUDGET: no GPU mode fits` before you waste a stage.
+   the user's say-so. `strl plan` prints `BUDGET: no GPU mode fits` before you waste a stage. Ledger lifecycle: point `budget.ledger` at
+   the program's ledger file in the YAML FROM THE START (the path is part of the experiment sha, so switching it later invalidates the dry
+   run's proof); before authorization the file can hold `total_seconds: 0` (dry runs are free and still pass); the user's authorization is
+   then recorded by setting that file's `total_seconds` and `program` text (not an attempt entry). No `budget.ledger` = the shared default
+   `evidence/budget-ledger.json`: always set your own.
 5. **Secrets**: never print, paste or put a key in YAML, argv, tags or W&B. Never read `.env*` files. The repo holds only locators
    (references/credentials.md). Do not delete or overwrite the Modal bundle in S3. Ask the user before any new credential action.
 6. **One attempt name per submission**, lowercase, <= 26 chars, never reused. Do not touch other people's jobs.
@@ -34,7 +38,7 @@ checkpoints, evaluation, monitoring) is derived and validated by `strl plan` bef
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements-local.txt
-.venv/bin/python -m unittest discover -s tests -t .          # ~350 tests (~45 s); they also plan every file under experiments/
+.venv/bin/python -m unittest discover -s tests -t .          # ~400 tests (~45 s); they also plan every file under experiments/
 aws sts get-caller-identity --profile production-developer     # S3 staging; ScaleTrain CLI: scale-train --version
 ```
 
@@ -120,7 +124,8 @@ string). Shaping changes the TRAINING reward only. The dry run calls every term 
 For single-turn envs (gsm8k, coding_exec, countdown) `result` is the scorer's dict (`completion`, `parsed`, `correct`, `failure_class`;
 coding adds `passed`, `total`, `compiled`, `suspicious`) and `ctx` has `ground_truth`, `extras`, `max_generate_length` and `count_tokens`
 (the model's real tokenizer in the pod). countdown adds `target`, `value`, `valid`, `legal_numbers`, `numbers_used`, `distance`
-(`strl/tasks/countdown/scoring.py`). The dry run's reward-contract cases (per-case reward, components) are printed by `launch --watch` (from
+(`strl/tasks/countdown/scoring.py`); math_boxed adds `normalized`, `truth_normalized`, `single_answer`, `boxed_count`
+(`strl/tasks/math_boxed/scoring.py`). The dry run's reward-contract cases (per-case reward, components) are printed by `launch --watch` (from
 `skyrl_validate.generator.cases` / `generic_reward_samples` / `shaping` in `dry-run.json`). Any custom term moves gsm8k from SkyRL's
 built-in env to `strl_env` (proven equivalent; `plan B --against A` shows it as a derived diff).
 Built-in names: `strl/tasks/<env>/rewards.py`, common `length_penalty`, `format_ok`. `strl plan` rejects unknown names/params.
@@ -228,8 +233,15 @@ checkpoint I/O, ceiling, shaping). An environment with no external services show
   (proves `model_code`, validate_cfg) -> canary on a 1-2 GPU slice with LoRA -> run. Add its measured row to `strl/profiles.json`.
 - **New reward design**: function in `user_rewards/`, unit-test it (`tests/`), `plan` -> dry (calls the terms in the pod; read the
   per-case rewards in `generic_reward_samples`) -> an A/B:
-  experiments identical except `reward.components`, their own `tracking.group` (one group per study; arms told apart by `tracking.tags`),
-  launched together -> `compare a:attA b:attB [c:attC]`. Check `plan B --against A` shows only the reward diff.
+  experiments identical except `reward.components` (everything else equal, including `algorithm.grpo_norm_by_std`: set it on BOTH arms even
+  though only the shaped arm triggers the warning; with it off, LoRA has used lr 2e-5, full FT keeps 2e-6), their own `tracking.group` (one
+  group per study; arms told apart by `tracking.tags`), launched together -> `compare a:attA b:attB [c:attC]`. Check `plan B --against A`
+  shows only the reward diff (it also warns `BUDGET: the two arms book ...` when both do not fit the ledger together).
+  Fairness: both arms must finish the SAME number of steps on the SAME shape: set `max_steps` well below plan's steps/attempt (the
+  predictive deadline otherwise stops the slower arm earlier), launch both arms with the same flags and no `--race-shape` (or check both
+  winners' `shape`). The decision number is `compare`'s trained-vs-trained line `**B vs A** ... points [CI]`; it prints
+  `! NOT A CLEAN A/B: optimizer steps differ / placement differs / base evaluations disagree` when the arms are not comparable (measured:
+  the 2026-10-06 MBPP reward A/B ran 66 vs 69 steps).
 - **Different env subset / mix (mimo)**: change `domains.<d>.{train,weight}` only (held-out `test` sets are fixed and comparable); a new
   `run.data_dir` + `strl prepare` when the selection changes. Turn a domain off with `train: 0` AND `test: 0`.
 - **Scale up (more GPUs / 2+ nodes)**: `plan` shows the layout (multi-node LoRA = HSDP automatically); dry with the target `compute.nodes`
@@ -258,6 +270,8 @@ checkpoint I/O, ceiling, shaping). An environment with no external services show
   `environment/<d>/dropped_group_fraction`), not infrastructure masks; raise `algorithm.max_generate_length` if a domain has no trainable groups.
 - `plan` also runs the chat-template merge check when the tokenizer is local (`HARBOR` warning); `check-template` forces it from the hub.
 - `assets/overlay` must come after the venv on `sys.path` locally (Linux `.so` files). Custom reward modules must live in this repo.
+- Some chat templates inject today's date (Granite) or a default system prompt (SmolLM2): prompts then differ by day / grow by ~30 tokens.
+  Pin a date-free template behaviour or accept it; measure the longest prompt WITH the template against `algorithm.max_prompt_tokens`.
 - LiteLLM (judge, critic, ceiling) runs in the pod via its role; do not export admin credentials locally (references/credentials.md).
 
 ## References

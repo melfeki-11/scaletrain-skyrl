@@ -84,19 +84,38 @@ def compare(specs: list[str], workdir: str | Path = 'evidence/compare', samples:
         report['runs'].append(entry)
     for i in range(len(runs)):
         for j in range(i + 1, len(runs)):
+            unfair = fairness(runs[i], runs[j])
             if runs[i]['domainful'] and runs[j]['domainful']:   # trained vs trained per domain + macro on the shared trial ids
                 stats = honest_power(runs[i]['trained'], runs[j]['trained'], samples=samples)
                 if stats.get('domains'):
                     report['pairs'].append({'a': runs[i]['attempt'], 'b': runs[j]['attempt'], 'examples': sum(d['trials'] for d in stats['domains'].values()),
-                                            'domains': stats['domains'], 'macro': stats.get('macro'), 'dropped': stats['dropped']})
+                                            'domains': stats['domains'], 'macro': stats.get('macro'), 'dropped': stats['dropped'], 'unfair': unfair})
                 continue
             a = {x['sample_id']: x['correct'] for x in runs[i]['trained']}
             b = {x['sample_id']: x['correct'] for x in runs[j]['trained']}
             ids = sorted(set(a) & set(b))
             if ids:
-                report['pairs'].append({'a': runs[i]['attempt'], 'b': runs[j]['attempt'], 'examples': len(ids),
+                report['pairs'].append({'a': runs[i]['attempt'], 'b': runs[j]['attempt'], 'examples': len(ids), 'unfair': unfair,
                                         'b_minus_a': paired_bootstrap([a[k] for k in ids], [b[k] for k in ids], samples=samples)})
     return report
+
+
+def fairness(a: dict, b: dict) -> list[str]:
+    """Why an arm-vs-arm delta may not isolate the studied axis: unequal optimizer steps (the predictive deadline or a slower shape stopped
+    one arm early), a different placement (a --race-shape / fallback winner), or different base scores on the same ids (different data,
+    prompt or model)."""
+    out = []
+    ra, rb = a['result'], b['result']
+    if ra.get('optimizer_steps') != rb.get('optimizer_steps'):
+        out.append(f"optimizer steps differ ({ra.get('optimizer_steps')} vs {rb.get('optimizer_steps')})")
+    if (ra.get('nodes'), ra.get('gpus')) != (rb.get('nodes'), rb.get('gpus')):
+        out.append(f"placement differs ({ra.get('nodes')}x{ra.get('gpus')} vs {rb.get('nodes')}x{rb.get('gpus')} GPUs)")
+    base_a = {x['sample_id']: x['correct'] for x in a['base'] if 'sample_id' in x}
+    base_b = {x['sample_id']: x['correct'] for x in b['base'] if 'sample_id' in x}
+    shared = set(base_a) & set(base_b)
+    if shared and any(base_a[k] != base_b[k] for k in shared):
+        out.append('base evaluations disagree on shared ids (different data, prompt or model)')
+    return out
 
 
 def markdown(report: dict) -> str:
@@ -128,6 +147,8 @@ def markdown(report: dict) -> str:
         d = p['b_minus_a']
         lines.append(f"\n**{p['b']} vs {p['a']}** (trained vs trained, {p['examples']} paired tasks): {100 * d['accuracy_delta']:+.2f} points "
                      f"[{100 * d['ci_lower']:+.2f}, {100 * d['ci_upper']:+.2f}]")
+        if p.get('unfair'):
+            lines.append(f"! NOT A CLEAN A/B: {'; '.join(p['unfair'])}")
     return '\n'.join(lines)
 
 
@@ -160,6 +181,8 @@ def domain_tables(report: dict) -> list[str]:
         m = p.get('macro')
         if m:
             lines.append(f"| **macro** | {m['baseline']:.4f} | {m['candidate']:.4f} | {_delta(m)} | | {p['dropped']['total']} |")
+        if p.get('unfair'):
+            lines.append(f"! NOT A CLEAN A/B: {'; '.join(p['unfair'])}")
     return lines
 
 

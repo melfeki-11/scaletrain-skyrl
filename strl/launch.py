@@ -508,7 +508,7 @@ def dry_run_summary(experiment: str, attempt: str, overrides: list[str] | None =
     gen = v.get('generator') or {}
     for key in ('shaping', 'generic_reward_samples', 'cases'):   # the reward contract's per-case rewards (mimo / gsm8k / countdown-style)
         if gen.get(key):
-            lines.append(f"  rewards      {key}: {json.dumps(gen[key], default=str)[:400]}")
+            lines.append(f"  rewards      {key}: {json.dumps(gen[key], default=str)[:2000]}")
     if d.get('network'):
         lines.append(f"  network      {json.dumps(d['network'], default=str)[:200]}")
     return '\n'.join(lines)

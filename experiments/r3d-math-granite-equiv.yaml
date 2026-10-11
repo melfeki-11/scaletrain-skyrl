@@ -1,0 +1,16 @@
+# Round 3 agent D, arm B of the math_boxed reward A/B: exact match + partial credit for an EQUIVALENT but non-canonical answer.
+# Identical to arm A (experiments/r3d-math-granite-exact.yaml) except reward.components and the arm tag: `strl plan B --against A`.
+# user_rewards.math_equiv:equivalent_answer_credit pays `credit` (0.3) only when exact match says no, the completion is not hedged, and
+# the boxed answer's VALUE equals the reference's (exact rationals; surds/pi to 1e-12): e.g. \frac{6}{8} for \frac{3}{4}, \sqrt{8} for
+# 2\sqrt{2}. A canonical answer (1.0) always ranks first; the task metric and the held-out test stay exact match (tests/test_math_equiv_reward.py).
+name: r3d-math-granite-equiv
+description: MATH L1-4 boxed, Granite-3.3-2B-Instruct LoRA r32, 1x4 H100, reward = exact match + 0.3 equivalent-form credit (arm B)
+extends: experiments/r3d-math-granite-exact.yaml
+
+reward:
+  components:
+    - {fn: math_correct, weight: 1.0}
+    - {fn: 'user_rewards.math_equiv:equivalent_answer_credit', weight: 1.0, credit: 0.3}
+
+tracking:
+  tags: ['env:math_boxed', 'model:granite-3.3-2b', 'finetune:lora', 'study:reward-ab', 'arm:B-exact+equiv']

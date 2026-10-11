@@ -137,6 +137,15 @@ def cmd_plan(a):
         if derived(other) != derived(cfg):   # e.g. a custom reward term moves gsm8k from SkyRL's built-in env to strl_env (proven equivalent)
             rows.append({'key': 'derived: environment.env_class', 'from': derived(other), 'to': derived(cfg)})
         report['diff_vs'] = {a.against: rows}
+        ledger = Path(cfg['budget'].get('ledger') or '')
+        if ledger.is_file() and other['budget'].get('ledger') == cfg['budget'].get('ledger'):   # an A/B: both arms draw on one ledger
+            from .budget import node_fraction, remaining_seconds, reserved_seconds
+            data = json.loads(ledger.read_text())
+            left = remaining_seconds(data['attempts'], data['total_seconds']) - reserved_seconds(data)
+            both = sum(int(node_fraction(c) * (c['budget']['attempt_max_seconds'] + 420)) for c in (cfg, other))
+            if left < both:
+                report['warnings'].append(f'BUDGET: the two arms book {both} node-s together but {ledger} has {left}: launched together, the '
+                                          'second would be refused (or clamped to fewer steps: an unfair A/B). Ask for budget or shorten both.')
     report['warnings'] += readiness_warnings(cfg)
     if a.json:
         print(json.dumps(report, indent=2, default=str))
