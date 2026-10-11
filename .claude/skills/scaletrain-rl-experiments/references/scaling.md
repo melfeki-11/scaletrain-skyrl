@@ -32,7 +32,7 @@ budget: {save_optimizer_state: true}   # false: no FSDP checkpoints, exactly one
 
 - `strl plan` prints the layout (mode, FSDP group x replicas, offload, TP x engines, per-GPU train/rollout GB, LoRA params) and
   the recommendation: LoRA -> HSDP within a node (`fsdp_size = gpus_per_node`); full -> full shard when the probe measured
-  >= 8 GB/s cross-node, else HSDP + `cpu_offload`. `--network <attempt>/network.json` feeds a measured probe in.
+  >= 8 GB/s cross-node, else HSDP within a node, + `cpu_offload` only when HSDP alone would exceed 76 GB/GPU. `--network <attempt>/network.json` feeds a measured probe in.
 - Any key can be tried without editing YAML: `strl plan|stage <exp> --set compute.training.fsdp_size=8 --set finetune.mode=lora`
   (recorded in `_meta.overrides`, part of the experiment sha).
 - LoRA is enabled on the vLLM side by pinned SkyRL itself (`enable_lora`, `max_lora_rank` from `trainer.policy.model.lora.rank`).
@@ -93,7 +93,8 @@ dry run passed: 2-node Ray, native `Qwen3MoeForCausalLM`, validate_cfg with fsdp
 - Sandbox throughput: `environment.harbor.max_concurrency` and `trajectories_per_second` (HarborGenerator rate limiter); Modal
   images are cached per Dockerfile (all exported tasks share one).
 - Qwen3.5/Qwen3 history templates drop `<think>` blocks, so step-wise merging falls back to one sequence per turn (correct, O(T^2)
-  tokens); a custom served chat template that keeps an empty think block restores merging.
+  tokens); a custom served chat template that keeps an empty think block would restore merging, but strl does not expose one yet
+  (`generator.custom_chat_template` is pinned to None in `strl/runtime.py`): budget the extra training tokens instead.
 
 ## Faster single-turn environments
 

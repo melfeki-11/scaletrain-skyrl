@@ -1,0 +1,1 @@
+{"program": "Verification round 3 (authorized by the user on 2026-10-11: ~3 node-hours of H100): learning-effect runs prepared by fresh no-context agents - Phi-4-mini LoRA on countdown with a brevity-if-correct reward (1 x 4), and SmolLM2-1.7B full fine-tuning on the new math_boxed environment (2 x 8, raced with a 1 x 8 shape)", "total_seconds": 10800, "nodes": 1, "attempts": []}

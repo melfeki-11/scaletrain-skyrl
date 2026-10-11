@@ -93,7 +93,12 @@ Copy countdown, not gsm8k (gsm8k carries a "verified" SkyRL built-in path you do
   `canary.parquet` (`canary_size` rows) and `manifest.json` (settings + sha256 per file, RELATIVE paths) under `run.data_dir`. Row schema
   (what SkyRL and `strl_env` read): `{'data_source': 'strl/<name>', 'prompt': [{'role': 'user', 'content': ...}], 'env_class': 'strl_env',
   'reward_spec': {'method': 'rule', 'ground_truth': <str>}, 'extra_info': {'sample_id': '<name>-<split>-00000', 'split': ..., ...}}` (a string `ground_truth` is safest; JSON-encode structured truth).
-  Cut test -> validation -> train from one seeded pool so changing `train_size` never changes the held-out sets.
+  Cut test -> validation -> train from one seeded pool so changing `train_size` never changes the held-out sets. A downloaded dataset
+  with an official test split (MATH, MBPP): sample `test` from the official test split (seeded, fixed size) and cut validation -> train
+  from the official train split; never let a test problem into train/validation (check by id or normalised text), and pin the dataset
+  revision in `base/<name>.yaml`. A worked downloaded example: `strl/tasks/math_boxed/data.py` (MATH-lighteval, levels filter).
+  Prompt length: measure it WITH the model's chat template (many templates inject a default system prompt, e.g. SmolLM2's ~30 tokens):
+  SkyRL silently drops rows longer than `algorithm.max_prompt_tokens`, so drop or report over-long rows in `prepare` yourself.
 - `strl/tasks/<name>/spec.py`: subclass `EnvironmentSpec` (`strl/tasks/base.py`); set `name`, `generator_kind = 'gym_single'`,
   `verified_env_class = None`, `metric`, `needs_modal = False`, `uses_coding_executor = False` (the default True would make `strl prepare`
   deploy the coding executor), `default_reward`, `failure_classes`, `eval_module`. Implement `score_result` (the dict above + `completion`),

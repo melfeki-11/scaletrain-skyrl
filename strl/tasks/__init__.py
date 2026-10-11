@@ -11,6 +11,7 @@ _REGISTRY: dict[str, str] = {
     'coding_harbor': 'strl.tasks.coding.spec:CodingHarborSpec',
     'mimo': 'strl.tasks.mimo.spec:MimoSpec',
     'countdown': 'strl.tasks.countdown.spec:CountdownSpec',
+    'math_boxed': 'strl.tasks.math_boxed.spec:MathBoxedSpec',
 }
 _CACHE: dict[str, EnvironmentSpec] = {}
 

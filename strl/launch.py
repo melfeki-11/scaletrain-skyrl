@@ -150,14 +150,27 @@ def _settle_losers(api: Api, experiment: str, losers: dict[str, str], poll: floa
     return out
 
 
+def candidates(routes: str | None, shapes: list[list[str]] | None = None) -> tuple[list[tuple], list[tuple]]:
+    """(primary, alternates): one (code, team, borrowing, shape overrides, name suffix) per route of the experiment's own shape, then the same
+    for every ``--race-shape`` alternative (suffix -s1, -s2 ...), submitted only after the primary shape has waited ``shape_after``."""
+    chosen = select_routes(routes)
+    primary = [(code, team, borrow, [], '') for code, team, borrow in chosen]
+    alternates = [(code, team, borrow, list(shape), f'{SHAPE_SUFFIX}{k}') for k, shape in enumerate(shapes or [], 1) for code, team, borrow in chosen]
+    return primary, alternates
+
+
 def race(experiment: str, attempt: str, mode: str, api: Api, *, overrides: list[str] | None = None, routes: str | None = None,
-         poll: float = 15.0, max_wait_seconds: float | None = None) -> dict:
-    """Stage + submit one job per route, keep the first that starts, cancel the rest. Returns the launch receipt."""
+         poll: float = 15.0, max_wait_seconds: float | None = None, shapes: list[list[str]] | None = None,
+         shape_after_seconds: float = 600.0) -> dict:
+    """Stage + submit one job per route (and, after ``shape_after_seconds`` in the queue, per alternative shape), keep the first that
+    starts, cancel the rest. Returns the launch receipt (``shape``: the winner's shape overrides, [] for the experiment's own)."""
     if len(attempt) > MAX_BASE_NAME:
         raise ValueError(f'attempt name {attempt!r} is longer than {MAX_BASE_NAME} characters (route suffixes need room)')
-    chosen, jobs, receipts, seen = select_routes(routes), {}, {}, {}
+    primary, alternates = candidates(routes, shapes)
+    chosen = select_routes(routes)
+    jobs, receipts, seen, shape_of = {}, {}, {}, {}
     try:
-        _submit_routes(api, experiment, attempt, mode, chosen, overrides, jobs, receipts, seen)
+        _submit_routes(api, experiment, attempt, mode, primary, overrides, jobs, receipts, seen, shape_of)
     except BaseException:   # never leave submitted routes running unmanaged (a transient stage/submit error mid-race)
         if jobs:
             api.log(f'launch error while submitting: cancelling the {len(jobs)} submitted route(s) first')
@@ -166,16 +179,25 @@ def race(experiment: str, attempt: str, mode: str, api: Api, *, overrides: list[
     if not jobs:
         raise RuntimeError('no route was accepted by ScaleTrain')
     try:
-        return _poll_routes(api, experiment, poll, max_wait_seconds, chosen, jobs, receipts, seen, group=attempt)
+        later = (lambda: _submit_routes(api, experiment, attempt, mode, alternates, overrides, jobs, receipts, seen, shape_of)) if alternates else None
+        result = _poll_routes(api, experiment, poll, max_wait_seconds, chosen, jobs, receipts, seen, group=attempt,
+                              later=later, later_after=shape_after_seconds)
+        if result.get('winner'):
+            result['shape'] = shape_of.get(result['winner'], [])
+        return result
     except BaseException:   # Ctrl-C / an error while waiting: cancel everything still unsettled before leaving
         api.log('launch interrupted while waiting for capacity: cancelling every submitted route')
         _settle_losers(api, experiment, dict(jobs), poll, seen=seen)
         raise
 
 
-def _poll_routes(api, experiment, poll, max_wait_seconds, chosen, jobs, receipts, seen, group=None) -> dict:
+def _poll_routes(api, experiment, poll, max_wait_seconds, chosen, jobs, receipts, seen, group=None, later=None, later_after=600.0) -> dict:
     started_at, last, ran, unknown_polls, touched = api.clock(), {}, {}, 0, api.clock()
     while True:
+        if later and api.clock() - started_at >= later_after:   # the experiment's own shape is still queued: race the alternative shapes too
+            api.log(f'no route started within {later_after / 60:.0f} min: also racing the alternative shape(s)')
+            later()
+            later, last = None, {}
         if group and api.clock() - touched >= 3600:   # a long queue keeps its booking (TTL counts from the last touch)
             api.touch(experiment, group)
             touched = api.clock()
@@ -214,9 +236,9 @@ def _poll_routes(api, experiment, poll, max_wait_seconds, chosen, jobs, receipts
         api.sleep(poll)
 
 
-def _submit_routes(api, experiment, attempt, mode, chosen, overrides, jobs, receipts, seen):
-    for code, team, borrow in chosen:
-        name = f'{attempt}-{code}'
+def _submit_routes(api, experiment, attempt, mode, chosen, overrides, jobs, receipts, seen, shape_of=None):
+    for code, team, borrow, shape, suffix in chosen:
+        name = f'{attempt}{suffix}-{code}'
         # Staging takes ~30 s per route; when capacity is free the first route is often running before the last is submitted. Measured: in
         # all 5 GPU races of 2026-10-08 a second route was allocated in the same poll and had to be cancelled and charged. Stop submitting
         # once any submitted route started (no added latency when capacity is scarce: every route is still submitted).
@@ -229,8 +251,11 @@ def _submit_routes(api, experiment, attempt, mode, chosen, overrides, jobs, rece
             break
         extra = [] if borrow else ['compute.allow_borrowing=false']
         api.log(f'staging {name} (payload, data and any local model files are uploaded: a few GB take minutes)')
-        receipts[name] = api.stage(experiment, attempt=name, mode=mode, team=team, allow_borrowing=borrow, overrides=[*(overrides or []), *extra],
-                                   reservation=attempt)   # the routes of one race share one budget reservation
+        receipts[name] = api.stage(experiment, attempt=name, mode=mode, team=team, allow_borrowing=borrow,
+                                   overrides=[*(overrides or []), *shape, *extra],
+                                   reservation=attempt)   # the routes (and shapes) of one race share one budget reservation (the largest)
+        if shape_of is not None:
+            shape_of[name] = list(shape)
         # api.submit returns None ONLY when the job definitely does not exist (validation failed, or the reconcile listing succeeded without
         # it); an ambiguous failure raises, and then the booking is kept (the job may be live): TTL or `strl ledger --release` frees it
         job_id = api.submit(receipts[name]['job_file'])
@@ -266,12 +291,13 @@ def watch(experiment: str, attempt: str, job_id: str, api: Api, *, poll: float =
 
 def launch(experiment: str, attempt: str, mode: str, api: Api, *, overrides: list[str] | None = None, routes: str | None = None,
            poll: float = 15.0, max_wait_seconds: float | None = None, follow: bool = False, relaunch_on_preempt: int = 0,
-           resume_on_preempt: bool = False) -> list[dict]:
+           resume_on_preempt: bool = False, shapes: list[list[str]] | None = None, shape_after_seconds: float = 600.0) -> list[dict]:
     """race (+ watch, + relaunch after preemption; with resume_on_preempt, which needs evaluation.durable_checkpoints, the relaunch continues
     the preempted attempt from its latest checkpoint instead of starting over). Returns one receipt per race."""
-    history, name, extra, winners = [], attempt, [], []
+    history, name, extra, winners, race_shapes = [], attempt, [], [], shapes
     for k in range(relaunch_on_preempt + 1):
-        result = race(experiment, name, mode, api, overrides=[*(overrides or []), *extra], routes=routes, poll=poll, max_wait_seconds=max_wait_seconds)
+        result = race(experiment, name, mode, api, overrides=[*(overrides or []), *extra], routes=routes, poll=poll, max_wait_seconds=max_wait_seconds,
+                      shapes=race_shapes, shape_after_seconds=shape_after_seconds)
         history.append(result)
         if not result.get('winner') or not follow:
             break
@@ -288,6 +314,9 @@ def launch(experiment: str, attempt: str, mode: str, api: Api, *, overrides: lis
         # continue from the latest attempt that left a durable checkpoint (a relaunch preempted before its first save has none)
         source = next((w for w in reversed(winners) if api.has_checkpoint(experiment, w)), None) if resume_on_preempt else None
         extra = [f'run.resume_from={source}'] if source else []
+        if source:   # a resume needs the same world size: relaunch only in the shape that wrote the checkpoint
+            shape = next((h.get('shape') or [] for h in history if h.get('winner') == source), [])
+            extra, race_shapes = [*shape, *extra], None
         if resume_on_preempt and not source:
             api.log('no durable checkpoint yet in any preempted attempt: the relaunch starts fresh')
         if k < relaunch_on_preempt:
@@ -387,12 +416,14 @@ def _problems(history: list[dict]) -> list[dict]:
 
 
 FALLBACK_SUFFIX = '-alt'   # not '-fb...': route codes already end attempt names (fb/rb/ro/fo)
+SHAPE_SUFFIX = '-s'        # -s1, -s2: the --race-shape alternatives
 
 
-def check_names(attempt: str, *, relaunch_on_preempt: int = 0, fallback: bool = False) -> None:
+def check_names(attempt: str, *, relaunch_on_preempt: int = 0, fallback: bool = False, shapes: int = 0) -> None:
     """Every attempt name a launch may create must fit MAX_BASE_NAME BEFORE anything is submitted (a relaunch hours later must not fail on
     its name, and truncation must never reproduce an earlier name)."""
-    longest = attempt + (FALLBACK_SUFFIX if fallback else '') + (f'-p{relaunch_on_preempt}' if relaunch_on_preempt else '')
+    longest = attempt + (FALLBACK_SUFFIX if fallback else '') + (f'-p{relaunch_on_preempt}' if relaunch_on_preempt else '') + \
+        (f'{SHAPE_SUFFIX}{shapes}' if shapes else '')
     if len(longest) > MAX_BASE_NAME:
         raise ValueError(f'attempt name {attempt!r} is too long: with these flags the launcher may create {longest!r} ({len(longest)} > '
                          f'{MAX_BASE_NAME} characters before the route suffix); use at most {MAX_BASE_NAME - len(longest) + len(attempt)} characters')
@@ -400,17 +431,20 @@ def check_names(attempt: str, *, relaunch_on_preempt: int = 0, fallback: bool = 
 
 def main_launch(a) -> int:
     try:
-        check_names(a.attempt, relaunch_on_preempt=a.relaunch_on_preempt or 0, fallback=bool(a.max_wait_hours and a.fallback_set))
+        shapes = [x.split() for x in (getattr(a, 'race_shape', None) or [])]
+        check_names(a.attempt, relaunch_on_preempt=a.relaunch_on_preempt or 0, fallback=bool(a.max_wait_hours and a.fallback_set), shapes=len(shapes))
     except ValueError as error:
         print(error, file=sys.stderr)
         return 2
-    api = real_api(a.user_id, a.set)
     from . import cli
+    cli.require_aws(cli._load(a.experiment, a.set))
+    api = real_api(a.user_id, a.set)
     from .overrides import durable
     resumable = durable(cli._load(a.experiment, a.set))
     history = launch(a.experiment, a.attempt, a.mode, api, overrides=a.set, routes=a.routes, poll=a.poll,
                      max_wait_seconds=a.max_wait_hours * 3600 if a.max_wait_hours else None, follow=a.watch,
-                     relaunch_on_preempt=a.relaunch_on_preempt, resume_on_preempt=resumable)
+                     relaunch_on_preempt=a.relaunch_on_preempt, resume_on_preempt=resumable, shapes=shapes,
+                     shape_after_seconds=60 * float(getattr(a, 'race_shape_after_minutes', 10) or 0))
     if a.max_wait_hours and not history[-1].get('winner') and a.fallback_set and not _problems(history):   # e.g. 2 nodes never came
         api.log(f'no capacity within {a.max_wait_hours} h: falling back with {a.fallback_set}')
         history += launch(a.experiment, a.attempt + FALLBACK_SUFFIX, a.mode, api, overrides=[*a.set, *a.fallback_set], routes=a.routes,

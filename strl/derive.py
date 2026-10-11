@@ -209,8 +209,10 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
         out.append(f'SIGNAL: at base reward ~{p0:.2f}, {100 * all_same:.0f}% of groups of {a["n_samples"]} are all-equal (zero advantage); '
                    'watch train/learning_signal_fraction. More samples per prompt raise it; so does an easier curriculum.')
     elif p0 is None:
+        rollouts = int(cfg['derived']['rollouts_per_step'])
         out.append('SIGNAL: base pass rate unknown for this environment/model: the canary measures it (eval/task_metric at step 0); '
-                   'if < 0.3, prefer prompts_per_step 32 x n_samples 16 (same rollouts, ~6x fewer all-fail groups).')
+                   f'if < 0.3, prefer n_samples 16 x prompts_per_step {max(1, rollouts // 16)} (the same {rollouts} rollouts/step; at a 0.2 pass rate '
+                   '~6x fewer all-fail groups than n_samples 8).')
     if a['n_samples'] < 4:
         out.append('SIGNAL: n_samples < 4 gives very noisy group baselines for GRPO.')
     if a['max_generate_length'] >= 1024:
@@ -233,11 +235,16 @@ def warnings(cfg: dict, env: Any, profile: models.ModelProfile, params_b: float 
     if nondefault:
         out.append(f'REWARD: shaping terms {[c["fn"] for c in nondefault]} are trained on but NOT the yardstick: judge the run by eval/task_metric '
                    'and the held-out test, and watch environment/reward_components/* for terms that rise while the task metric does not (reward hacking).')
+        if a.get('grpo_norm_by_std', True) and env.generator_kind != 'harbor':   # mimo warns in its own spec
+            out.append('REWARD: grpo_norm_by_std is on (SkyRL default): in a group where every answer is equally correct, a small shaping term '
+                       '(e.g. a 0.1 brevity bonus) is divided by its own tiny std and becomes a FULL-size advantage. Set algorithm.grpo_norm_by_std: '
+                       'false to keep shaping terms at their configured weight (decision-points.md "Reward design").')
     seconds = b['attempt_max_seconds'] - b['bootstrap_margin_seconds'] - train_reserve(cfg) - 550
-    steps = int(seconds / timing['step_s']) if timing['step_s'] > 0 else 0
+    steps = steps_in_attempt(seconds, timing['step_s'], eval_seconds(cfg, env, timing), int(e['interval_steps'])) or 0
     if steps < min(20, int(a.get('max_steps') or 20)):   # silent when the configured max_steps already fits
-        out.append(f'BUDGET: only ~{steps} optimizer steps fit in the attempt after startup and final-eval reserve (max_steps {a.get("max_steps")}); '
-                   'consider shorter generations or a longer attempt.')
+        out.append(f'BUDGET: only ~{steps} optimizer steps fit in the attempt after startup, in-loop evals (~{eval_seconds(cfg, env, timing):.0f} s each, '
+                   f'step 0 + every {e["interval_steps"]}) and the final reserve (max_steps {a.get("max_steps")}); '
+                   'consider shorter generations, fewer evals or a longer attempt.')
     if env.generator_kind == 'harbor':   # step-wise GRPO merges a trajectory's turns only if the chat template keeps history verbatim
         from .models import template_check
         merge = template_check.check(cfg)   # local tokenizer / HF cache only: plan never goes online
@@ -314,6 +321,23 @@ def train_reserve(cfg: dict) -> int:
     return 480 + 120 + retention
 
 
+def eval_seconds(cfg: dict, env, timing: dict) -> float:
+    """One in-loop evaluation (step 0 and every interval_steps): mimo runs every held-out trial in one wave bounded by its step deadline
+    (~one generate phase; run1-n1-a: 793 s eval vs 821 s generate); single-turn envs generate the validation split once per problem."""
+    gen = float(timing['generate_s'])
+    if env.generator_kind == 'harbor':
+        return round(gen, 1)
+    ratio = env.validation_size(cfg) / max(1, int(cfg['derived']['rollouts_per_step']))
+    return round(gen * min(1.5, max(0.25, ratio)), 1)
+
+
+def steps_in_attempt(usable: float, step_s: float, eval_s: float, interval: int) -> int | None:
+    """n steps fit when n x step + (1 + n / interval) x eval <= usable (the step-0 base eval plus one eval every ``interval`` steps)."""
+    if not step_s:
+        return None
+    return max(0, int((usable - eval_s) / (step_s + eval_s / max(1, interval))))
+
+
 def plan(cfg: dict, network: dict | None = None) -> dict:
     """``network``: a probe result (artifacts/network.json of an earlier attempt) the layout recommendation is based on."""
     env = get_environment(cfg['environment']['name'])
@@ -342,7 +366,9 @@ def plan(cfg: dict, network: dict | None = None) -> dict:
                     'max_model_len': env.skyrl_overrides(cfg, 'train').get('trainer.algorithm.max_seq_len',
                                                                             a['max_prompt_tokens'] + a['max_generate_length']),
                     'skyrl_env_class': env.skyrl_overrides(cfg, 'train').get('environment.env_class') or f'({env.generator_kind} generator)'},
-        'estimates': {**timing, 'steps_in_attempt': int(usable / timing['step_s']) if timing['step_s'] else None,
+        'estimates': {**timing, 'eval_s': eval_seconds(cfg, env, timing),
+                      'steps_in_attempt': steps_in_attempt(usable, timing['step_s'], eval_seconds(cfg, env, timing),
+                                                           int(cfg['evaluation']['interval_steps'])),
                       'memory': memory,
                       'node_hours': cfg['compute']['nodes'] * cfg['compute']['gpus_per_node'] / 8 * budget['attempt_max_seconds'] / 3600,
                       'note': 'estimates: extrapolated from the nearest measured profile; the 1-GPU canary measures the real numbers'},

@@ -11,7 +11,7 @@
   check-template <exp>                     does the model's chat template keep step-wise trajectories mergeable (SkyRL prefix merge)?
   stage-model <exp> --attempt A            render a CPU job that downloads the model in a pod and uploads it to S3 (large models)
   submit    <job.json> [--user-id U]       submit once; receipt written before the POST
-  launch    <exp> --attempt A --mode M [--set K=V] [--routes fb,rb,ro,fo] [--max-wait-hours H] [--watch] [--relaunch-on-preempt N]
+  launch    <exp> --attempt A --mode M [--set K=V] [--routes fb,rb,ro,fo] [--race-shape "K=V ..."] [--max-wait-hours H] [--watch] [--relaunch-on-preempt N]
                                            stage + submit one job per capacity route, keep the first that starts, cancel the rest (USE THIS)
   status    <job_id> | --list              job state
   monitor   <exp> --attempt A [--job-id J] live status line + alerts until the attempt finishes
@@ -46,6 +46,26 @@ def _load(path: str, overrides: list[str] | None = None) -> dict:
         raise SystemExit(2)
 
 
+_AWS_OK: set[str] = set()
+
+
+def require_aws(cfg: dict) -> None:
+    """Fail early with the fix instead of a botocore traceback mid-stage: every S3-touching command needs a live SSO session for the
+    experiment's storage profile (it expires; renewing it is the user's step: `aws sso login --profile <profile>`)."""
+    profile = cfg['storage']['profile']
+    if profile in _AWS_OK or os.environ.get('STRL_SKIP_AWS_CHECK'):
+        return
+    try:
+        import boto3
+        boto3.Session(profile_name=profile).client('sts', region_name=cfg['storage'].get('region')).get_caller_identity()
+    except Exception as error:   # TokenRetrievalError (expired SSO), NoCredentialsError, ProfileNotFound ...
+        print(f'AWS credentials for profile {profile!r} are not usable ({type(error).__name__}: {str(error)[:160]}).\n'
+              f'Nothing was staged or submitted. Ask the user to run:  aws sso login --profile {profile}\n'
+              '(an agent must not log in on the user\'s behalf), then re-run this command.', file=sys.stderr)
+        raise SystemExit(2)
+    _AWS_OK.add(profile)
+
+
 def readiness_warnings(cfg: dict) -> list[str]:
     """What `plan` cannot derive from the YAML alone: is the data prepared for THIS selection, and does the budget ledger exist?"""
     out = []
@@ -67,13 +87,24 @@ def readiness_warnings(cfg: dict) -> list[str]:
         left = remaining_seconds(data['attempts'], data['total_seconds']) - reserved_seconds(data)
         charge = node_fraction(cfg)
         canary_charge = 1 / 8 if canary_overlay_for(cfg) == CANARY_OVERLAY else charge
+        # what stage refuses below (strl/stage.py) and what it books for the FULL attempt (attempt seconds + 420 s pod-start slack)
         need_train = int((b['final_eval_reserve_seconds'] + 901) * charge)
         need_canary = int(900 * canary_charge)
+        full_train = int((b['attempt_max_seconds'] + 420) * charge)
+        full_canary = int((min(3600, int(b['canary_max_seconds']) + 600) + 420) * canary_charge)
         if left < min(need_train, need_canary):
             out.append(f'BUDGET: {left} node-s available in {ledger}: no GPU mode fits (a train attempt needs > {need_train}, a canary >= '
                        f'{need_canary}); dry runs still work. More GPU budget needs the user\'s authorization and a new ledger.')
         elif left < need_train:
-            out.append(f'BUDGET: {left} node-s available in {ledger}: a canary fits, a train attempt does not (needs > {need_train}).')
+            out.append(f'BUDGET: {left} node-s available in {ledger}: a canary fits (it books {min(full_canary, left)}), a train attempt does not '
+                       f'(needs > {need_train}).')
+        elif left < full_train:
+            out.append(f'BUDGET: {left} node-s available in {ledger}, a full train attempt books {full_train}: stage would CLAMP it to '
+                       f'~{int(left / charge) - 420 if charge else left} s instead of budget.attempt_max_seconds={b["attempt_max_seconds"]} '
+                       '(fewer steps than the estimate above; lower max_steps or ask for more budget).')
+        if left >= need_train and left < full_train + full_canary:
+            out.append(f'BUDGET: a separate canary ({full_canary}) plus a full train attempt ({full_train}) do not both fit in {left}: run a short '
+                       'train attempt (max_steps 2) as the canary, or size attempt_max_seconds so both fit (launch-and-capacity.md "Sizing").')
     if ledger and not Path(ledger).is_file():
         out.append(f'LEDGER: budget.ledger {ledger} does not exist, so stage will refuse. A new GPU program needs the user\'s authorization; then create '
                    'the file (references/launch-and-capacity.md, "New program, new budget") and set budget.total_seconds to match.')
@@ -221,6 +252,7 @@ def cmd_capacity(a):
 
 def cmd_stage(a):
     from .stage import stage
+    require_aws(_load(a.experiment, a.set))
     receipt = stage(a.experiment, attempt=a.attempt, mode=a.mode, team=a.team, allow_borrowing=a.allow_borrowing, ledger=a.ledger,
                     output=a.output or f'evidence/{a.attempt}/job.json', overrides=[*(a.set or []), *(['compute.allow_borrowing=false'] if a.no_borrowing else [])])
     Path(f'evidence/{a.attempt}').mkdir(parents=True, exist_ok=True)
@@ -242,6 +274,7 @@ def cmd_check_template(a):
 
 def cmd_stage_model(a):
     from .stage import stage_model
+    require_aws(_load(a.experiment, a.set))
     receipt = stage_model(a.experiment, attempt=a.attempt, team=a.team, output=a.output or f'evidence/{a.attempt}/job.json', overrides=a.set)
     Path(f'evidence/{a.attempt}').mkdir(parents=True, exist_ok=True)
     Path(f'evidence/{a.attempt}/stage.json').write_text(json.dumps(receipt, indent=2))
@@ -282,6 +315,7 @@ def cmd_status(a):
 
 def cmd_monitor(a):
     from .monitor.live import watch
+    require_aws(_load(a.experiment))
     watch(_load(a.experiment), a.attempt, a.job_id, interval=a.interval, once=a.once)
 
 
@@ -389,6 +423,7 @@ def cmd_launch(a):
 
 def cmd_verify(a):
     from .verify_results import verify
+    require_aws(_load(a.experiment))
     try:
         out = verify(_load(a.experiment), a.attempt)
     except (RuntimeError, FileNotFoundError) as error:
@@ -461,6 +496,10 @@ def main(argv=None):
     s.add_argument('--watch', action='store_true', help='follow the winner to its end, record it, detect preemption')
     s.add_argument('--relaunch-on-preempt', type=int, default=0); s.add_argument('--user-id', default=USER)
     s.add_argument('--fallback-set', action='append', default=[], help='after --max-wait-hours with no capacity, race again with these overrides (e.g. compute.nodes=1)')
+    s.add_argument('--race-shape', action='append', default=[], metavar='"K=V [K=V ...]"',
+                   help='an alternative shape raced IN ADDITION to the experiment\'s own (e.g. "compute.nodes=1"); its routes are submitted once the '
+                        'own shape has waited --race-shape-after-minutes; the first job to start wins (attempt <A>-s<k>-<route>)')
+    s.add_argument('--race-shape-after-minutes', type=float, default=10.0)
     s = sub.add_parser('stage'); s.add_argument('experiment'); s.add_argument('--attempt', required=True)
     s.add_argument('--mode', choices=['dry', 'canary', 'train'], required=True); s.add_argument('--team'); s.add_argument('--allow-borrowing', action='store_true'); s.add_argument('--no-borrowing', action='store_true', help='own-quota route only (not reclaimable): sets compute.allow_borrowing=false')
     s.add_argument('--output'); s.add_argument('--ledger', help='program budget ledger (default: budget.ledger of the experiment)')

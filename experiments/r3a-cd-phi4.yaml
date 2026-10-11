@@ -1,0 +1,73 @@
+# Round 3 agent A: Countdown GRPO on a NON-Qwen model (Phi-4-mini-instruct, 3.8B, `dense` profile, GPU-proven in this repo) with LoRA,
+# a researcher-designed reward (exact-answer correctness + a small brevity bonus paid ONLY when correct), sized to show a held-out
+# learning effect inside ~1 node-hour of H100 (ledger evidence/ledgers/learning-proof.json, authorized 2026-10-11).
+# Shape: 1 x 4 H100 slice (slices admit faster than 8; 0.5 node-s per second, so a 3600 s attempt books ~2,010 node-s).
+# Data: own data dir with a 500-problem test set (tighter paired CI than 200) and 2,048 train problems (no epoch repeats).
+#   `strl prepare experiments/r3a-cd-phi4.yaml` writes assets/countdown/data-r3a.
+# grpo_norm_by_std: false keeps the 0.1 brevity bonus small in all-correct groups (std normalisation would rescale it to unit size);
+# lr 2e-5 compensates for the un-normalised (smaller) advantages.
+name: r3a-cd-phi4
+description: Countdown, Phi-4-mini-instruct LoRA r32, 1x4 H100, correct + 0.1 brevity-if-correct, 500 held-out problems
+extends: base/countdown.yaml
+
+model:
+  id: microsoft/Phi-4-mini-instruct
+  revision: cfbefacb99257ffa30c83adab238a50856ac3083
+
+finetune:
+  mode: lora
+  lora: {rank: 32, alpha: 64, dropout: 0.0, target_modules: all-linear}
+
+environment:
+  countdown:
+    seed: 20261009
+    train_size: 2048
+    validation_size: 100
+    test_size: 500
+
+reward:
+  components:
+    - {fn: countdown_correct, weight: 1.0}
+    - {fn: 'user_rewards.brevity:short_correct_bonus', weight: 1.0, bonus: 0.1, max_tokens: 1024}
+
+compute:
+  nodes: 1
+  gpus_per_node: 4
+
+inference:
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.5
+
+algorithm:
+  prompts_per_step: 32
+  minibatch_prompts: 32
+  n_samples: 8
+  micro_train_per_gpu: 4
+  micro_forward_per_gpu: 8
+  lr: 2.0e-05
+  grpo_norm_by_std: false
+  max_generate_length: 1024
+  max_steps: 40
+
+evaluation:
+  interval_steps: 5
+  checkpoint_interval_steps: 5
+  final_eval: true
+  eval_batch_size: 100
+  eval_shards_per_model: 2        # 4 GPUs: base on 2, trained on 2, concurrently
+
+budget:
+  total_seconds: 5400              # only bounds attempt_max_seconds; the real budget is the ledger
+  attempt_max_seconds: 5400        # books (5400 + 420) x 4/8 = 2,910 node-s
+  ledger: evidence/ledgers/learning-proof.json
+
+limits:
+  max_nodes: 1
+  max_attempt_seconds: 5400
+
+tracking:
+  group: r3a-countdown-phi4
+  tags: ['env:countdown', 'finetune:lora', 'nodes:1', 'model:phi4-mini', 'reward:correct+brevity']
+
+run:
+  data_dir: assets/countdown/data-r3a

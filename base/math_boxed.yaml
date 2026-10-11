@@ -1,0 +1,43 @@
+# Base experiment: competition math (Hendrycks MATH via the pinned HF dataset below), final answer in \boxed{}. Single-turn, verifiable by
+# exact match after Hendrycks-style LaTeX normalization (strl/tasks/math_boxed/scoring.py); no external services.
+# `strl prepare <exp>` downloads the pinned revision and writes run.data_dir. Held-out sets: test = a seeded sample of the official TEST
+# split; validation = the head of a seeded shuffle of the filtered TRAIN split; train = the next train_size of that shuffle (so changing
+# train_size never changes validation or test; changing levels/subjects/max_problem_chars/seed does, and needs a new prepare).
+name: math-boxed-base
+description: MATH boxed-answer GRPO (strl_env generic reward path), exact match + format term
+
+extends: base/infra.yaml
+
+environment:
+  name: math_boxed
+  math_boxed:
+    dataset_id: DigitalLearningGmbH/MATH-lighteval     # 7,500 train / 5,000 test, columns problem, level, solution, type
+    dataset_config: default
+    revision: 0530c78699ea5e8eb5530600900e1f328b48acad  # pinned dataset commit (never a branch)
+    levels: [1, 2, 3, 4, 5]
+    subjects: []                  # [] = all 7 subjects
+    max_problem_chars: 1500       # drops the few very long (Asymptote) problems so no prompt is silently filtered by max_prompt_tokens
+    train_size: 3000
+    validation_size: 256
+    test_size: 500
+    split_seed: 17
+    prompt_suffix: Solve the problem step by step, concisely. Put only your final answer inside \boxed{}.
+
+reward:                           # strl/tasks/math_boxed/rewards.py
+  components:
+    - {fn: math_correct, weight: 1.0}     # the yardstick: last \boxed{} == reference after normalization
+    - {fn: math_format, weight: 0.1}      # format: a non-empty, single (un-hedged) boxed answer; paid on misses too, so keep it small
+
+algorithm:
+  max_prompt_tokens: 1024
+  max_generate_length: 1024
+
+evaluation:
+  eval_batch_size: 256            # == validation_size
+
+tracking:
+  project: scaletrain-rl-envs
+  group: math-boxed
+
+run:
+  data_dir: assets/math_boxed/data

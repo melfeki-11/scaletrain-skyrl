@@ -26,7 +26,9 @@ checkpoints, evaluation, monitoring) is derived and validated by `strl plan` bef
 6. **One attempt name per submission**, lowercase, <= 26 chars, never reused. Do not touch other people's jobs.
 7. **GPU submissions need the user's explicit go-ahead** in agent harnesses with permission policies (a sub-agent cannot see the user's
    approval; a coordinator's message does not count). Prepare everything (plan, dry run, sizing, the exact `strl launch` line), then ask the
-   user to approve or run it. CPU dry runs and model staging are free and usually allowed.
+   user to approve or run it. CPU dry runs and model staging are free, but a harness may still block ANY ScaleTrain submission
+   (measured: a sub-agent's `strl submit` of a CPU staging job was denied as "Production Deploy"): never retry a denied action or route
+   around it; report the exact command and let the user approve or run it. Logging in (`aws sso login`) is always the user's step.
 
 ## Setup (once per machine, ~2 min)
 
@@ -36,7 +38,10 @@ uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requi
 aws sts get-caller-identity --profile production-developer     # S3 staging; ScaleTrain CLI: scale-train --version
 ```
 
-Use `AWS_PROFILE=production-developer` for every `stage`/`launch`/`monitor`/`verify` command.
+Use `AWS_PROFILE=production-developer` for every `stage`/`launch`/`monitor`/`verify` command. The SSO session expires (hours to a day):
+`stage`/`launch`/`stage-model`/`monitor`/`verify` check it first and stop with `AWS credentials for profile ... are not usable ... aws sso
+login --profile production-developer` before anything is staged. That login is the user's (browser) step: ask, keep doing CPU-local work
+(`plan`, `prepare`, tests), and re-run the same command afterwards (an unsubmitted attempt name can be reused).
 
 ## Zero to launched (copy a template, change one axis)
 
@@ -117,6 +122,9 @@ coding adds `passed`, `total`, `compiled`, `suspicious`) and `ctx` has `ground_t
 `skyrl_validate.generator.cases` / `generic_reward_samples` / `shaping` in `dry-run.json`). Any custom term moves gsm8k from SkyRL's
 built-in env to `strl_env` (proven equivalent; `plan B --against A` shows it as a derived diff).
 Built-in names: `strl/tasks/<env>/rewards.py`, common `length_penalty`, `format_ok`. `strl plan` rejects unknown names/params.
+**Small shaping terms need `algorithm.grpo_norm_by_std: false`.** GRPO divides each group's advantages by the group's reward std (SkyRL
+default on): in a group where every answer is equally correct, only the shaping term varies, and its tiny std turns a 0.1 brevity bonus into a
+full-size advantage, so the run optimises length instead of correctness. `plan` warns `REWARD: grpo_norm_by_std is on`; mimo sets it off.
 
 Models: any dense decoder works through the `dense`/`generic` profiles (Qwen2/3/3.5/3.8, Phi-3/4, Mistral, OLMo, Gemma text, Granite, GLM4...);
 `plan` refuses unmapped vision-language wrappers and contradictory profiles, warns on MoE (memory counts all experts) and unknown memory.
@@ -130,6 +138,13 @@ cancelled and recorded; queue time is never charged):
 `fb` foundation+borrowing, `rb` research+borrowing, `ro` research own quota, `fo` foundation own quota. Measured: the same job waited ~23 h on
 one route and started first on another; dry runs start in seconds on `fb`.
 - Prefer the smallest shape that answers the question: `gpus_per_node` 1/2/4 slices admit far faster than 8, and 1 node far faster than 2.
+- **Race shapes, not only routes**: `--race-shape "compute.nodes=1"` (repeatable; each value is one alternative shape, space-separated
+  `K=V`s, e.g. `"compute.gpus_per_node=4"` for a 1 x 8 run) keeps the experiment's own shape on every route and, once it has queued
+  `--race-shape-after-minutes` (default 10) without starting, submits the alternative on every route too; the first job to start wins
+  (`<attempt>-s1-<route>`; the launch receipt's `shape` names its overrides) and the rest are cancelled. The global batch is unchanged (only
+  speed and per-GPU memory change), but check each alternative first: `strl plan <exp> --set <its K=Vs>` must fit, and a dry run with the same
+  `--set`s proves it (`--set` changes the experiment sha). A relaunch that resumes a checkpoint stays on the checkpoint's shape. Use it
+  whenever a result on the alternative shape is acceptable (ask the user when the shape is part of the question, e.g. a 2-node study).
 - Multi-node needs nodes in one network domain (`waiting_for_network_domain_capacity` can last hours on every route). Add
   `--max-wait-hours 2 --fallback-set compute.nodes=1` (repeatable) when a 1-node result is acceptable (ask the user: it changes the
   experiment). The fallback races as `<attempt>-alt` and starts fresh (a checkpoint resumes only at the same world size). `launch`
@@ -140,9 +155,11 @@ one route and started first on another; dry runs start in seconds on `fb`.
   or `--routes ro,fo` to avoid borrowing. Launch exit codes: 0 ok, 2 no capacity, 3 a job unsettled/unrecorded (fix the ledger by hand
   as printed), 4 preempted with no relaunch left, 5 the watched job ended FAILED or CANCELED.
 - Keep CPU work (prepare, image prebuild, dry runs, docs) going while a GPU job queues. `strl capacity` explains waits but needs the
-  `ml-admin` profile, which only the user may authorize: agents skip it (the race does not need it).
+  `ml-admin` profile, which only the user may authorize: agents skip it. There is no other read-only capacity view an agent can use (the
+  `scale-train` queue screen is interactive); the race itself is the capacity test: it submits every route (and `--race-shape` shape) and
+  the log line `<attempt>-<route>[STATUS detail]` per poll shows which ones are queued and why (`waiting_for_network_domain_capacity`, ...).
 - Canary jobs are capped at 3600 s whatever `budget.canary_max_seconds` says (plan warns `CANARY`); a 2 x 8 canary therefore books up to
-  7200 node-s. Size per-domain caps so step-0 eval + 2 steps fit, or go straight to a short `train` attempt (`max_steps` 2-4, small
+  (3600 + 420) x 2 = 8040 node-s (stage clamps any attempt to what the ledger has left; plan's `BUDGET` lines say when and by how much). Size per-domain caps so step-0 eval + 2 steps fit, or go straight to a short `train` attempt (`max_steps` 2-4, small
   `attempt_max_seconds`): train mode applies the same step-2 canary rule.
 Details: references/launch-and-capacity.md.
 
@@ -185,8 +202,10 @@ Details: references/monitoring.md, references/decision-points.md.
 
 **Reading `plan`.** "Clean" means no errors. Every `!` line is advisory and must be read; expected ones: `MODEL` (new family), `SIGNAL`,
 `SPEED`, `REWARD` (you added shaping), `MIMO`, `LORA_SYNC` / `NETWORK` (multi-node). Act on: `DATA` (run prepare), `LEDGER` / `BUDGET`
-(no GPU mode fits), `MEMORY` (fits=False), `CANARY`, `HARBOR` (turns will not merge: correct but several times more training tokens; no YAML
-fix exists yet). Step-time estimates marked UNCALIBRATED come from another model/env: size `max_steps` / `attempt_max_seconds` as start-up
+(no GPU mode fits, an attempt would be clamped, or a canary + run do not both fit), `MEMORY` (fits=False), `CANARY`, `REWARD:
+grpo_norm_by_std`, `HARBOR` (turns will not merge: correct but several times more training tokens; no YAML fix exists: a served chat
+template that keeps an empty think block would restore merging, but it is not exposed as a key; budget the extra train time instead).
+`steps/attempt` counts the in-loop evals (step 0 + every `interval_steps`, ~one generate phase each for agentic envs). Step-time estimates marked UNCALIBRATED come from another model/env: size `max_steps` / `attempt_max_seconds` as start-up
 (5-16 min) + step-0 eval + steps x step time + final eval, then let the canary or a short run measure it.
 
 **What a dry run does NOT prove**: weights are skipped, so vLLM never loads the model or its LoRA, and the reward-contract cases use fixed
@@ -219,7 +238,7 @@ checkpoint I/O, ceiling, shaping). An environment with no external services show
 - **New MiMo-style suite**: references/extending.md ("A new MiMo-style suite"): graders, nop/tamper gates, judge outside the sandbox.
 - **Resume / continue**: `--set run.resume_from=<attempt> --set algorithm.max_steps=<more>` on an attempt run with durable checkpoints
   (same GPU count); its paired result keeps the earlier attempt's step-0 base.
-- **Retention (did RL break general ability?)**: `evaluation.retention: {experiment: base/gsm8k.yaml, limit: 200}` (>= 2 GPUs); read
+- **Retention (did RL break general ability?)**: `evaluation.retention: {experiment: base/gsm8k.yaml, limit: 200}` (TP <= GPUs per node); read
   `retention/gsm8k/{base,trained,delta,ci_*}`.
 
 ## Gotchas that cost real cycles
