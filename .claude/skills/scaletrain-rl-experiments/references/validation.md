@@ -294,4 +294,6 @@ to it). Harbor creates its `__harbor__` sandbox app and resolves the sandbox sec
 - Not yet possible: Harbor/MiMo sandboxes. `genai-research` has no `modal-proxy-user` secret (secrets are per environment; values are not
   readable, so it cannot be copied by an agent). Until its owner creates it there, `coding_harbor` / `mimo` dry runs fail the `modal_secret`
   gate. `coding_exec` no longer declares a sandbox secret (it never mounted one).
-- Left in `main` (idle, 0 tasks): `strl-code-exec` and `strl-mimo-inspect`.
+- The old `main` copies of `strl-code-exec` and `strl-mimo-inspect` were stopped (2026-10-12, user request); the shared `__harbor__` app in
+  `main` is not ours and was left alone. `modal-proxy-user` is the ONLY Modal secret strl uses (no registry secret: every MiMo task image is
+  public; no Modal volumes/dicts/queues).
