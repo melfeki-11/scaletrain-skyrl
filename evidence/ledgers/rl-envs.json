@@ -110,6 +110,16 @@
       "terminal_at": "2026-10-06T21:45:28Z",
       "gpu_fraction": 0.125,
       "evidence": "conservative: job created_at to first terminal observation (includes queue/pod start)"
+    },
+    {
+      "job_id": "job_db6jq10c78j0089ltok0",
+      "attempt": "mgr-exec-dry1-fb",
+      "status": "COMPLETED",
+      "allocated_at": "2026-10-12T20:03:16Z",
+      "terminal_at": "2026-10-12T20:05:19Z",
+      "gpu_fraction": 0.0,
+      "nodes": 1,
+      "evidence": "worker budget.json started_at - 420 s (pods up) to the terminal observation; queue time (created_at 2026-10-12T20:03:16Z) is not charged"
     }
   ]
 }
