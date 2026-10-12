@@ -8,6 +8,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+# The team Modal environment every strl app, sandbox (Harbor's `__harbor__` app) and secret lives in. `main` is the shared workspace
+# default and hit its budget cap on 2026-10-12 (Modal stops everything running there at the cap); genai-research is the team
+# environment created for this work ($2,000/month; any workspace member can deploy). Experiments set services.modal.environment.
+DEFAULT_ENVIRONMENT = 'genai-research'
+
 
 def _parse(raw: str) -> dict:
     try:
@@ -37,7 +42,7 @@ def materialize_profile(raw: str, dest: str | Path, profile: str = 'scaleapi') -
     return target
 
 
-def configure_from_locator(locator: str, dest: str | Path, environment: str = 'main', profile: str = 'scaleapi') -> Path:
+def configure_from_locator(locator: str, dest: str | Path, environment: str = DEFAULT_ENVIRONMENT, profile: str = 'scaleapi') -> Path:
     """Fetch the bundle (s3:// or Secrets Manager id), write the private profile, export the non-secret pointers."""
     import boto3
     if locator.startswith('s3://'):
@@ -54,7 +59,7 @@ def configure_from_locator(locator: str, dest: str | Path, environment: str = 'm
     return path
 
 
-def check(environment: str = 'main', secret: str | None = None) -> dict:
+def check(environment: str = DEFAULT_ENVIRONMENT, secret: str | None = None) -> dict:
     """Modal auth + environment visibility (+ sandbox secret presence) through the CLI, without reading secret values."""
     def cli(*args):
         out = subprocess.run([sys.executable, '-m', 'modal', *args, '--json'], capture_output=True, text=True, timeout=120)
@@ -80,7 +85,7 @@ class local_profile:
     """Context manager for laptop use: materialize a temporary mode-600 profile from a mode-600 MODAL_TOKEN_ID/SECRET dotenv
     (default: ScaleTrain/.env.modal, override with $STRL_MODAL_ENV_FILE). If MODAL_CONFIG_PATH is already set, it is used as is."""
 
-    def __init__(self, environment: str = 'main', env_file: str | Path | None = None):
+    def __init__(self, environment: str = DEFAULT_ENVIRONMENT, env_file: str | Path | None = None):
         self.environment, self.env_file, self.path = environment, Path(env_file or DEFAULT_ENV_FILE), None
 
     def __enter__(self):

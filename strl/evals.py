@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .services import litellm
+from .services.modal import DEFAULT_ENVIRONMENT as MODAL_DEFAULT_ENV
 
 
 def coding_exec(cfg: dict, split: str, limit: int, model: str, max_completion_tokens: int, project_id: str, concurrency: int = 8) -> dict:
@@ -65,7 +66,7 @@ def coding_harbor(cfg: dict, split: str, limit: int, model: str, max_completion_
         llm.update(max_completion_tokens=max_completion_tokens, user=project_id, extra_body={'metadata': {'tags': [f'project:{project_id}']}})
         configs.append(c)
     started = time.monotonic()
-    with local_profile(((cfg.get('services') or {}).get('modal') or {}).get('environment', 'main')):
+    with local_profile(((cfg.get('services') or {}).get('modal') or {}).get('environment', MODAL_DEFAULT_ENV)):
         harbor.install_compat()
 
         async def main():
@@ -141,7 +142,7 @@ def mimo(cfg: dict, split: str, limit: int, model: str, max_completion_tokens: i
         return None
 
     started = time.monotonic()
-    with local_profile(((cfg.get('services') or {}).get('modal') or {}).get('environment', 'main')):
+    with local_profile(((cfg.get('services') or {}).get('modal') or {}).get('environment', MODAL_DEFAULT_ENV)):
         harbor.install_compat()
         deps = SimpleNamespace(template=template, settings={**DEFAULT_SETTINGS, **generator_settings(cfg)}, rate_limiter=_Null(),
                                judge=judge_mod.Judge(cfg) if judged else None, create_trial=create_trial, finish_session=finish,

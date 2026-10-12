@@ -25,7 +25,8 @@ MEMO_MAX = 50_000
 
 
 def environment() -> str:
-    return os.environ.get('MODAL_ENVIRONMENT', 'main')
+    from ...services.modal import DEFAULT_ENVIRONMENT
+    return os.environ.get('MODAL_ENVIRONMENT', DEFAULT_ENVIRONMENT)
 
 
 def function():

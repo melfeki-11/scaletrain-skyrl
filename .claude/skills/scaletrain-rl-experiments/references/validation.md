@@ -280,3 +280,18 @@ countdown 0.43 / 0.57 / 0.71 / 0.71 / 0.74 / 0.70 / 0.68 / 0.71 (every 5; step 2
 Fixed with tests: a second resumed relaunch dropped the alternative shape (2 nodes from a 1-node checkpoint); a failing alternative shape
 cancelled the healthy primary race; shapes validated up front; name check per launch family; exact BUDGET clamp; offline `verify`;
 math_boxed over-credit cases (`-12 \text{ or } -30`, `1, 125`, `10 = 3`); the norm warning for small default terms.
+
+## Modal moved to the team environment `genai-research` (2026-10-12)
+
+`main` (the shared workspace default) reached 99% of its budget; at the cap Modal stops everything still running there. Everything strl
+deploys or runs in Modal now targets `genai-research` (`services.modal.environment` in `base/coding_exec.yaml` and `base/mimo.yaml`; code
+default `strl/services/modal.py` `DEFAULT_ENVIRONMENT`; `tools/prebuild_mimo_images.py` and `tools/gate_mimo.py` default `MODAL_ENVIRONMENT`
+to it). Harbor creates its `__harbor__` sandbox app and resolves the sandbox secret in `MODAL_ENVIRONMENT`, so sandboxes move with it.
+- `strl executor deploy`: `strl-code-exec` deployed in `genai-research`, version ping `fab5f1b39071ab5c` (same harness as before).
+- CPU dry run `mgr-exec-dry1-fb` (job_db6jq10c78j0089ltok0, `mbpp-qwen35-binary.yaml`): passed; pod gate `modal_auth ok,
+  modal_environment genai-research`; 512 executor calls from the pod, 104 calls/s, p95 1.32 s, 0 infrastructure errors; reward contract,
+  W&B and critic gates passed.
+- Not yet possible: Harbor/MiMo sandboxes. `genai-research` has no `modal-proxy-user` secret (secrets are per environment; values are not
+  readable, so it cannot be copied by an agent). Until its owner creates it there, `coding_harbor` / `mimo` dry runs fail the `modal_secret`
+  gate. `coding_exec` no longer declares a sandbox secret (it never mounted one).
+- Left in `main` (idle, 0 tasks): `strl-code-exec` and `strl-mimo-inspect`.
