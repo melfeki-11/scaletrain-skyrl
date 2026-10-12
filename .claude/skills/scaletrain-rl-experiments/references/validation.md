@@ -291,9 +291,12 @@ to it). Harbor creates its `__harbor__` sandbox app and resolves the sandbox sec
 - CPU dry run `mgr-exec-dry1-fb` (job_db6jq10c78j0089ltok0, `mbpp-qwen35-binary.yaml`): passed; pod gate `modal_auth ok,
   modal_environment genai-research`; 512 executor calls from the pod, 104 calls/s, p95 1.32 s, 0 infrastructure errors; reward contract,
   W&B and critic gates passed.
-- Not yet possible: Harbor/MiMo sandboxes. `genai-research` has no `modal-proxy-user` secret (secrets are per environment; values are not
-  readable, so it cannot be copied by an agent). Until its owner creates it there, `coding_harbor` / `mimo` dry runs fail the `modal_secret`
-  gate. `coding_exec` no longer declares a sandbox secret (it never mounted one).
+- Harbor/MiMo sandboxes (after the user created `modal-proxy-user` in `genai-research`, 2026-10-12): both pod gates read
+  `modal_environment genai-research, modal_secret modal-proxy-user`, and Harbor's `__harbor__` app now lives in `genai-research`.
+  - `mgr-hb-dry1-fb` (`harbor-qwen35.yaml`, coding_harbor): oracle 1.0 / 1.0, nop 0.0 / 0.0 in real Modal sandboxes (37-40 s each).
+  - `mgr-mimo-dry1-fb` (`mimo-qwen35-0p8b-smoke.yaml`): nop in a sandbox for every domain (music, cyber, code, general, webdev): reward 0,
+    no exception, verifier proven to have run; judge selftest (gpt-6-luna rubric + vision) ok.
+  `coding_exec` no longer declares a sandbox secret (it never mounted one).
 - The old `main` copies of `strl-code-exec` and `strl-mimo-inspect` were stopped (2026-10-12, user request); the shared `__harbor__` app in
   `main` is not ours and was left alone. `modal-proxy-user` is the ONLY Modal secret strl uses (no registry secret: every MiMo task image is
   public; no Modal volumes/dicts/queues).
