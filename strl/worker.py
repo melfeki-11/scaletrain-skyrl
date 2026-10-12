@@ -28,6 +28,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from .experiment import current, finetune, save_optimizer_state
+from .services.modal import DEFAULT_ENVIRONMENT as MODAL_DEFAULT_ENV
 from .network import head_network, ray_start_args
 from .resources import allocated_cpus
 from .storage import get_json, put_json, split_uri, sync_local
@@ -216,8 +217,8 @@ def setup_services(cfg, runtime, env_spec, mode):
     if env_spec.needs_modal:
         from .services import modal as modal_service
         path = modal_service.configure_from_locator(modal_cfg['credentials_uri'], Path('artifacts').resolve().parent / '.modal-runtime.toml',
-                                                    modal_cfg.get('environment', 'main'))
-        receipt['modal'] = modal_service.check(modal_cfg.get('environment', 'main'), modal_cfg.get('sandbox_secret'))
+                                                    modal_cfg.get('environment', MODAL_DEFAULT_ENV))
+        receipt['modal'] = modal_service.check(modal_cfg.get('environment', MODAL_DEFAULT_ENV), modal_cfg.get('sandbox_secret'))
         receipt['modal']['profile_mode'] = oct(path.stat().st_mode & 0o777)
     critic = (cfg['tracking'].get('critic') or {})
     if critic.get('enabled') or env_spec.needs_litellm:

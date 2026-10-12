@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import copy
 import json
+import os
 import sys
 import tomllib
 from pathlib import Path
@@ -29,6 +30,9 @@ sys.path.insert(0, str(ROOT))
 sys.path.append(str(ROOT / "assets" / "overlay"))
 
 from strl.tasks.coding import harbor as coding_harbor  # noqa: E402
+from strl.services.modal import DEFAULT_ENVIRONMENT  # noqa: E402
+
+os.environ.setdefault("MODAL_ENVIRONMENT", DEFAULT_ENVIRONMENT)  # sandboxes + their secret live in the team env, not the CLI default
 
 
 def _read_task(task_dir: Path) -> tuple[dict, dict]:

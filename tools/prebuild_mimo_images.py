@@ -11,6 +11,7 @@ plus the rate-limit-stop receipt when applicable.
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import sys
 from pathlib import Path
@@ -20,6 +21,9 @@ sys.path.insert(0, str(ROOT))
 sys.path.append(str(ROOT / "assets" / "overlay"))  # Linux pod build: only a fallback behind the venv's native harbor + modal SDKs
 
 from strl.tasks.mimo import images  # noqa: E402
+from strl.services.modal import DEFAULT_ENVIRONMENT  # noqa: E402
+
+os.environ.setdefault("MODAL_ENVIRONMENT", DEFAULT_ENVIRONMENT)  # build in the team env (images/apps are per environment), not the CLI default
 
 
 def discover_task_dirs(root: Path) -> list[Path]:

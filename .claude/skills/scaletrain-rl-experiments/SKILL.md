@@ -86,7 +86,11 @@ Extra preparation by case:
   ledgered); follow it with `strl status <job_id>` until COMPLETED. `stage` (dry runs included: the pod skips the weights but the manifest must
   exist) refuses until the model is local or staged. Already staged? Read-only:
   `aws s3 ls s3://scale-ml/tmp/mohamedelfeki/scaletrain/qwen35-grpo-v2/models/<name>@<rev12>/ --profile production-developer`.
-- **Coding envs**: `strl executor deploy` once. **Harbor/MiMo**: `strl overlay` once (Modal/Harbor packages for the image).
+- **Modal environment**: everything Modal (executor app, Harbor sandboxes, image prebuilds, the sandbox secret) runs in the team
+  environment `genai-research` (`services.modal.environment`), never `main` (shared default; it hit its budget cap on 2026-10-12 and Modal
+  then stops everything running there). Harbor/MiMo also need the Modal Secret `modal-proxy-user` to exist IN that environment (secrets are
+  per environment; only its owner/admin can create it: ask the user; the dry run's `modal_secret` gate fails until it exists).
+- **Coding envs**: `strl executor deploy` once per Modal environment. **Harbor/MiMo**: `strl overlay` once (Modal/Harbor packages for the image).
 - **MiMo data**: `run.data_dir` holds the prepared tasks. Shipped: `assets/mimo/data` (all 5 domains, 24 train / 24 test), `data-smoke`
   (5 x 4/2), `data-2node` (music + cyber, 16/4). `plan` prints `DATA` when the dir does not cover the selection. Lowering counts reuses a
   dir; more tasks, other filters or another seed need a new `run.data_dir` and `strl prepare experiments/my-exp.yaml` (downloads the pinned

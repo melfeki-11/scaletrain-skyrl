@@ -27,3 +27,8 @@ reward:
 
 tracking:
   group: coding-harbor
+
+services:
+  modal:
+    sandbox_secret: modal-proxy-user   # mounted into every Harbor sandbox; a Modal Secret lives in ONE environment: it must exist in
+                                       # services.modal.environment (genai-research) - the dry run's modal_secret gate checks it

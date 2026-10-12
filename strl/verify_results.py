@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from .finalize import flips
+from .services.modal import DEFAULT_ENVIRONMENT as MODAL_DEFAULT_ENV
 from .monitor.compare import _download, _rows
 from .stats import paired_bootstrap
 from .tasks import get_environment
@@ -26,7 +27,7 @@ def rescore(cfg: dict, env, rows: list[dict]) -> list[bool]:
     tasks = {t.sample_id: t for t in coding_data.load_tasks(cfg, 'test')}
     codes = [extract_code(r['completion']) for r in rows]
     idx = [i for i, c in enumerate(codes) if c is not None and rows[i]['finish_reason'] == 'stop']
-    with local_profile(((cfg.get('services') or {}).get('modal') or {}).get('environment', 'main')):
+    with local_profile(((cfg.get('services') or {}).get('modal') or {}).get('environment', MODAL_DEFAULT_ENV)):
         verdicts = dict(zip(idx, executor.score_many([tasks[rows[i]['sample_id']].job(codes[i]) for i in idx])))
     if any(v['failure_class'] == 'infra_error' for v in verdicts.values()):
         raise RuntimeError('executor infra errors during verification; re-run')

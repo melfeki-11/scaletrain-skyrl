@@ -33,6 +33,8 @@ import sys
 import time
 from pathlib import Path
 
+from .services.modal import DEFAULT_ENVIRONMENT as MODAL_DEFAULT_ENV
+
 ROOT = Path(__file__).resolve().parents[1]
 USER = os.environ.get('STRL_SCALETRAIN_USER', 'mohamed.elfeki')
 
@@ -230,13 +232,13 @@ def cmd_prepare(a):
         from transformers import AutoTokenizer
         from .services.modal import local_profile
         kwargs['tokenizer'] = AutoTokenizer.from_pretrained(cfg['model']['local_path'])
-        with local_profile(cfg['services']['modal'].get('environment', 'main')):
+        with local_profile(cfg['services']['modal'].get('environment', MODAL_DEFAULT_ENV)):
             from .tasks.coding import executor
             print(json.dumps(executor.ensure_deployed()))
             manifest = env.prepare_data(cfg, **kwargs)
     elif env.needs_modal:   # e.g. mimo: the exporter captures per-task state (base refs, pristine binaries) in Modal sandboxes
         from .services.modal import local_profile
-        with local_profile(cfg['services']['modal'].get('environment', 'main')):
+        with local_profile(cfg['services']['modal'].get('environment', MODAL_DEFAULT_ENV)):
             manifest = env.prepare_data(cfg)
     else:
         manifest = env.prepare_data(cfg)
@@ -470,7 +472,7 @@ def cmd_eval_llm(a):
     fn = evals.coding_harbor if cfg['environment']['name'] == 'coding_harbor' or a.harbor else evals.coding_exec
     if fn is evals.coding_exec:
         from .services.modal import local_profile
-        with local_profile(cfg['services']['modal'].get('environment', 'main')):
+        with local_profile(cfg['services']['modal'].get('environment', MODAL_DEFAULT_ENV)):
             print(json.dumps(fn(cfg, a.split, a.limit, a.model, a.max_completion_tokens, project), indent=1))
     else:
         print(json.dumps(fn(cfg, a.split, a.limit, a.model, a.max_completion_tokens, project), indent=1))
@@ -499,7 +501,7 @@ def main(argv=None):
     s.add_argument('--network', help="a probe result (an attempt's artifacts/network.json) for the layout recommendation")
     s = sub.add_parser('fetch'); s.add_argument('experiment')
     s = sub.add_parser('prepare'); s.add_argument('experiment')
-    s = sub.add_parser('executor'); s.add_argument('action', choices=['deploy', 'check']); s.add_argument('--environment', default='main')
+    s = sub.add_parser('executor'); s.add_argument('action', choices=['deploy', 'check']); s.add_argument('--environment', default=MODAL_DEFAULT_ENV)
     s = sub.add_parser('overlay'); s.add_argument('--force', action='store_true')
     s = sub.add_parser('capacity'); s.add_argument('--nodes', type=int, default=1); s.add_argument('--gpus-per-node', default='8,4,2,1')
     s.add_argument('--output', default='evidence/capacity.json')

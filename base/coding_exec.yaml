@@ -60,8 +60,7 @@ tracking:
 services:
   modal:
     credentials_uri: s3://scale-ml/tmp/mohamedelfeki/scaletrain/modal-harbor/private/mh-cpu-261006a-modal.env
-    environment: main
-    sandbox_secret: modal-proxy-user
+    environment: genai-research   # team Modal env (main hit its budget cap 2026-10-12); strl/services/modal.py DEFAULT_ENVIRONMENT
   litellm:
     key_name: HIL_BENCH_EVAL_1
     project_id: 696011502a26dc4a64b24f55
